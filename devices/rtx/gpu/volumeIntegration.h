@@ -62,12 +62,25 @@ VISRTX_DEVICE vec4 classifySample(const VolumeGPUData &v, float s)
 }
 
 template <typename Sampler>
+VISRTX_DEVICE vec3 computeVolumeGradient(
+    Sampler &sampler, vec3 p, float eps = 10.f)
+{
+  vec3 gradient;
+  gradient.x = sampler(p + vec3(eps, 0, 0)) - sampler(p - vec3(eps, 0, 0));
+  gradient.y = sampler(p + vec3(0, eps, 0)) - sampler(p - vec3(0, eps, 0));
+  gradient.z = sampler(p + vec3(0, 0, eps)) - sampler(p - vec3(0, 0, eps));
+  gradient *= 0.5f / eps; // Central difference
+  return gradient;
+}
+
+template <typename Sampler>
 VISRTX_DEVICE void _rayMarchVolume(ScreenSample &ss,
     const VolumeHit &hit,
     box1 interval,
     vec3 *color,
     float &opacity,
-    float invSamplingRate)
+    float invSamplingRate,
+    vec3 *normal)
 {
   const auto &volume = *hit.volume;
   /////////////////////////////////////////////////////////////////////////////
@@ -82,6 +95,7 @@ VISRTX_DEVICE void _rayMarchVolume(ScreenSample &ss,
   interval.lower += stepSize * curand_uniform(&ss.rs); // jitter
 
   float transmittance = 1.f;
+
   while (opacity < 0.99f && size(interval) >= 0.f) {
     const vec3 p = hit.localRay.org + hit.localRay.dir * interval.lower;
 
@@ -93,8 +107,10 @@ VISRTX_DEVICE void _rayMarchVolume(ScreenSample &ss,
 
       if (color)
         *color += transmittance * (1.f - stepTransmittance) * vec3(co);
-      opacity += transmittance * (1.f - stepTransmittance);
 
+      *normal = -computeVolumeGradient(sampler, p, stepTransmittance);
+
+      opacity += transmittance * (1.f - stepTransmittance);
       transmittance *= stepTransmittance;
     }
 
@@ -106,7 +122,8 @@ VISRTX_DEVICE float rayMarchVolume(ScreenSample &ss,
     const VolumeHit &hit,
     vec3 *color,
     float &opacity,
-    float invSamplingRate)
+    float invSamplingRate,
+    vec3 *normal)
 {
   const auto &volume = *hit.volume;
   /////////////////////////////////////////////////////////////////////////////
@@ -122,34 +139,34 @@ VISRTX_DEVICE float rayMarchVolume(ScreenSample &ss,
   switch (field.type) {
   case SpatialFieldType::STRUCTURED_REGULAR: {
     _rayMarchVolume<SpatialFieldSampler<cudaTextureObject_t>>(
-        ss, hit, interval, color, opacity, invSamplingRate);
+        ss, hit, interval, color, opacity, invSamplingRate, normal);
     break;
   }
   case SpatialFieldType::NANOVDB_REGULAR: {
     switch (field.data.nvdbRegular.gridType) {
     case nanovdb::GridType::Fp4: {
       _rayMarchVolume<NvdbSpatialFieldSampler<nanovdb::Fp4>>(
-          ss, hit, interval, color, opacity, invSamplingRate);
+          ss, hit, interval, color, opacity, invSamplingRate, normal);
       break;
     }
     case nanovdb::GridType::Fp8: {
       _rayMarchVolume<NvdbSpatialFieldSampler<nanovdb::Fp8>>(
-          ss, hit, interval, color, opacity, invSamplingRate);
+          ss, hit, interval, color, opacity, invSamplingRate, normal);
       break;
     }
     case nanovdb::GridType::Fp16: {
       _rayMarchVolume<NvdbSpatialFieldSampler<nanovdb::Fp16>>(
-          ss, hit, interval, color, opacity, invSamplingRate);
+          ss, hit, interval, color, opacity, invSamplingRate, normal);
       break;
     }
     case nanovdb::GridType::FpN: {
       _rayMarchVolume<NvdbSpatialFieldSampler<nanovdb::FpN>>(
-          ss, hit, interval, color, opacity, invSamplingRate);
+          ss, hit, interval, color, opacity, invSamplingRate, normal);
       break;
     }
     case nanovdb::GridType::Float: {
       _rayMarchVolume<NvdbSpatialFieldSampler<float>>(
-          ss, hit, interval, color, opacity, invSamplingRate);
+          ss, hit, interval, color, opacity, invSamplingRate, normal);
       break;
     }
     default:
@@ -169,7 +186,8 @@ VISRTX_DEVICE float _sampleDistance(ScreenSample &ss,
     const VolumeHit &hit,
     vec3 *albedo,
     float &extinction,
-    float &tr)
+    float &tr,
+    vec3 &normal)
 {
   const auto &volume = *hit.volume;
   /////////////////////////////////////////////////////////////////////////////
@@ -211,6 +229,10 @@ VISRTX_DEVICE float _sampleDistance(ScreenSample &ss,
         extinction = co.w;
         float u = curand_uniform(&ss.rs);
         if (extinction >= u * majorant) {
+          // Compute normal from volume gradient at scattering event
+          if (extinction > 0.01f) {
+            normal = -computeVolumeGradient(sampler, p, stepSize);
+          }
           tr = 0.f;
           t_out = t;
           return false; // stop traversal
@@ -241,7 +263,8 @@ VISRTX_DEVICE float sampleDistance(ScreenSample &ss,
     const VolumeHit &hit,
     vec3 *albedo,
     float &extinction,
-    float &tr)
+    float &tr,
+    vec3 &normal)
 {
   const auto &volume = *hit.volume;
   /////////////////////////////////////////////////////////////////////////////
@@ -253,34 +276,34 @@ VISRTX_DEVICE float sampleDistance(ScreenSample &ss,
   switch (field.type) {
   case SpatialFieldType::STRUCTURED_REGULAR: {
     return _sampleDistance<SpatialFieldSampler<cudaTextureObject_t>>(
-        ss, hit, albedo, extinction, tr);
+        ss, hit, albedo, extinction, tr, normal);
     break;
   }
   case SpatialFieldType::NANOVDB_REGULAR: {
     switch (field.data.nvdbRegular.gridType) {
     case nanovdb::GridType::Fp4: {
       return _sampleDistance<NvdbSpatialFieldSampler<nanovdb::Fp4>>(
-          ss, hit, albedo, extinction, tr);
+          ss, hit, albedo, extinction, tr, normal);
       break;
     }
     case nanovdb::GridType::Fp8: {
       return _sampleDistance<NvdbSpatialFieldSampler<nanovdb::Fp8>>(
-          ss, hit, albedo, extinction, tr);
+          ss, hit, albedo, extinction, tr, normal);
       break;
     }
     case nanovdb::GridType::Fp16: {
       return _sampleDistance<NvdbSpatialFieldSampler<nanovdb::Fp16>>(
-          ss, hit, albedo, extinction, tr);
+          ss, hit, albedo, extinction, tr, normal);
       break;
     }
     case nanovdb::GridType::FpN: {
       return _sampleDistance<NvdbSpatialFieldSampler<nanovdb::FpN>>(
-          ss, hit, albedo, extinction, tr);
+          ss, hit, albedo, extinction, tr, normal);
       break;
     }
     case nanovdb::GridType::Float: {
       return _sampleDistance<NvdbSpatialFieldSampler<float>>(
-          ss, hit, albedo, extinction, tr);
+          ss, hit, albedo, extinction, tr, normal);
       break;
     }
     default:
@@ -300,18 +323,33 @@ VISRTX_DEVICE float sampleDistance(ScreenSample &ss,
 VISRTX_DEVICE float rayMarchVolume(ScreenSample &ss,
     const VolumeHit &hit,
     float &opacity,
-    float invSamplingRate)
+    float invSamplingRate,
+    vec3 *normal)
 {
-  return detail::rayMarchVolume(ss, hit, nullptr, opacity, invSamplingRate);
+  return detail::rayMarchVolume(
+      ss, hit, nullptr, opacity, invSamplingRate, normal);
 }
 
 VISRTX_DEVICE float rayMarchVolume(ScreenSample &ss,
     const VolumeHit &hit,
     vec3 &color,
     float &opacity,
-    float invSamplingRate)
+    float invSamplingRate,
+    vec3 *normal)
 {
-  return detail::rayMarchVolume(ss, hit, &color, opacity, invSamplingRate);
+  return detail::rayMarchVolume(
+      ss, hit, &color, opacity, invSamplingRate, normal);
+}
+
+VISRTX_DEVICE float rayMarchVolume(ScreenSample &ss,
+    const VolumeHit &hit,
+    vec3 &color,
+    float &opacity,
+    float invSamplingRate,
+    vec3 &normal)
+{
+  return detail::rayMarchVolume(
+      ss, hit, &color, opacity, invSamplingRate, &normal);
 }
 
 template <typename RAY_TYPE>
@@ -323,12 +361,15 @@ VISRTX_DEVICE float rayMarchAllVolumes(ScreenSample &ss,
     vec3 &color,
     float &opacity,
     uint32_t &objID,
-    uint32_t &instID)
+    uint32_t &instID,
+    vec3 &normal)
 {
   VolumeHit hit;
   ray.t.upper = tfar;
   float depth = tfar;
   bool firstHit = true;
+  vec3 accumulatedNormal(0.f);
+  float totalWeight = 0.f;
 
   do {
     hit.foundHit = false;
@@ -342,9 +383,34 @@ VISRTX_DEVICE float rayMarchAllVolumes(ScreenSample &ss,
     }
     depth = min(depth, hit.localRay.t.lower);
     hit.localRay.t.upper = glm::min(tfar, hit.localRay.t.upper);
-    detail::rayMarchVolume(ss, hit, &color, opacity, invSamplingRate);
+
+    vec3 segmentNormal(0.f);
+    float initialOpacity = opacity;
+    detail::rayMarchVolume(
+        ss, hit, &color, opacity, invSamplingRate, &segmentNormal);
+
+    // Accumulate normal weighted by opacity contribution from this segment
+    float opacityContribution = opacity - initialOpacity;
+    if (opacityContribution > 0.f && glm::length(segmentNormal) > 1e-6f) {
+      accumulatedNormal += opacityContribution * segmentNormal;
+      totalWeight += opacityContribution;
+    }
+
     ray.t.lower = hit.localRay.t.upper + 1e-3f;
   } while (opacity < 0.99f);
+
+  // Normalize the accumulated normal
+  if (totalWeight > 0.f) {
+    normal = accumulatedNormal / totalWeight;
+    float normalLength = glm::length(normal);
+    if (normalLength > 1e-6f) {
+      normal = normal / normalLength;
+    } else {
+      normal = vec3(0.f, 0.f, 1.f);
+    }
+  } else {
+    normal = vec3(0.f, 0.f, 1.f);
+  }
 
   return depth;
 }
@@ -358,7 +424,8 @@ VISRTX_DEVICE float sampleDistanceAllVolumes(ScreenSample &ss,
     float &extinction,
     float &transmittance,
     uint32_t &objID,
-    uint32_t &instID)
+    uint32_t &instID,
+    vec3 &normal)
 {
   VolumeHit hit;
   ray.t.upper = tfar;
@@ -373,7 +440,7 @@ VISRTX_DEVICE float sampleDistanceAllVolumes(ScreenSample &ss,
     hit.localRay.t.upper = glm::min(tfar, hit.localRay.t.upper);
     vec3 alb(0.f);
     float ext = 0.f, tr = 0.f;
-    float d = detail::sampleDistance(ss, hit, &alb, ext, tr);
+    float d = detail::sampleDistance(ss, hit, &alb, ext, tr, normal);
     if (d < depth) {
       depth = d;
       albedo = alb;

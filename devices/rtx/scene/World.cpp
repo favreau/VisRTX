@@ -97,11 +97,8 @@ World::World(DeviceGlobalState *d)
 
 World::~World() = default;
 
-bool World::getProperty(const std::string_view &name,
-    ANARIDataType type,
-    void *ptr,
-    uint64_t size,
-    uint32_t flags)
+bool World::getProperty(
+    const std::string_view &name, ANARIDataType type, void *ptr, uint32_t flags)
 {
   if (name == "bounds" && type == ANARI_FLOAT32_BOX3) {
     if (flags & ANARI_WAIT) {
@@ -114,7 +111,7 @@ bool World::getProperty(const std::string_view &name,
     return true;
   }
 
-  return Object::getProperty(name, type, ptr, size, flags);
+  return Object::getProperty(name, type, ptr, flags);
 }
 
 void World::commitParameters()

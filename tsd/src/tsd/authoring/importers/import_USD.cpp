@@ -141,7 +141,8 @@ static MaterialRef get_bound_material(
 }
 
 // Helper to extract volume transfer function from USD material
-struct VolumeTransferFunction {
+struct VolumeTransferFunction
+{
   std::vector<math::float4> colors;
   std::vector<float> xPoints;
   math::float2 domain{0.0f, 1.0f};
@@ -152,18 +153,19 @@ static VolumeTransferFunction get_volume_transfer_function(
     const pxr::UsdPrim &prim)
 {
   VolumeTransferFunction tf;
-  
+
   // Check if MaterialBindingAPI can be applied to this prim type
   if (!pxr::UsdShadeMaterialBindingAPI::CanApply(prim)) {
     return tf;
   }
-  
+
   // Try to get material binding
   pxr::UsdShadeMaterialBindingAPI binding(prim);
   pxr::UsdShadeMaterial usdMat;
-  
+
   // First, try to get the direct material binding relationship
-  pxr::UsdRelationship materialRel = prim.GetRelationship(pxr::TfToken("material:binding"));
+  pxr::UsdRelationship materialRel =
+      prim.GetRelationship(pxr::TfToken("material:binding"));
   if (materialRel) {
     pxr::SdfPathVector targets;
     materialRel.GetTargets(&targets);
@@ -175,83 +177,90 @@ static VolumeTransferFunction get_volume_transfer_function(
       }
     }
   }
-  
+
   // If direct resolution didn't work, try ComputeBoundMaterial
   if (!usdMat && binding) {
     usdMat = binding.ComputeBoundMaterial();
   }
-  
+
   if (!usdMat) {
     return tf;
   }
-  
+
   // Look for volume output connection
   pxr::TfToken volumeOutputName("nvindex:volume");
   pxr::UsdShadeOutput volumeOutput = usdMat.GetOutput(volumeOutputName);
-  
+
   if (!volumeOutput || !volumeOutput.HasConnectedSource()) {
     return tf;
   }
-  
+
   // Get the VolumeShader
   pxr::UsdShadeConnectableAPI volumeSource;
   pxr::TfToken volumeSourceName;
   pxr::UsdShadeAttributeType volumeSourceType;
-  volumeOutput.GetConnectedSource(&volumeSource, &volumeSourceName, &volumeSourceType);
+  volumeOutput.GetConnectedSource(
+      &volumeSource, &volumeSourceName, &volumeSourceType);
   pxr::UsdShadeShader volumeShader(volumeSource.GetPrim());
-  
+
   if (!volumeShader) {
     return tf;
   }
-  
+
   // Look for colormap input connection
-  pxr::UsdShadeInput colormapInput = volumeShader.GetInput(pxr::TfToken("colormap"));
+  pxr::UsdShadeInput colormapInput =
+      volumeShader.GetInput(pxr::TfToken("colormap"));
   if (!colormapInput || !colormapInput.HasConnectedSource()) {
     return tf;
   }
-  
+
   // Get the Colormap shader
   pxr::UsdShadeConnectableAPI colormapSource;
   pxr::TfToken colormapSourceName;
   pxr::UsdShadeAttributeType colormapSourceType;
-  bool hasConnection = colormapInput.GetConnectedSource(&colormapSource, &colormapSourceName, &colormapSourceType);
-  
+  bool hasConnection = colormapInput.GetConnectedSource(
+      &colormapSource, &colormapSourceName, &colormapSourceType);
+
   if (!hasConnection) {
     return tf;
   }
-  
+
   pxr::UsdPrim colormapPrim = colormapSource.GetPrim();
   if (!colormapPrim) {
     return tf;
   }
-  
+
   pxr::UsdShadeShader colormapShader(colormapPrim);
-  
+
   if (!colormapShader) {
-    // Try to extract data directly from the prim even if it's not a valid UsdShadeShader
-    pxr::UsdAttribute rgbaPointsAttr = colormapPrim.GetAttribute(pxr::TfToken("rgbaPoints"));
-    pxr::UsdAttribute xPointsAttr = colormapPrim.GetAttribute(pxr::TfToken("xPoints"));
-    pxr::UsdAttribute domainAttr = colormapPrim.GetAttribute(pxr::TfToken("domain"));
-    
+    // Try to extract data directly from the prim even if it's not a valid
+    // UsdShadeShader
+    pxr::UsdAttribute rgbaPointsAttr =
+        colormapPrim.GetAttribute(pxr::TfToken("rgbaPoints"));
+    pxr::UsdAttribute xPointsAttr =
+        colormapPrim.GetAttribute(pxr::TfToken("xPoints"));
+    pxr::UsdAttribute domainAttr =
+        colormapPrim.GetAttribute(pxr::TfToken("domain"));
+
     if (rgbaPointsAttr && xPointsAttr) {
       // Extract the data using the same logic as below
       pxr::VtArray<pxr::GfVec4f> rgbaPoints;
       pxr::VtArray<float> xPoints;
-      
+
       if (rgbaPointsAttr.Get(&rgbaPoints) && xPointsAttr.Get(&xPoints)) {
         // Convert to TSD format
         tf.colors.resize(rgbaPoints.size());
         tf.xPoints.resize(xPoints.size());
-        
+
         for (size_t i = 0; i < rgbaPoints.size(); ++i) {
-          const auto& rgba = rgbaPoints[i];
+          const auto &rgba = rgbaPoints[i];
           tf.colors[i] = math::float4(rgba[0], rgba[1], rgba[2], rgba[3]);
         }
-        
+
         for (size_t i = 0; i < xPoints.size(); ++i) {
           tf.xPoints[i] = xPoints[i];
         }
-        
+
         // Get domain if present
         if (domainAttr) {
           pxr::GfVec2f domain;
@@ -259,37 +268,40 @@ static VolumeTransferFunction get_volume_transfer_function(
             tf.domain = math::float2(domain[0], domain[1]);
           }
         }
-        
+
         tf.hasTransferFunction = true;
       }
     }
-    
+
     return tf;
   }
-  
+
   // Extract transfer function data from colormap shader
-  pxr::UsdAttribute rgbaPointsAttr = colormapShader.GetPrim().GetAttribute(pxr::TfToken("rgbaPoints"));
-  pxr::UsdAttribute xPointsAttr = colormapShader.GetPrim().GetAttribute(pxr::TfToken("xPoints"));
-  pxr::UsdAttribute domainAttr = colormapShader.GetPrim().GetAttribute(pxr::TfToken("domain"));
-  
+  pxr::UsdAttribute rgbaPointsAttr =
+      colormapShader.GetPrim().GetAttribute(pxr::TfToken("rgbaPoints"));
+  pxr::UsdAttribute xPointsAttr =
+      colormapShader.GetPrim().GetAttribute(pxr::TfToken("xPoints"));
+  pxr::UsdAttribute domainAttr =
+      colormapShader.GetPrim().GetAttribute(pxr::TfToken("domain"));
+
   if (rgbaPointsAttr && xPointsAttr) {
     pxr::VtArray<pxr::GfVec4f> rgbaPoints;
     pxr::VtArray<float> xPoints;
-    
+
     if (rgbaPointsAttr.Get(&rgbaPoints) && xPointsAttr.Get(&xPoints)) {
       // Convert to TSD format
       tf.colors.resize(rgbaPoints.size());
       tf.xPoints.resize(xPoints.size());
-      
+
       for (size_t i = 0; i < rgbaPoints.size(); ++i) {
-        const auto& rgba = rgbaPoints[i];
+        const auto &rgba = rgbaPoints[i];
         tf.colors[i] = math::float4(rgba[0], rgba[1], rgba[2], rgba[3]);
       }
-      
+
       for (size_t i = 0; i < xPoints.size(); ++i) {
         tf.xPoints[i] = xPoints[i];
       }
-      
+
       // Get domain if present
       if (domainAttr) {
         pxr::GfVec2f domain;
@@ -297,14 +309,18 @@ static VolumeTransferFunction get_volume_transfer_function(
           tf.domain = math::float2(domain[0], domain[1]);
         }
       }
-      
+
       tf.hasTransferFunction = true;
-      
-      logStatus("[import_USD] Found volume transfer function with %zu colors and %zu x-points, domain: [%f, %f]\n",
-          tf.colors.size(), tf.xPoints.size(), tf.domain.x, tf.domain.y);
+
+      logStatus(
+          "[import_USD] Found volume transfer function with %zu colors and %zu x-points, domain: [%f, %f]\n",
+          tf.colors.size(),
+          tf.xPoints.size(),
+          tf.domain.x,
+          tf.domain.y);
     }
   }
-  
+
   return tf;
 }
 
@@ -623,14 +639,15 @@ static void import_usd_volume(Context &ctx,
 
   // Find the field data by following field relationships
   std::string filePath;
-  
+
   // Try field:volume relationship first (for VDB volumes and OpenVDBAsset)
-  pxr::UsdRelationship fieldRel = prim.GetRelationship(pxr::TfToken("field:volume"));
+  pxr::UsdRelationship fieldRel =
+      prim.GetRelationship(pxr::TfToken("field:volume"));
   if (!fieldRel) {
     // Fall back to field:density relationship for other volume types
     fieldRel = prim.GetRelationship(pxr::TfToken("field:density"));
   }
-  
+
   if (fieldRel) {
     pxr::SdfPathVector targets;
     fieldRel.GetTargets(&targets);
@@ -638,7 +655,8 @@ static void import_usd_volume(Context &ctx,
       // Get the field prim (could be OpenVDBAsset, FieldBase, etc.)
       pxr::UsdPrim fieldPrim = prim.GetStage()->GetPrimAtPath(targets[0]);
       if (fieldPrim) {
-        pxr::UsdAttribute filePathAttr = fieldPrim.GetAttribute(pxr::TfToken("filePath"));
+        pxr::UsdAttribute filePathAttr =
+            fieldPrim.GetAttribute(pxr::TfToken("filePath"));
         if (filePathAttr) {
           pxr::SdfAssetPath assetPath;
           if (filePathAttr.Get(&assetPath)) {
@@ -652,7 +670,8 @@ static void import_usd_volume(Context &ctx,
   }
 
   if (filePath.empty()) {
-    tsd::logStatus("[import_USD] No field data file found for volume '%s'\n", primName.c_str());
+    tsd::logStatus("[import_USD] No field data file found for volume '%s'\n",
+        primName.c_str());
     return;
   }
 
@@ -666,25 +685,28 @@ static void import_usd_volume(Context &ctx,
     field = import_NVDB(ctx, filePath.c_str());
   else if (ext == ".mhd")
     field = import_MHD(ctx, filePath.c_str());
+  else if (ext == ".planet")
+    field = import_Planet(ctx, filePath.c_str());
   else {
     throw std::runtime_error(
         "[import_USD] no loader for file type '" + ext + "'");
   }
 
-  if(!field) {
-    tsd::logStatus("[import_USD] No field data found for volume '%s'\n", primName.c_str());
+  if (!field) {
+    tsd::logStatus(
+        "[import_USD] No field data found for volume '%s'\n", primName.c_str());
     return;
   }
 
-  // Get volume bounds from the field itself (MHD files contain spatial information)
-  // We'll let the field define its own spatial extents
-  
+  // Get volume bounds from the field itself (MHD files contain spatial
+  // information) We'll let the field define its own spatial extents
+
   // Check for transfer function from USD material
   VolumeTransferFunction tf = get_volume_transfer_function(prim);
-  
+
   ArrayRef colorArray;
   math::float2 valueRange;
-  
+
   // Create a volume node and assign the field, color map, and value range
   auto [inst, volume] = ctx.insertNewChildObjectNode<tsd::Volume>(
       parent, tokens::volume::transferFunction1D);
@@ -696,16 +718,16 @@ static void import_usd_volume(Context &ctx,
     colorArray = ctx.createArray(ANARI_FLOAT32_VEC4, tf.colors.size());
     colorArray->setData(tf.colors.data(), tf.colors.size());
     valueRange = tf.domain;
-    
+
     // Create opacity control points from USD transfer function
     std::vector<math::float2> opacityControlPoints;
     opacityControlPoints.reserve(tf.colors.size());
-    
+
     for (size_t i = 0; i < tf.colors.size(); ++i) {
       // x = position in transfer function, y = opacity value
       opacityControlPoints.emplace_back(tf.xPoints[i], tf.colors[i].w);
     }
-    
+
     // Set the opacity control points as metadata
     volume->setMetadataArray("opacityControlPoints",
         ANARI_FLOAT32_VEC2,
@@ -913,8 +935,8 @@ static void import_usd_prim_recursive(Context &ctx,
   // - The local transform is not identity
   // - The prim is geometry, light, or volume
   // - The prim resets the xform stack
-  bool createNode =
-      !is_identity(usdLocalXform) || isGeometry || isLight || isVolume || resetsXformStack;
+  bool createNode = !is_identity(usdLocalXform) || isGeometry || isLight
+      || isVolume || resetsXformStack;
 
   tsd::mat4 tsdXform = to_tsd_mat4(usdLocalXform);
   std::string primName = prim.GetName().GetString();

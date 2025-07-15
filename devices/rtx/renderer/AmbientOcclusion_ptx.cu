@@ -127,7 +127,8 @@ VISRTX_GLOBAL void __raygen__()
             color,
             opacity,
             vObjID,
-            vInstID);
+            vInstID,
+            outputNormal);
 
         if (firstHit) {
           const bool volumeFirst = vDepth < surfaceHit.t;
@@ -182,7 +183,8 @@ VISRTX_GLOBAL void __raygen__()
             color,
             opacity,
             vObjID,
-            vInstID);
+            vInstID,
+            outputNormal);
 
         if (firstHit) {
           depth = min(depth, volumeDepth);

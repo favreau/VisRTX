@@ -120,6 +120,7 @@ VISRTX_GLOBAL void __raygen__()
       float Tr = 0.f;
       uint32_t vObjID = ~0u;
       uint32_t vInstID = ~0u;
+      vec3 normal(0.f);
       const float volumeDepth = sampleDistanceAllVolumes(ss,
           ray,
           RayType::DIFFUSE_RADIANCE,
@@ -128,7 +129,10 @@ VISRTX_GLOBAL void __raygen__()
           volumeOpacity,
           Tr,
           vObjID,
-          vInstID);
+          vInstID,
+          outNormal);
+      hit.Ng = outNormal;
+      hit.Ns = outNormal;
 
       const bool volumeHit = Tr < 1.f && (!hit.foundHit || volumeDepth < hit.t);
 

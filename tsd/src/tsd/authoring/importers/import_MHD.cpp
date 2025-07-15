@@ -60,7 +60,7 @@ MHDHeader readMHDHeader(const string &filename)
       } else if (key == "ElementType") {
         if (value == "MET_UCHAR") {
           header.elementType = ANARI_UFIXED8;
-        } else if (value == "MET_SHORT") {
+        } else if (value == "MET_SHORT" || value == "MET_USHORT") {
           header.elementType = ANARI_UFIXED16;
         } else if (value == "MET_FLOAT") {
           header.elementType = ANARI_FLOAT32;
@@ -98,7 +98,7 @@ SpatialFieldRef import_MHD(Context &ctx, const char *filepath)
       * anari::sizeOf(header.elementType);
   if (!fread((char *)voxelData, size, 1, fileHandle)) {
     logError(
-        "[import_RAW] unable to open RAW file: '%s'", dataFilepath.c_str());
+        "[import_RAW]   unable to open RAW file: '%s'", dataFilepath.c_str());
     voxelArray->unmap();
     ctx.removeObject(*voxelArray);
     ctx.removeObject(*field);

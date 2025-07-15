@@ -53,6 +53,44 @@ SpatialField::SpatialField(Token stype) : Object(ANARI_SPATIAL_FIELD, stype)
         .setDescription("array containing serialzed NanoVDB grid");
     addParameter("filter").setValue("linear").setStringValues(
         {"linear", "nearest"});
+  } else if (stype == tokens::spatial_field::planet) {
+    // PLanet-specific parameters
+    addParameter("planetRadius")
+        .setValue(6378000.0f)
+        .setDescription("Planet radius in meters");
+    addParameter("sphereRadius")
+        .setValue(0.5f)
+        .setDescription("Unit sphere radius");
+    addParameter("elevationScale")
+        .setValue(0.1f)
+        .setDescription("Elevation scale factor");
+    addParameter("atmosphereThickness")
+        .setValue(0.2f)
+        .setDescription("Atmosphere thickness");
+    addParameter("sphereCenter")
+        .setValue(tsd::float3(0.f, 0.f, 0.f))
+        .setDescription("Sphere center position");
+    addParameter("coreDensity")
+        .setValue(1.0f)
+        .setDescription("Core layer density");
+    addParameter("mantleDensity")
+        .setValue(0.8f)
+        .setDescription("Mantle layer density");
+    addParameter("crustDensity")
+        .setValue(0.6f)
+        .setDescription("Crust layer density");
+    addParameter("atmosphereDensity")
+        .setValue(0.1f)
+        .setDescription("Atmosphere density");
+    addParameter("elevationMapPath")
+        .setValue("")
+        .setDescription("Path to elevation map texture");
+    addParameter("diffuseMapPath")
+        .setValue("")
+        .setDescription("Path to diffuse map texture");
+    addParameter("normalMapPath")
+        .setValue("")
+        .setDescription("Path to normal map texture");
   }
 }
 
@@ -92,6 +130,8 @@ tsd::float2 SpatialField::computeValueRange()
   } else if (subtype() == tokens::spatial_field::amr) {
     if (auto range = getDataRangeFromParameter(parameter("block.data")); range)
       retval = *range;
+  } else if (subtype() == tokens::spatial_field::planet) {
+    retval = {0.f, 1.f};
   } else {
     logWarning(
         "implementation not yet provided for computing the data "
@@ -108,6 +148,7 @@ const Token structuredRegular = "structuredRegular";
 const Token unstructured = "unstructured";
 const Token amr = "amr";
 const Token nanovdb = "nanovdb";
+const Token planet = "planet";
 
 } // namespace tokens::spatial_field
 

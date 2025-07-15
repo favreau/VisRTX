@@ -152,10 +152,14 @@ VISRTX_GLOBAL void __anyhit__shadow()
     auto &ra = ray::rayData<RayAttenuation>();
     VolumeHit hit;
     ray::populateVolumeHit(hit);
+    vec3 normal;
     rayMarchVolume(ray::screenSample(),
         hit,
         ra.attenuation,
-        rendererParams.inverseVolumeSamplingRate);
+        rendererParams.inverseVolumeSamplingRate,
+        &normal);
+    hit.Ng = normal;
+    hit.Ns = normal;
     if (ra.attenuation < 0.99f)
       optixIgnoreIntersection();
   }
@@ -222,7 +226,8 @@ VISRTX_GLOBAL void __raygen__()
             color,
             opacity,
             vObjID,
-            vInstID);
+            vInstID,
+            outputNormal);
 
         if (firstHit) {
           const bool volumeFirst = vDepth < surfaceHit.t;
@@ -262,7 +267,8 @@ VISRTX_GLOBAL void __raygen__()
             color,
             opacity,
             vObjID,
-            vInstID);
+            vInstID,
+            outputNormal);
 
         if (firstHit) {
           depth = min(depth, volumeDepth);

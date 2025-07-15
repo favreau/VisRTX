@@ -26,6 +26,7 @@ SpatialFieldRef import_FLASH(Context &ctx, const char *filename);
 SpatialFieldRef import_NVDB(Context &ctx, const char *filename);
 SpatialFieldRef import_MHD(Context &ctx, const char *filename);
 SpatialFieldRef import_VTU(Context &ctx, const char *filename);
+SpatialFieldRef import_Planet(Context &ctx, const char *filename);
 
 VolumeRef import_volume(Context &ctx,
     const char *filename,

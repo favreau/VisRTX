@@ -142,6 +142,8 @@ struct VolumeHit
 {
   bool foundHit;
   Ray localRay;
+  vec3 Ng;
+  vec3 Ns;
   uint32_t lastVolID{~0u};
   uint32_t lastInstID{~0u};
   const VolumeGPUData *volume{nullptr};
