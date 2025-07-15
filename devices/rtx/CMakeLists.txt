@@ -36,8 +36,6 @@ project(anari_library_visrtx VERSION ${PROJECT_VERSION} LANGUAGES CXX CUDA)
 ## RTX device options ##
 
 option(VISRTX_ENABLE_NEURAL "Enable Neural Graphics Primitives" OFF)
-mark_as_advanced(VISRTX_ENABLE_NEURAL)
-
 option(VISRTX_ENABLE_NVTX "Enable NVTX profiling instrumentation" OFF)
 mark_as_advanced(VISRTX_ENABLE_NVTX)
 
@@ -155,7 +153,7 @@ set(SOURCES
   scene/surface/geometry/Curve.cpp
   scene/surface/geometry/Cylinder.cpp
   scene/surface/geometry/Geometry.cpp
-  scene/surface/geometry/Neural.cpp
+  $<$<BOOL:${VISRTX_ENABLE_NEURAL}>:scene/surface/geometry/Neural.cpp>
   scene/surface/geometry/Quad.cpp
   scene/surface/geometry/Sphere.cu
   scene/surface/geometry/Triangle.cpp
@@ -255,7 +253,7 @@ PRIVATE
   VISRTX_VERSION_PATCH=${PROJECT_VERSION_PATCH}
   $<$<BOOL:${VISRTX_ENABLE_NVTX}>:USE_NVTX>
   $<$<BOOL:${VISRTX_ENABLE_MDL_SUPPORT}>:USE_MDL>
-  $<$<BOOL:${VISRTX_USE_NEURAL}>:VISRTX_USE_NEURAL>
+  $<$<BOOL:${VISRTX_ENABLE_NEURAL}>:VISRTX_USE_NEURAL>
 )
 
 if(NOT WIN32)
@@ -313,13 +311,15 @@ function(GenerateEmbeddedPTX DIR BASE_NAME)
     ${MDL_SDK_INCLUDE_DIRS}
   )
 
+  if(VISRTX_ENABLE_NEURAL)
+    set(CUDA_ARCHS 89-virtual)
+  else()
+    set(CUDA_ARCHS 52-virtual)
+  endif()
+
   set_target_properties(${INPUT_TARGET} PROPERTIES
     CUDA_PTX_COMPILATION ON
-    if(VISRTX_ENABLE_NEURAL)
-      CUDA_ARCHITECTURES "89" # Only architectures with full support for fp16
-    else()
-      CUDA_ARCHITECTURES OFF
-    endif()
+    CUDA_ARCHITECTURES ${CUDA_ARCHS}
   )
 
   EmbedPTX(
