@@ -29,8 +29,8 @@ struct CloudHeader
   // NetCDF file path and variable name
   string netCDFPath;
   string variableName;
-  size_t sliceIndex{0};  // For 2D slices from 3D data
-  bool useSlice{false};  // Whether to load a 2D slice or full 3D data
+  size_t sliceIndex{0}; // For 2D slices from 3D data
+  bool useSlice{false}; // Whether to load a 2D slice or full 3D data
 };
 
 CloudHeader readCloudHeader(const string &filename)
@@ -95,7 +95,7 @@ SpatialFieldRef import_Clouds(Context &ctx, const char *filepath)
   const auto basePath = fs::path(filepath).parent_path().string();
 
   // Create a custom "Cloud" spatial field
-  auto field = ctx.createObject<SpatialField>("volume");
+  auto field = ctx.createObject<SpatialField>(tokens::spatial_field::planet);
   field->setName(fileOf(filepath).c_str());
 
   // Log the parsed parameters
@@ -124,6 +124,12 @@ SpatialFieldRef import_Clouds(Context &ctx, const char *filepath)
   field->setParameter("cloudOpacity", header.cloudOpacity);
   field->setParameter("cloudCenter", header.cloudCenter);
 
+  field->setParameter("PlanetRadius", 6378000.0f);
+  field->setParameter("sphereRadius", 0.99f);
+  field->setParameter("elevationScale", 1.f);
+  field->setParameter("atmosphereThickness", 0.01f);
+  field->setParameter("sphereCenter", float3(0.0f, 0.0f, 0.0f));
+
   // Load NetCDF data
   if (header.netCDFPath.empty()) {
     logError("[import_Clouds] NetCDF path is required but not provided");
@@ -136,11 +142,12 @@ SpatialFieldRef import_Clouds(Context &ctx, const char *filepath)
   }
 
   string fullNetCDFPath = basePath + "/" + header.netCDFPath;
-  
+
   // Get variable info for logging
   auto varInfo = getNetCDFVariableInfo(fullNetCDFPath, header.variableName);
   if (varInfo.dimensions.empty()) {
-    logError("[import_Clouds] Failed to get variable info for '%s'", header.variableName.c_str());
+    logError("[import_Clouds] Failed to get variable info for '%s'",
+        header.variableName.c_str());
     return {};
   }
 
@@ -148,10 +155,15 @@ SpatialFieldRef import_Clouds(Context &ctx, const char *filepath)
   ArrayRef dataArray;
   if (header.useSlice) {
     // Load 2D slice from 3D data
-    dataArray = loadNetCDFSlice(ctx, fullNetCDFPath, header.variableName, "cloudData", header.sliceIndex);
+    dataArray = loadNetCDFSlice(ctx,
+        fullNetCDFPath,
+        header.variableName,
+        "cloudData",
+        header.sliceIndex);
   } else {
     // Load full 3D data
-    dataArray = loadNetCDFVariable(ctx, fullNetCDFPath, header.variableName, "cloudData");
+    dataArray = loadNetCDFVariable(
+        ctx, fullNetCDFPath, header.variableName, "cloudData");
   }
 
   if (!dataArray) {
@@ -160,13 +172,14 @@ SpatialFieldRef import_Clouds(Context &ctx, const char *filepath)
   }
 
   // Set the data as a parameter
-  field->setParameterObject("cloudData", *dataArray);
+  field->setParameterObject("elevationMap", *dataArray);
 
   logInfo("[import_Clouds] Successfully loaded cloud data from NetCDF file");
   return field;
 
 #else
-  logError("[import_Clouds] NetCDF support not enabled. Rebuild with TSD_USE_NETCDF=ON");
+  logError(
+      "[import_Clouds] NetCDF support not enabled. Rebuild with TSD_USE_NETCDF=ON");
   return {};
 #endif
 }

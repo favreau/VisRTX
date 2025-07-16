@@ -141,8 +141,11 @@ struct VisRTXDevice : public helium::BaseDevice
   };
 
   void deviceCommitParameters() override;
-  int deviceGetProperty(
-      const char *name, ANARIDataType type, void *mem, uint64_t size, uint32_t mask) override;
+  int deviceGetProperty(const char *name,
+      ANARIDataType type,
+      void *mem,
+      uint64_t size,
+      uint32_t mask);
 
   DeviceInitStatus initOptix();
 #ifdef USE_MDL

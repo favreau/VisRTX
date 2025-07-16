@@ -34,7 +34,7 @@ VolumeRef import_volume(Context &ctx,
     field = import_VTU(ctx, filepath);
   else if (ext == ".planet")
     field = import_Planet(ctx, filepath);
-  else if (ext == ".cloud")
+  else if (ext == ".clouds")
     field = import_Clouds(ctx, filepath);
   else {
     logError("[import_volume] no loader for file type '%s'", ext.c_str());
