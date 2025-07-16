@@ -518,7 +518,7 @@ void VisRTXDevice::deviceCommitParameters()
 }
 
 int VisRTXDevice::deviceGetProperty(
-    const char *name, ANARIDataType type, void *mem, uint64_t size)
+    const char *name, ANARIDataType type, void *mem, uint64_t size, uint32_t mask)
 {
   std::string_view prop = name;
   if (prop == "version" && type == ANARI_INT32) {

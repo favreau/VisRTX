@@ -41,6 +41,7 @@ option(TSD_USE_TBB "Use TBB code paths where relevant" ON)
 option(TSD_USE_USD "Use OpenUSD where relevant" OFF)
 option(TSD_USE_TORCH "Use PyTorch for importing neural geometries" OFF)
 option(TSD_USE_VTK "Use VTK for importing VTK file formats" OFF)
+option(TSD_USE_NETCDF "Use NetCDF for importing scientific data" OFF)
 
 if (APPLE)
   set(TSD_USE_CUDA OFF)
@@ -63,6 +64,11 @@ endif()
 if (TSD_USE_CUDA)
   enable_language(CUDA)
   find_package(CUDAToolkit REQUIRED)
+endif()
+
+if (TSD_USE_NETCDF)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(NETCDF REQUIRED netcdf netcdf-cxx4)
 endif()
 
 ## Testing Setup ##

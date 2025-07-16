@@ -7,8 +7,11 @@
 #include "tsd/core/Logging.hpp"
 // std
 #include <cstdio>
+#include "tsd/authoring/importers/import_Clouds.cpp"
 
 namespace tsd {
+
+SpatialFieldRef import_Clouds(Context &ctx, const char *filepath);
 
 VolumeRef import_volume(Context &ctx,
     const char *filepath,
@@ -31,6 +34,8 @@ VolumeRef import_volume(Context &ctx,
     field = import_VTU(ctx, filepath);
   else if (ext == ".planet")
     field = import_Planet(ctx, filepath);
+  else if (ext == ".cloud")
+    field = import_Clouds(ctx, filepath);
   else {
     logError("[import_volume] no loader for file type '%s'", ext.c_str());
     return {};

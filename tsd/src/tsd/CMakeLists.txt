@@ -14,9 +14,11 @@ PRIVATE
   algorithms/detail/computeScalarRange_float64.cpp
   authoring/importers/detail/HDRImage.cpp
   authoring/importers/detail/importer_common.cpp
+  authoring/importers/detail/netcdf_utils.cpp
   authoring/importers/import_ASSIMP.cpp
   authoring/importers/import_DLAF.cpp
   authoring/importers/import_Planet.cpp
+  authoring/importers/import_Clouds.cpp
   authoring/importers/import_FLASH.cpp
   authoring/importers/import_HDRI.cpp
   authoring/importers/import_HSMESH.cpp
@@ -180,4 +182,12 @@ if (TSD_USE_VTK)
   project_compile_definitions(PRIVATE -DTSD_USE_VTK=1)
 else()
   project_compile_definitions(PRIVATE -DTSD_USE_VTK=0)
+endif()
+
+if (TSD_USE_NETCDF)
+  project_link_libraries(PRIVATE ${NETCDF_LIBRARIES})
+  project_include_directories(PRIVATE ${NETCDF_INCLUDE_DIRS})
+  project_compile_definitions(PRIVATE -DTSD_USE_NETCDF=1)
+else()
+  project_compile_definitions(PRIVATE -DTSD_USE_NETCDF=0)
 endif()
