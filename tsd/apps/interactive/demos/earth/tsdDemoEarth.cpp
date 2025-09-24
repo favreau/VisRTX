@@ -92,8 +92,6 @@ class Application : public TSDApplication
       }
 
       auto &scene = core->tsd.scene;
-      tsd::core::logStatus("...setting up default lights");
-      tsd::io::generate_default_lights(scene);
 
       core->tsd.sceneLoadComplete = true;
 

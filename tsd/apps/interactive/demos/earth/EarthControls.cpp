@@ -299,6 +299,18 @@ void EarthControls::importEarthData()
   // Reset camera to fit the loaded data
   core->view.manipulator.setConfig({0.f, 0.f, 0.f}, 5.f, {0.f, 0.f});
 
+  // Add a directional light for Earth visualization
+  auto sunLight = scene.createObject<tsd::core::Light>(
+      tsd::core::tokens::light::directional);
+  sunLight->setName("sun_light");
+  sunLight->setParameter("direction", tsd::math::float2(120.f, 175.f));
+  sunLight->setParameter(
+      "color", tsd::math::float3(1.f, 0.95f, 0.8f)); // Warm sunlight color
+  sunLight->setParameter("irradiance", 40.0f);
+  scene.insertChildObjectNode(layer->root(), sunLight);
+  tsd::core::logInfo(
+      "[earth_demo] Added sun light: direction(120°, 175°), color(1.0, 0.95, 0.8), irradiance=40.0");
+
   // Notify scene changed
   scene.signalLayerChange(layer);
 }
