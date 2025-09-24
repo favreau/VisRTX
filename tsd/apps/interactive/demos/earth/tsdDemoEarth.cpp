@@ -99,7 +99,7 @@ class Application : public TSDApplication
 
       if (!core->commandLine.loadedFromStateFile) {
         // Set Barney as default renderer for Earth visualization
-        vp->setLibrary(core->commandLine.libraryList[0], false);
+        vp->setLibrary("barney", false);
         if (!core->commandLine.secondaryViewportLibrary.empty())
           vp2->setLibrary(core->commandLine.secondaryViewportLibrary);
       }

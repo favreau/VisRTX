@@ -201,11 +201,12 @@ void EarthControls::importEarthData()
   // Load clouds data
   tsd::core::logInfo(
       "[earth_demo] Loading clouds data from %s", m_cloudsFile.c_str());
+  int numTimeSteps = 1;
   auto cloudsField = tsd::io::import_CLOUDS(scene, m_cloudsFile.c_str());
   if (cloudsField) {
     // Get number of time steps from metadata
     auto numTimeStepsParam = cloudsField->getMetadataValue("numTimeSteps");
-    int numTimeSteps = numTimeStepsParam ? numTimeStepsParam.get<int>() : 1;
+    numTimeSteps = numTimeStepsParam ? numTimeStepsParam.get<int>() : 1;
 
     tsd::core::logInfo(
         "[earth_demo] Found %d time steps in clouds data", numTimeSteps);
@@ -239,7 +240,7 @@ void EarthControls::importEarthData()
   m_planetVolume->setParameter("unitDistance", 8.f);
 
   // Set max time steps based on clouds data (assuming it drives the animation)
-  m_maxTimeSteps = static_cast<int>(m_cloudsTimeSteps.size());
+  m_maxTimeSteps = numTimeSteps;
   m_currentTimeStep = 0;
 
   // Reset camera to fit the loaded data
