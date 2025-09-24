@@ -95,12 +95,31 @@ class Application : public TSDApplication
 
       core->tsd.sceneLoadComplete = true;
 
-      if (!core->commandLine.loadedFromStateFile) {
-        // Set Barney as default renderer for Earth visualization
-        vp->setLibrary("barney", false);
-        if (!core->commandLine.secondaryViewportLibrary.empty())
-          vp2->setLibrary(core->commandLine.secondaryViewportLibrary);
+      // Set Barney as default renderer for Earth visualization if available
+      std::string defaultLibrary = "barney";
+
+      // Check if barney is in the available library list
+      bool barneyAvailable = false;
+      for (const auto &lib : core->commandLine.libraryList) {
+        if (lib == "barney") {
+          barneyAvailable = true;
+          break;
+        }
       }
+
+      // Use barney if available, otherwise use first available library
+      if (barneyAvailable) {
+        vp->setLibrary("barney", false);
+        tsd::core::logInfo("[earth_demo] Using barney renderer as default");
+      } else if (!core->commandLine.libraryList.empty()) {
+        vp->setLibrary(core->commandLine.libraryList[0], false);
+        tsd::core::logInfo(
+            "[earth_demo] Barney not available, using '%s' renderer",
+            core->commandLine.libraryList[0].c_str());
+      }
+
+      if (!core->commandLine.secondaryViewportLibrary.empty())
+        vp2->setLibrary(core->commandLine.secondaryViewportLibrary);
     };
 
     m_taskModal->activate(populateScene, "Please Wait: Loading Scene...");
