@@ -32,6 +32,12 @@ SpatialFieldRef import_MHD(Scene &scene, const char *filename);
 SpatialFieldRef import_VTI(Scene &scene, const char *filename);
 SpatialFieldRef import_VTU(Scene &scene, const char *filename);
 SpatialFieldRef import_CLOUDS(Scene &scene, const char *filename);
+
+// Update an existing CLOUDS spatial field with data from a specific time step
+bool update_CLOUDS(Scene &scene, 
+    SpatialFieldRef field, 
+    const char *filepath, 
+    size_t timeIndex);
 SpatialFieldRef import_MAGNETIC(Scene &scene, const char *filename);
 SpatialFieldRef import_PLANET(Scene &scene, const char *filename);
 

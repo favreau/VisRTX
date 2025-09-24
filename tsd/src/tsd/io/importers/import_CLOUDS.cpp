@@ -104,7 +104,7 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
 
   const string fullNetCDFPath = basePath + "/" + header.netCDFPath;
 
-  // Get variable info for logging
+  // Get variable info to determine number of time steps
   auto varInfo = getNetCDFVariableInfo(fullNetCDFPath, header.variableName);
   if (varInfo.dimensions.empty()) {
     logError("[import_Clouds] Failed to get variable info for '%s'",
@@ -112,9 +112,25 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
     return {};
   }
 
-  // Load the data
-  ArrayRef dataArray =
-      loadNetCDFVariable(scene, fullNetCDFPath, header.variableName);
+  // Find time dimension
+  size_t numTimeSteps = 1;
+  for (size_t i = 0; i < varInfo.dimNames.size(); ++i) {
+    if (varInfo.dimNames[i] == "time") {
+      numTimeSteps = varInfo.dimensions[i];
+      break;
+    }
+  }
+
+  logInfo("[import_Clouds] Found %zu time steps in NetCDF file", numTimeSteps);
+
+  // Load the data for first time step
+  ArrayRef dataArray;
+  if (numTimeSteps > 1) {
+    dataArray =
+        loadNetCDFVariable(scene, fullNetCDFPath, header.variableName, 0);
+  } else {
+    dataArray = loadNetCDFVariable(scene, fullNetCDFPath, header.variableName);
+  }
 
   if (!dataArray) {
     logError("[import_Clouds] Failed to load NetCDF data");
@@ -124,13 +140,89 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
   // Set the data as a parameter
   field->setParameterObject("cloudData"_t, *dataArray);
   field->setMetadataValue("unitDistance", 256.f);
+  field->setMetadataValue("numTimeSteps", static_cast<int>(numTimeSteps));
 
-  logInfo("[import_Clouds] Successfully loaded cloud data from NetCDF file");
+  logInfo(
+      "[import_Clouds] Successfully loaded cloud data from NetCDF file with %zu time steps",
+      numTimeSteps);
   return field;
 #else
   logError(
       "[import_Clouds] NetCDF support not enabled. Rebuild with TSD_USE_NETCDF=ON");
   return {};
+#endif
+}
+
+bool update_CLOUDS(
+    Scene &scene, SpatialFieldRef field, const char *filepath, size_t timeIndex)
+{
+#ifdef TSD_USE_NETCDF
+  const auto header = readCloudHeader(filepath);
+  const auto basePath = fs::path(filepath).parent_path().string();
+
+  // Load NetCDF data
+  if (header.netCDFPath.empty()) {
+    logError("[update_Clouds] NetCDF path is required but not provided");
+    return false;
+  }
+
+  if (header.variableName.empty()) {
+    logError("[update_Clouds] Variable name is required but not provided");
+    return false;
+  }
+
+  const string fullNetCDFPath = basePath + "/" + header.netCDFPath;
+
+  // Get variable info to validate time index
+  auto varInfo = getNetCDFVariableInfo(fullNetCDFPath, header.variableName);
+  if (varInfo.dimensions.empty()) {
+    logError("[update_Clouds] Failed to get variable info for '%s'",
+        header.variableName.c_str());
+    return false;
+  }
+
+  // Find time dimension
+  size_t numTimeSteps = 1;
+  for (size_t i = 0; i < varInfo.dimNames.size(); ++i) {
+    if (varInfo.dimNames[i] == "time") {
+      numTimeSteps = varInfo.dimensions[i];
+      break;
+    }
+  }
+
+  // Validate time index
+  if (timeIndex >= numTimeSteps) {
+    logError("[update_Clouds] Time index %zu out of range (0-%zu)",
+        timeIndex,
+        numTimeSteps - 1);
+    return false;
+  }
+
+  // Load the data for the specified time step
+  ArrayRef dataArray;
+  if (numTimeSteps > 1) {
+    dataArray = loadNetCDFVariable(
+        scene, fullNetCDFPath, header.variableName, timeIndex);
+  } else {
+    dataArray = loadNetCDFVariable(scene, fullNetCDFPath, header.variableName);
+  }
+
+  if (!dataArray) {
+    logError(
+        "[update_Clouds] Failed to load NetCDF data for time %zu", timeIndex);
+    return false;
+  }
+
+  // Update the spatial field's cloudData parameter
+  field->setParameterObject("cloudData"_t, *dataArray);
+
+  logInfo("[update_Clouds] Successfully updated cloud data for time step %zu",
+      timeIndex);
+  return true;
+#else
+  logError(
+      "[update_Clouds] NetCDF support not enabled. Rebuild with TSD_USE_NETCDF=ON");
+  return false;
 #endif
 }
 

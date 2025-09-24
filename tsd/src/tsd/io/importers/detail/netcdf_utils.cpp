@@ -454,5 +454,150 @@ ArrayRef loadNetCDFVariable(
     return {};
   }
 }
+
+ArrayRef loadNetCDFVariable(Scene &scene,
+    const std::string &filepath,
+    const std::string &variableName,
+    size_t timeIndex)
+{
+  try {
+    netCDF::NcFile file(filepath, netCDF::NcFile::read);
+    netCDF::NcVar var = file.getVar(variableName);
+
+    if (var.isNull()) {
+      logError("[netcdf_utils] Variable '%s' not found in file '%s'",
+          variableName.c_str(),
+          filepath.c_str());
+      return {};
+    }
+
+    // Get dimensions
+    vector<netCDF::NcDim> dims = var.getDims();
+    logInfo("[netcdf_utils] Variable '%s' has %zu dimensions",
+        variableName.c_str(),
+        dims.size());
+
+    // Check if this is unstructured data (like ICON model)
+    bool isUnstructured = false;
+    size_t numCells = 0;
+    size_t numLevels = 0;
+    size_t numTimes = 1;
+
+    for (const auto &dim : dims) {
+      string dimName = dim.getName();
+      size_t dimSize = dim.getSize();
+      logInfo("[netcdf_utils] Dimension '%s': %zu", dimName.c_str(), dimSize);
+
+      if (dimName == "cell") {
+        isUnstructured = true;
+        numCells = dimSize;
+      } else if (dimName == "height" || dimName == "lev"
+          || dimName == "level") {
+        numLevels = dimSize;
+      } else if (dimName == "time") {
+        numTimes = dimSize;
+      }
+    }
+
+    // Validate timeIndex
+    if (timeIndex >= numTimes) {
+      logError("[netcdf_utils] Time index %zu out of range (0-%zu)",
+          timeIndex,
+          numTimes - 1);
+      return {};
+    }
+
+    logInfo("[netcdf_utils] Loading data for time index %zu/%zu",
+        timeIndex,
+        numTimes - 1);
+
+    // Create array based on data type
+    ArrayRef array;
+    nc_type dataType = var.getType().getId();
+
+    if (dataType == NC_FLOAT) {
+      if (isUnstructured) {
+        // Handle unstructured grid (ICON model format)
+        logInfo("[netcdf_utils] Processing unstructured grid data for time %zu",
+            timeIndex);
+
+        // Read longitude and latitude coordinates (in radians)
+        netCDF::NcVar clonVar = file.getVar("clon");
+        netCDF::NcVar clatVar = file.getVar("clat");
+
+        if (clonVar.isNull() || clatVar.isNull()) {
+          logError(
+              "[netcdf_utils] Could not find clon/clat coordinate variables");
+          return {};
+        }
+
+        vector<double> lonRad(numCells), latRad(numCells);
+        clonVar.getVar(lonRad.data());
+        clatVar.getVar(latRad.data());
+
+        // Read height coordinate data
+        netCDF::NcVar heightVar = file.getVar("height");
+        vector<double> heightData(numLevels);
+        if (!heightVar.isNull()) {
+          heightVar.getVar(heightData.data());
+        } else {
+          // Fallback: use level indices as height values
+          for (size_t i = 0; i < numLevels; ++i) {
+            heightData[i] = static_cast<double>(i);
+          }
+          logInfo(
+              "[netcdf_utils] No height coordinate found, using level indices");
+        }
+
+        // Read cloud data for all height levels at specific time
+        vector<float> cloudData(numCells * numLevels);
+        vector<size_t> start = {
+            timeIndex, 0, 0}; // specific time, height=0, cell=0
+        vector<size_t> count = {
+            1, numLevels, numCells}; // 1 time, all heights, all cells
+        var.getVar(start, count, cloudData.data());
+
+        // Convert coordinates from radians to degrees
+        vector<float> lonDeg(numCells), latDeg(numCells);
+        for (size_t i = 0; i < numCells; ++i) {
+          lonDeg[i] = static_cast<float>(lonRad[i] * 180.0 / M_PI);
+          latDeg[i] = static_cast<float>(latRad[i] * 180.0 / M_PI);
+        }
+
+        logInfo(
+            "[netcdf_utils] Converting %zu cells x %zu levels to 3D texture",
+            numCells,
+            numLevels);
+
+        // Convert to 3D texture
+        array = unstructuredDataTo3DTexture(
+            scene, lonDeg, latDeg, cloudData, numCells, 0, numLevels - 1);
+
+        logInfo("[netcdf_utils] 3D texture conversion complete for time %zu",
+            timeIndex);
+      } else {
+        logError(
+            "[netcdf_utils] Structured grid time-stamping not yet implemented");
+        return {};
+      }
+    } else {
+      logError("[netcdf_utils] Unsupported data type %d for variable '%s'",
+          dataType,
+          variableName.c_str());
+      return {};
+    }
+
+    logInfo("[netcdf_utils] Successfully loaded %s for time %zu",
+        variableName.c_str(),
+        timeIndex);
+    return array;
+  } catch (const netCDF::exceptions::NcException &e) {
+    logError("[netcdf_utils] NetCDF error loading '%s': %s",
+        filepath.c_str(),
+        e.what());
+    return {};
+  }
+}
+
 } // namespace tsd::io
 #endif // TSD_USE_NETCDF

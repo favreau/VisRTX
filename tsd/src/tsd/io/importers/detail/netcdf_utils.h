@@ -34,6 +34,12 @@ NetCDFVariableInfo getNetCDFVariableInfo(
 ArrayRef loadNetCDFVariable(
     Scene &scene, const std::string &filepath, const std::string &variableName);
 
+// Load a 3D variable from netCDF file for a specific timestamp
+ArrayRef loadNetCDFVariable(Scene &scene,
+    const std::string &filepath,
+    const std::string &variableName,
+    size_t timeIndex);
+
 // Convert unstructured data to 3D equirectangular texture using nearest
 // neighbor (for specified level range)
 ArrayRef unstructuredDataTo3DTexture(Scene &scene,
