@@ -25,6 +25,18 @@ tsd::core::SamplerRef importTexture(tsd::core::Scene &scene,
 tsd::core::SamplerRef makeDefaultColorMapSampler(
     tsd::core::Scene &scene, const tsd::math::float2 &range);
 
+// Transfer function loading utilities
+struct TransferFunctionData
+{
+  std::vector<tsd::math::float4> colorMap;
+  bool loaded{false};
+};
+
+TransferFunctionData loadTransferFunction(
+    const std::string &name, const std::string &basePath = "");
+tsd::core::ArrayRef createColormapArray(
+    tsd::core::Scene &scene, const TransferFunctionData &tfData);
+
 bool calcTangentsForTriangleMesh(const tsd::math::uint3 *indices,
     const tsd::math::float3 *vertexPositions,
     const tsd::math::float3 *vertexNormals,

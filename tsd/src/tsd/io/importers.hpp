@@ -41,6 +41,7 @@ bool update_CLOUDS(Scene &scene,
 SpatialFieldRef import_MAGNETIC(Scene &scene, const char *filename);
 SpatialFieldRef import_PLANET(Scene &scene, const char *filename);
 
+
 VolumeRef import_volume(Scene &scene,
     const char *filename,
     ArrayRef colors = {},

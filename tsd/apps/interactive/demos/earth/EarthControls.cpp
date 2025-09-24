@@ -7,9 +7,14 @@
 // tsd_io
 #include <tsd/io/importers.hpp>
 #include <tsd/io/importers/detail/importer_common.hpp>
+#include <tsd/io/importers/import_CLOUDS.hpp>
+#include <tsd/io/importers/import_MAGNETIC.hpp>
+#include <tsd/io/importers/import_PLANET.hpp>
 // tsd_ui_imgui
 #include <tsd/ui/imgui/Application.h>
 #include <tsd/ui/imgui/modals/BlockingTaskModal.h>
+// std
+#include <filesystem>
 
 namespace tsd::demo {
 
@@ -214,9 +219,26 @@ void EarthControls::importEarthData()
     // Store the spatial field for time series updates
     m_cloudsTimeSteps.push_back(cloudsField);
 
-    // Create volume with the field
-    auto cloudsVolume =
-        tsd::io::import_volume(scene, m_cloudsFile.c_str(), {}, {});
+    // Load colormap and create volume with the field
+    auto cloudsTF =
+        tsd::io::getTransferFunctionName_CLOUDS(m_cloudsFile.c_str());
+    tsd::core::ArrayRef cloudsColorArray;
+    if (!cloudsTF.empty()) {
+      const auto basePath =
+          std::filesystem::path(m_cloudsFile).parent_path().string();
+      auto tfData = tsd::io::loadTransferFunction(cloudsTF, basePath);
+      if (tfData.loaded) {
+        cloudsColorArray = tsd::io::createColormapArray(scene, tfData);
+        tsd::core::logInfo(
+            "[earth_demo] Loaded colormap '%s' for clouds", cloudsTF.c_str());
+      } else {
+        tsd::core::logWarning(
+            "[earth_demo] Failed to load colormap '%s' for clouds",
+            cloudsTF.c_str());
+      }
+    }
+    auto cloudsVolume = tsd::io::import_volume(
+        scene, m_cloudsFile.c_str(), cloudsColorArray, {});
     m_cloudsVolume = cloudsVolume;
     m_cloudsVolume->setParameter("unitDistance", 8.f);
   }
@@ -224,16 +246,49 @@ void EarthControls::importEarthData()
   // Load magnetic field data (static)
   tsd::core::logInfo("[earth_demo] Loading magnetic field data from %s",
       m_magneticFile.c_str());
-  auto magneticVolume =
-      tsd::io::import_volume(scene, m_magneticFile.c_str(), {}, {});
+  auto magneticTF =
+      tsd::io::getTransferFunctionName_MAGNETIC(m_magneticFile.c_str());
+  tsd::core::ArrayRef magneticColorArray;
+  if (!magneticTF.empty()) {
+    const auto basePath =
+        std::filesystem::path(m_magneticFile).parent_path().string();
+    auto tfData = tsd::io::loadTransferFunction(magneticTF, basePath);
+    if (tfData.loaded) {
+      magneticColorArray = tsd::io::createColormapArray(scene, tfData);
+      tsd::core::logInfo("[earth_demo] Loaded colormap '%s' for magnetic field",
+          magneticTF.c_str());
+    } else {
+      tsd::core::logWarning(
+          "[earth_demo] Failed to load colormap '%s' for magnetic field",
+          magneticTF.c_str());
+    }
+  }
+  auto magneticVolume = tsd::io::import_volume(
+      scene, m_magneticFile.c_str(), magneticColorArray, {});
   m_magneticVolume = magneticVolume;
   m_magneticVolume->setParameter("unitDistance", 8.f);
 
   // Load planet data (static)
   tsd::core::logInfo(
       "[earth_demo] Loading planet data from %s", m_planetFile.c_str());
+  auto planetTF = tsd::io::getTransferFunctionName_PLANET(m_planetFile.c_str());
+  tsd::core::ArrayRef planetColorArray;
+  if (!planetTF.empty()) {
+    const auto basePath =
+        std::filesystem::path(m_planetFile).parent_path().string();
+    auto tfData = tsd::io::loadTransferFunction(planetTF, basePath);
+    if (tfData.loaded) {
+      planetColorArray = tsd::io::createColormapArray(scene, tfData);
+      tsd::core::logInfo(
+          "[earth_demo] Loaded colormap '%s' for planet", planetTF.c_str());
+    } else {
+      tsd::core::logWarning(
+          "[earth_demo] Failed to load colormap '%s' for planet",
+          planetTF.c_str());
+    }
+  }
   auto planetVolume =
-      tsd::io::import_volume(scene, m_planetFile.c_str(), {}, {});
+      tsd::io::import_volume(scene, m_planetFile.c_str(), planetColorArray, {});
   m_planetVolume = planetVolume;
   m_planetVolume->setParameter("unitDistance", 8.f);
 

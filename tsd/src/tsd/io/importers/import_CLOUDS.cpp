@@ -1,6 +1,7 @@
 // Copyright 2024-2025 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+#include "import_CLOUDS.hpp"
 #include "tsd/core/Logging.hpp"
 #include "tsd/io/importers.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
@@ -24,6 +25,7 @@ struct CloudHeader
   float atmosphereThickness{0.02};
   string netCDFPath;
   string variableName;
+  string colormap;
 };
 
 CloudHeader readCloudHeader(const string &filename)
@@ -61,6 +63,8 @@ CloudHeader readCloudHeader(const string &filename)
         header.planetRadius = stof(value);
       } else if (key == "atmosphereThickness") {
         header.atmosphereThickness = stof(value);
+      } else if (key == "colormap") {
+        header.colormap = value;
       }
     }
   }
@@ -152,6 +156,12 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
       "[import_Clouds] NetCDF support not enabled. Rebuild with TSD_USE_NETCDF=ON");
   return {};
 #endif
+}
+
+std::string getTransferFunctionName_CLOUDS(const char *filename)
+{
+  const auto header = readCloudHeader(filename);
+  return header.colormap;
 }
 
 bool update_CLOUDS(

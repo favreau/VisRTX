@@ -29,6 +29,7 @@ struct PlanetHeader
   string elevationMapPath;
   string diffuseMapPath;
   string normalMapPath;
+  string colormap;
 };
 
 PlanetHeader readPlanetHeader(const string &filename)
@@ -68,6 +69,8 @@ PlanetHeader readPlanetHeader(const string &filename)
         header.diffuseMapPath = value;
       } else if (key == "normalMap") {
         header.normalMapPath = value;
+      } else if (key == "colormap") {
+        header.colormap = value;
       }
     }
   }
@@ -358,6 +361,12 @@ SpatialFieldRef import_PLANET(Scene &scene, const char *filepath)
   field->setMetadataValue("unitDistance", 256.f);
 
   return field;
+}
+
+std::string getTransferFunctionName_PLANET(const char *filename)
+{
+  const auto header = readPlanetHeader(filename);
+  return header.colormap;
 }
 
 } // namespace tsd::io

@@ -10,16 +10,12 @@ void generate_default_lights(Scene &scene)
   auto lightsRoot = scene.defaultLayer()->root()->insert_first_child({});
   (*lightsRoot)->name() = "defaultLights";
 
-  // Add a directional light to simulate the sun
-  auto sunLight = scene.createObject<tsd::core::Light>(
+  auto light = scene.createObject<tsd::core::Light>(
       tsd::core::tokens::light::directional);
-  sunLight->setName("sun_light");
-  sunLight->setParameter("direction", tsd::math::float3(-0.5f, -0.5f, 0.75f));
-  sunLight->setParameter(
-      "color", tsd::math::float3(1.f, 0.95f, 0.8f)); // Warm sunlight color
-  sunLight->setParameter("irradiance", 10.f);
+  light->setName("mainDistantLight");
+  light->setParameter("direction", tsd::math::float2(0.f, 240.f));
 
-  lightsRoot->insert_first_child({sunLight});
+  lightsRoot->insert_first_child({light});
 }
 
 } // namespace tsd::io

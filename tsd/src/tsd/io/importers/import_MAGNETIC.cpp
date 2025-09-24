@@ -1,6 +1,7 @@
 // Copyright 2024-2025 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+#include "import_MAGNETIC.hpp"
 #include "tsd/core/Logging.hpp"
 #include "tsd/io/importers.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
@@ -21,6 +22,7 @@ struct MagneticHeader
   float equatorStrength{30.0f};
   float poleStrength{70.0f};
   float dipoleTilt{11.5f};
+  string colormap;
 };
 
 MagneticHeader readMagneticHeader(const string &filename)
@@ -61,6 +63,8 @@ MagneticHeader readMagneticHeader(const string &filename)
         header.poleStrength = stof(value);
       } else if (key == "dipoleTilt") {
         header.dipoleTilt = stof(value);
+      } else if (key == "colormap") {
+        header.colormap = value;
       }
     }
   }
@@ -93,6 +97,12 @@ SpatialFieldRef import_MAGNETIC(Scene &scene, const char *filepath)
   field->setMetadataValue("unitDistance", 1.f);
 
   return field;
+}
+
+std::string getTransferFunctionName_MAGNETIC(const char *filename)
+{
+  const auto header = readMagneticHeader(filename);
+  return header.colormap;
 }
 
 } // namespace tsd::io

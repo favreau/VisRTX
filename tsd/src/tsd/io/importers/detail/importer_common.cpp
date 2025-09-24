@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/io/importers/detail/importer_common.hpp"
-#include "tsd/io/importers/detail/dds.h"
 #include "tsd/core/ColorMapUtil.hpp"
 #include "tsd/core/Logging.hpp"
+#include "tsd/io/importers/detail/dds.h"
 // mikktspace
 #include "mikktspace.h"
 // stb_image
@@ -318,6 +318,143 @@ SamplerRef makeDefaultColorMapSampler(Scene &scene, const float2 &range)
   sampler->setParameterObject("image", *samplerImageArray);
 
   return sampler;
+}
+
+TransferFunctionData loadTransferFunction(
+    const std::string &name, const std::string &basePath)
+{
+  TransferFunctionData tfData;
+
+  if (name.empty()) {
+    return tfData;
+  }
+
+  // Try different file extensions and paths
+  std::vector<std::string> searchPaths;
+
+  if (!basePath.empty()) {
+    searchPaths.push_back(basePath + "/" + name + ".1dt");
+    searchPaths.push_back(basePath + "/" + name + ".json");
+    searchPaths.push_back(basePath + "/" + name);
+  }
+
+  searchPaths.push_back(name + ".1dt");
+  searchPaths.push_back(name + ".json");
+  searchPaths.push_back(name);
+
+  for (const auto &filepath : searchPaths) {
+    std::ifstream file(filepath);
+    if (!file.is_open()) {
+      continue;
+    }
+
+    tsd::core::logInfo(
+        "[transfer_function] Loading colormap from: %s", filepath.c_str());
+
+    if (filepath.find(".1dt") != std::string::npos) {
+      // Load .1dt format
+      std::string line;
+      while (std::getline(file, line)) {
+        if (line.empty() || line[0] == '#') {
+          continue;
+        }
+
+        std::istringstream iss(line);
+        float r, g, b, a;
+        if (iss >> r >> g >> b >> a) {
+          tfData.colorMap.emplace_back(r, g, b, a);
+        }
+      }
+      tfData.loaded = !tfData.colorMap.empty();
+    } else if (filepath.find(".json") != std::string::npos) {
+      // Load ParaView JSON format
+      std::stringstream buffer;
+      buffer << file.rdbuf();
+      std::string jsonContent = buffer.str();
+
+      // Find RGBPoints array
+      size_t rgbPointsPos = jsonContent.find("\"RGBPoints\"");
+      if (rgbPointsPos != std::string::npos) {
+        size_t arrayStart = jsonContent.find("[", rgbPointsPos);
+        if (arrayStart != std::string::npos) {
+          int bracketCount = 0;
+          size_t arrayEnd = arrayStart;
+          for (size_t i = arrayStart; i < jsonContent.length(); ++i) {
+            if (jsonContent[i] == '[')
+              bracketCount++;
+            else if (jsonContent[i] == ']') {
+              bracketCount--;
+              if (bracketCount == 0) {
+                arrayEnd = i;
+                break;
+              }
+            }
+          }
+
+          if (arrayEnd > arrayStart) {
+            std::string arrayContent =
+                jsonContent.substr(arrayStart + 1, arrayEnd - arrayStart - 1);
+            std::vector<float> values;
+            std::stringstream ss(arrayContent);
+            std::string token;
+
+            while (std::getline(ss, token, ',')) {
+              // Remove whitespace and quotes
+              token.erase(0, token.find_first_not_of(" \t\n\r\""));
+              token.erase(token.find_last_not_of(" \t\n\r\"") + 1);
+              if (!token.empty()) {
+                try {
+                  values.push_back(std::stof(token));
+                } catch (...) {
+                  // Skip invalid values
+                }
+              }
+            }
+
+            // Convert to RGBA (ParaView format is position, R, G, B)
+            for (size_t i = 0; i + 3 < values.size(); i += 4) {
+              float r = values[i + 1];
+              float g = values[i + 2];
+              float b = values[i + 3];
+              tfData.colorMap.emplace_back(r, g, b, 1.0f); // Full opacity
+            }
+            tfData.loaded = !tfData.colorMap.empty();
+          }
+        }
+      }
+    }
+
+    file.close();
+
+    if (tfData.loaded) {
+      tsd::core::logInfo(
+          "[transfer_function] Successfully loaded %zu colors from %s",
+          tfData.colorMap.size(),
+          filepath.c_str());
+      break;
+    }
+  }
+
+  if (!tfData.loaded) {
+    tsd::core::logWarning(
+        "[transfer_function] Could not load transfer function '%s'",
+        name.c_str());
+  }
+
+  return tfData;
+}
+
+tsd::core::ArrayRef createColormapArray(
+    tsd::core::Scene &scene, const TransferFunctionData &tfData)
+{
+  if (!tfData.loaded || tfData.colorMap.empty()) {
+    return {};
+  }
+
+  auto colorArray =
+      scene.createArray(ANARI_FLOAT32_VEC4, tfData.colorMap.size());
+  colorArray->setData(tfData.colorMap.data());
+  return colorArray;
 }
 
 bool calcTangentsForTriangleMesh(const uint3 *indices,
