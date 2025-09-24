@@ -122,6 +122,9 @@ const Token structuredRegular = "structuredRegular";
 const Token unstructured = "unstructured";
 const Token amr = "amr";
 const Token nanovdb = "nanovdb";
+const Token magnetic = "magnetic";
+const Token planet = "planet";
+const Token clouds = "clouds";
 
 } // namespace tokens::spatial_field
 

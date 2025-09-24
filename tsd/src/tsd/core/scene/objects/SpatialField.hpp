@@ -33,6 +33,9 @@ extern const Token structuredRegular;
 extern const Token unstructured;
 extern const Token amr;
 extern const Token nanovdb;
+extern const Token magnetic;
+extern const Token planet;
+extern const Token clouds;
 
 } // namespace tokens::spatial_field
 

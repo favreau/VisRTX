@@ -31,6 +31,9 @@ SpatialFieldRef import_NVDB(Scene &scene, const char *filename);
 SpatialFieldRef import_MHD(Scene &scene, const char *filename);
 SpatialFieldRef import_VTI(Scene &scene, const char *filename);
 SpatialFieldRef import_VTU(Scene &scene, const char *filename);
+SpatialFieldRef import_CLOUDS(Scene &scene, const char *filename);
+SpatialFieldRef import_MAGNETIC(Scene &scene, const char *filename);
+SpatialFieldRef import_PLANET(Scene &scene, const char *filename);
 
 VolumeRef import_volume(Scene &scene,
     const char *filename,

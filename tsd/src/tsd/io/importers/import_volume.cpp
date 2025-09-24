@@ -1,10 +1,10 @@
 // Copyright 2024-2025 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tsd/io/importers.hpp"
-#include "tsd/io/importers/detail/importer_common.hpp"
 #include "tsd/core/ColorMapUtil.hpp"
 #include "tsd/core/Logging.hpp"
+#include "tsd/io/importers.hpp"
+#include "tsd/io/importers/detail/importer_common.hpp"
 // std
 #include <cstdio>
 
@@ -33,6 +33,12 @@ VolumeRef import_volume(Scene &scene,
     field = import_VTU(scene, filepath);
   else if (ext == ".vti")
     field = import_VTI(scene, filepath);
+  else if (ext == ".clouds")
+    field = import_CLOUDS(scene, filepath);
+  else if (ext == ".magnetic")
+    field = import_MAGNETIC(scene, filepath);
+  else if (ext == ".planet")
+    field = import_PLANET(scene, filepath);
   else {
     logError("[import_volume] no loader for file type '%s'", ext.c_str());
     return {};
@@ -67,4 +73,4 @@ VolumeRef import_volume(Scene &scene,
   return volume;
 }
 
-} // namespace tsd
+} // namespace tsd::io

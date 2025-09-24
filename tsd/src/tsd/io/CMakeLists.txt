@@ -9,19 +9,23 @@ project_sources(
 PRIVATE
   importers/detail/HDRImage.cpp
   importers/detail/importer_common.cpp
+  importers/detail/netcdf_utils.cpp
   importers/import_ASSIMP.cpp
+  importers/import_CLOUDS.cpp
   importers/import_DLAF.cpp
   importers/import_E57XYZ.cpp
   importers/import_FLASH.cpp
   importers/import_GLTF.cpp
   importers/import_HDRI.cpp
   importers/import_HSMESH.cpp
+  importers/import_MAGNETIC.cpp
   importers/import_MHD.cpp
   importers/import_NBODY.cpp
   importers/import_NVDB.cpp
   importers/import_OBJ.cpp
   importers/import_USD.cpp
   importers/import_PDB.cpp
+  importers/import_PLANET.cpp
   importers/import_PLY.cpp
   importers/import_PT.cpp
   importers/import_RAW.cpp
