@@ -129,7 +129,8 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
     dataArray =
         loadNetCDFVariable(scene, fullNetCDFPath, header.variableName, 0);
   } else {
-    dataArray = loadNetCDFVariable(scene, fullNetCDFPath, header.variableName);
+    dataArray =
+        loadNetCDFVariable(scene, fullNetCDFPath, header.variableName, 0);
   }
 
   if (!dataArray) {
@@ -204,7 +205,8 @@ bool update_CLOUDS(
     dataArray = loadNetCDFVariable(
         scene, fullNetCDFPath, header.variableName, timeIndex);
   } else {
-    dataArray = loadNetCDFVariable(scene, fullNetCDFPath, header.variableName);
+    dataArray =
+        loadNetCDFVariable(scene, fullNetCDFPath, header.variableName, 0);
   }
 
   if (!dataArray) {

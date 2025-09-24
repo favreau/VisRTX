@@ -30,10 +30,6 @@ struct NetCDFVariableInfo
 NetCDFVariableInfo getNetCDFVariableInfo(
     const std::string &filepath, const std::string &variableName);
 
-// Load a 3D variable from netCDF file into an ANARI array
-ArrayRef loadNetCDFVariable(
-    Scene &scene, const std::string &filepath, const std::string &variableName);
-
 // Load a 3D variable from netCDF file for a specific timestamp
 ArrayRef loadNetCDFVariable(Scene &scene,
     const std::string &filepath,
