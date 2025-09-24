@@ -25,6 +25,7 @@ struct CloudHeader
   float atmosphereThickness{0.02};
   string netCDFPath;
   string variableName;
+  float unitDistance{256.0f};
   string colormap;
 };
 
@@ -63,6 +64,8 @@ CloudHeader readCloudHeader(const string &filename)
         header.planetRadius = stof(value);
       } else if (key == "atmosphereThickness") {
         header.atmosphereThickness = stof(value);
+      } else if (key == "unitDistance") {
+        header.unitDistance = stof(value);
       } else if (key == "colormap") {
         header.colormap = value;
       }
@@ -144,7 +147,7 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
 
   // Set the data as a parameter
   field->setParameterObject("cloudData"_t, *dataArray);
-  field->setMetadataValue("unitDistance", 256.f);
+  field->setMetadataValue("unitDistance", header.unitDistance);
   field->setMetadataValue("numTimeSteps", static_cast<int>(numTimeSteps));
 
   logInfo(

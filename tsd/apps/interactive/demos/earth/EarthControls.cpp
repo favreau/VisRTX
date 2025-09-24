@@ -203,116 +203,146 @@ void EarthControls::importEarthData()
   m_earthRoot = scene.insertChildTransformNode(layer->root());
   (*m_earthRoot)->name() = "earth_transform";
 
-  // Load clouds data
-  tsd::core::logInfo(
-      "[earth_demo] Loading clouds data from %s", m_cloudsFile.c_str());
-  int numTimeSteps = 1;
-  auto cloudsField = tsd::io::import_CLOUDS(scene, m_cloudsFile.c_str());
-  if (cloudsField) {
-    // Get number of time steps from metadata
-    auto numTimeStepsParam = cloudsField->getMetadataValue("numTimeSteps");
-    numTimeSteps = numTimeStepsParam ? numTimeStepsParam.get<int>() : 1;
-
+  try {
+    // Load clouds data
     tsd::core::logInfo(
-        "[earth_demo] Found %d time steps in clouds data", numTimeSteps);
+        "[earth_demo] Loading clouds data from %s", m_cloudsFile.c_str());
+    int numTimeSteps = 1;
+    auto cloudsField = tsd::io::import_CLOUDS(scene, m_cloudsFile.c_str());
+    if (cloudsField) {
+      // Get number of time steps from metadata
+      auto numTimeStepsParam = cloudsField->getMetadataValue("numTimeSteps");
+      numTimeSteps = numTimeStepsParam ? numTimeStepsParam.get<int>() : 1;
 
-    // Store the spatial field for time series updates
-    m_cloudsTimeSteps.push_back(cloudsField);
+      tsd::core::logInfo(
+          "[earth_demo] Found %d time steps in clouds data", numTimeSteps);
 
-    // Load colormap and create volume with the field
-    auto cloudsTF =
-        tsd::io::getTransferFunctionName_CLOUDS(m_cloudsFile.c_str());
-    tsd::core::ArrayRef cloudsColorArray;
-    if (!cloudsTF.empty()) {
-      const auto basePath =
-          std::filesystem::path(m_cloudsFile).parent_path().string();
-      auto tfData = tsd::io::loadTransferFunction(cloudsTF, basePath);
-      if (tfData.loaded) {
-        cloudsColorArray = tsd::io::createColormapArray(scene, tfData);
-        tsd::core::logInfo(
-            "[earth_demo] Loaded colormap '%s' for clouds", cloudsTF.c_str());
-      } else {
-        tsd::core::logWarning(
-            "[earth_demo] Failed to load colormap '%s' for clouds",
-            cloudsTF.c_str());
+      // Store the spatial field for time series updates
+      m_cloudsTimeSteps.push_back(cloudsField);
+
+      // Load colormap and create volume with the field
+      auto cloudsTF =
+          tsd::io::getTransferFunctionName_CLOUDS(m_cloudsFile.c_str());
+      tsd::core::ArrayRef cloudsColorArray;
+      if (!cloudsTF.empty()) {
+        const auto basePath =
+            std::filesystem::path(m_cloudsFile).parent_path().string();
+        auto tfData = tsd::io::loadTransferFunction(cloudsTF, basePath);
+        if (tfData.loaded) {
+          cloudsColorArray = tsd::io::createColormapArray(scene, tfData);
+          tsd::core::logInfo(
+              "[earth_demo] Loaded colormap '%s' for clouds", cloudsTF.c_str());
+        } else {
+          tsd::core::logWarning(
+              "[earth_demo] Failed to load colormap '%s' for clouds",
+              cloudsTF.c_str());
+        }
+      }
+      auto cloudsVolume = tsd::io::import_volume(
+          scene, m_cloudsFile.c_str(), cloudsColorArray, {});
+      m_cloudsVolume = cloudsVolume;
+      // Get unitDistance from the spatial field metadata
+      auto unitDistanceParam = cloudsField->getMetadataValue("unitDistance");
+      if (unitDistanceParam) {
+        auto unitDistance = unitDistanceParam.get<float>();
+        m_cloudsVolume->setParameter("unitDistance", unitDistance);
       }
     }
-    auto cloudsVolume = tsd::io::import_volume(
-        scene, m_cloudsFile.c_str(), cloudsColorArray, {});
-    m_cloudsVolume = cloudsVolume;
-    m_cloudsVolume->setParameter("unitDistance", 8.f);
-  }
 
-  // Load magnetic field data (static)
-  tsd::core::logInfo("[earth_demo] Loading magnetic field data from %s",
-      m_magneticFile.c_str());
-  auto magneticTF =
-      tsd::io::getTransferFunctionName_MAGNETIC(m_magneticFile.c_str());
-  tsd::core::ArrayRef magneticColorArray;
-  if (!magneticTF.empty()) {
-    const auto basePath =
-        std::filesystem::path(m_magneticFile).parent_path().string();
-    auto tfData = tsd::io::loadTransferFunction(magneticTF, basePath);
-    if (tfData.loaded) {
-      magneticColorArray = tsd::io::createColormapArray(scene, tfData);
-      tsd::core::logInfo("[earth_demo] Loaded colormap '%s' for magnetic field",
-          magneticTF.c_str());
-    } else {
-      tsd::core::logWarning(
-          "[earth_demo] Failed to load colormap '%s' for magnetic field",
-          magneticTF.c_str());
+    // Load magnetic field data (static)
+    tsd::core::logInfo("[earth_demo] Loading magnetic field data from %s",
+        m_magneticFile.c_str());
+    auto magneticTF =
+        tsd::io::getTransferFunctionName_MAGNETIC(m_magneticFile.c_str());
+    tsd::core::ArrayRef magneticColorArray;
+    if (!magneticTF.empty()) {
+      const auto basePath =
+          std::filesystem::path(m_magneticFile).parent_path().string();
+      auto tfData = tsd::io::loadTransferFunction(magneticTF, basePath);
+      if (tfData.loaded) {
+        magneticColorArray = tsd::io::createColormapArray(scene, tfData);
+        tsd::core::logInfo(
+            "[earth_demo] Loaded colormap '%s' for magnetic field",
+            magneticTF.c_str());
+      } else {
+        tsd::core::logWarning(
+            "[earth_demo] Failed to load colormap '%s' for magnetic field",
+            magneticTF.c_str());
+      }
     }
-  }
-  auto magneticVolume = tsd::io::import_volume(
-      scene, m_magneticFile.c_str(), magneticColorArray, {});
-  m_magneticVolume = magneticVolume;
-  m_magneticVolume->setParameter("unitDistance", 8.f);
+    auto magneticVolume = tsd::io::import_volume(
+        scene, m_magneticFile.c_str(), magneticColorArray, {});
+    m_magneticVolume = magneticVolume;
 
-  // Load planet data (static)
-  tsd::core::logInfo(
-      "[earth_demo] Loading planet data from %s", m_planetFile.c_str());
-  auto planetTF = tsd::io::getTransferFunctionName_PLANET(m_planetFile.c_str());
-  tsd::core::ArrayRef planetColorArray;
-  if (!planetTF.empty()) {
-    const auto basePath =
-        std::filesystem::path(m_planetFile).parent_path().string();
-    auto tfData = tsd::io::loadTransferFunction(planetTF, basePath);
-    if (tfData.loaded) {
-      planetColorArray = tsd::io::createColormapArray(scene, tfData);
-      tsd::core::logInfo(
-          "[earth_demo] Loaded colormap '%s' for planet", planetTF.c_str());
-    } else {
-      tsd::core::logWarning(
-          "[earth_demo] Failed to load colormap '%s' for planet",
-          planetTF.c_str());
+    // Get magnetic field for unitDistance
+    auto magneticField =
+        tsd::io::import_MAGNETIC(scene, m_magneticFile.c_str());
+    if (magneticField) {
+      auto unitDistanceParam = magneticField->getMetadataValue("unitDistance");
+      if (unitDistanceParam) {
+        auto unitDistance = unitDistanceParam.get<float>();
+        m_magneticVolume->setParameter("unitDistance", unitDistance);
+      }
     }
+
+    // Load planet data (static)
+    tsd::core::logInfo(
+        "[earth_demo] Loading planet data from %s", m_planetFile.c_str());
+    auto planetTF =
+        tsd::io::getTransferFunctionName_PLANET(m_planetFile.c_str());
+    tsd::core::ArrayRef planetColorArray;
+    if (!planetTF.empty()) {
+      const auto basePath =
+          std::filesystem::path(m_planetFile).parent_path().string();
+      auto tfData = tsd::io::loadTransferFunction(planetTF, basePath);
+      if (tfData.loaded) {
+        planetColorArray = tsd::io::createColormapArray(scene, tfData);
+        tsd::core::logInfo(
+            "[earth_demo] Loaded colormap '%s' for planet", planetTF.c_str());
+      } else {
+        tsd::core::logWarning(
+            "[earth_demo] Failed to load colormap '%s' for planet",
+            planetTF.c_str());
+      }
+    }
+    auto planetVolume = tsd::io::import_volume(
+        scene, m_planetFile.c_str(), planetColorArray, {});
+    m_planetVolume = planetVolume;
+
+    // Get planet field for unitDistance
+    auto planetField = tsd::io::import_PLANET(scene, m_planetFile.c_str());
+    if (planetField) {
+      auto unitDistanceParam = planetField->getMetadataValue("unitDistance");
+      if (unitDistanceParam) {
+        auto unitDistance = unitDistanceParam.get<float>();
+        m_planetVolume->setParameter("unitDistance", unitDistance);
+      }
+    }
+
+    // Set max time steps from clouds data
+    m_maxTimeSteps = numTimeSteps;
+    m_currentTimeStep = 0;
+
+    // Reset camera to fit the loaded data
+    core->view.manipulator.setConfig({0.f, 0.f, 0.f}, 5.f, {0.f, 0.f});
+
+    // Add a directional light for Earth visualization
+    auto sunLight = scene.createObject<tsd::core::Light>(
+        tsd::core::tokens::light::directional);
+    sunLight->setName("sun_light");
+    sunLight->setParameter("direction", tsd::math::float2(120.f, 175.f));
+    sunLight->setParameter(
+        "color", tsd::math::float3(1.f, 0.95f, 0.8f)); // Warm sunlight color
+    sunLight->setParameter("irradiance", 40.0f);
+    scene.insertChildObjectNode(layer->root(), sunLight);
+    tsd::core::logInfo(
+        "[earth_demo] Added sun light: direction(120°, 175°), color(1.0, 0.95, 0.8), irradiance=40.0");
+
+    // Notify scene changed
+    scene.signalLayerChange(layer);
+  } catch (const std::exception &e) {
+    tsd::core::logError(("Error: " + std::string(e.what())).c_str());
   }
-  auto planetVolume =
-      tsd::io::import_volume(scene, m_planetFile.c_str(), planetColorArray, {});
-  m_planetVolume = planetVolume;
-  m_planetVolume->setParameter("unitDistance", 8.f);
-
-  // Set max time steps from clouds data
-  m_maxTimeSteps = numTimeSteps;
-  m_currentTimeStep = 0;
-
-  // Reset camera to fit the loaded data
-  core->view.manipulator.setConfig({0.f, 0.f, 0.f}, 5.f, {0.f, 0.f});
-
-  // Add a directional light for Earth visualization
-  auto sunLight = scene.createObject<tsd::core::Light>(
-      tsd::core::tokens::light::directional);
-  sunLight->setName("sun_light");
-  sunLight->setParameter("direction", tsd::math::float2(120.f, 175.f));
-  sunLight->setParameter(
-      "color", tsd::math::float3(1.f, 0.95f, 0.8f)); // Warm sunlight color
-  sunLight->setParameter("irradiance", 40.0f);
-  scene.insertChildObjectNode(layer->root(), sunLight);
-  tsd::core::logInfo(
-      "[earth_demo] Added sun light: direction(120°, 175°), color(1.0, 0.95, 0.8), irradiance=40.0");
-
-  // Notify scene changed
-  scene.signalLayerChange(layer);
 }
 
 void EarthControls::setTimeStepVolumes()

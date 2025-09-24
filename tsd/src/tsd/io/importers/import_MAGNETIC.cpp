@@ -22,6 +22,8 @@ struct MagneticHeader
   float equatorStrength{30.0f};
   float poleStrength{70.0f};
   float dipoleTilt{11.5f};
+  tsd::math::float3 scale{1.0f, 1.0f, 1.0f};
+  float unitDistance{1.0f};
   string colormap;
 };
 
@@ -63,6 +65,18 @@ MagneticHeader readMagneticHeader(const string &filename)
         header.poleStrength = stof(value);
       } else if (key == "dipoleTilt") {
         header.dipoleTilt = stof(value);
+      } else if (key == "scale") {
+        // Parse as three floats: x y z
+        std::istringstream iss(value);
+        float x, y, z;
+        if (iss >> x >> y >> z) {
+          header.scale = tsd::math::float3(x, y, z);
+        } else if (iss.clear(), iss.seekg(0), iss >> x) {
+          // Single value - apply to all axes
+          header.scale = tsd::math::float3(x, x, x);
+        }
+      } else if (key == "unitDistance") {
+        header.unitDistance = stof(value);
       } else if (key == "colormap") {
         header.colormap = value;
       }
@@ -86,6 +100,9 @@ SpatialFieldRef import_MAGNETIC(Scene &scene, const char *filepath)
   logInfo("  equatorStrength: %f", header.equatorStrength);
   logInfo("  poleStrength: %f", header.poleStrength);
   logInfo("  dipoleTilt: %f", header.dipoleTilt);
+  logInfo(
+      "  scale: (%f, %f, %f)", header.scale.x, header.scale.y, header.scale.z);
+  logInfo("  unitDistance: %f", header.unitDistance);
 
   // Set Magnetic-specific parameters directly on the TSD object
   // These will be used when the ANARI object is created
@@ -93,8 +110,11 @@ SpatialFieldRef import_MAGNETIC(Scene &scene, const char *filepath)
   field->setParameter("poleStrength", header.poleStrength);
   field->setParameter("dipoleTilt", header.dipoleTilt);
 
-  // Set default metadata
-  field->setMetadataValue("unitDistance", 1.f);
+  // Store scaling factor as metadata for volume transformation
+  field->setMetadataValue("scale", header.scale);
+
+  // Set metadata
+  field->setMetadataValue("unitDistance", header.unitDistance);
 
   return field;
 }

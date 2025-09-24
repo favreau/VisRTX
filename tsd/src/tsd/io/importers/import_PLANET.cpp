@@ -24,6 +24,7 @@ struct PlanetHeader
   // Planet parameters
   float planetRadius{0.5f};
   float elevationScale{0.1f};
+  float unitDistance{256.0f};
 
   // Map file paths
   string elevationMapPath;
@@ -63,6 +64,8 @@ PlanetHeader readPlanetHeader(const string &filename)
         header.planetRadius = stof(value);
       } else if (key == "elevationScale") {
         header.elevationScale = stof(value);
+      } else if (key == "unitDistance") {
+        header.unitDistance = stof(value);
       } else if (key == "elevationMap") {
         header.elevationMapPath = value;
       } else if (key == "diffuseMap") {
@@ -358,7 +361,7 @@ SpatialFieldRef import_PLANET(Scene &scene, const char *filepath)
     loadImageData(scene, field, fullNormalPath, "normalMap", false);
   }
 
-  field->setMetadataValue("unitDistance", 256.f);
+  field->setMetadataValue("unitDistance", header.unitDistance);
 
   return field;
 }
