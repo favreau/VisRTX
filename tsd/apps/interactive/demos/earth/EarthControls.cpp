@@ -211,12 +211,10 @@ void EarthControls::importEarthData()
     tsd::core::logInfo(
         "[earth_demo] Found %d time steps in clouds data", numTimeSteps);
 
-    // For now, just add the first time step - full time series loading would
-    // require extending the import functions to accept time indices
+    // Store the spatial field for time series updates
     m_cloudsTimeSteps.push_back(cloudsField);
 
-    // Create volume with the field - import_volume creates its own transform,
-    // so we'll get a reference to it
+    // Create volume with the field
     auto cloudsVolume =
         tsd::io::import_volume(scene, m_cloudsFile.c_str(), {}, {});
     m_cloudsVolume = cloudsVolume;
@@ -239,7 +237,7 @@ void EarthControls::importEarthData()
   m_planetVolume = planetVolume;
   m_planetVolume->setParameter("unitDistance", 8.f);
 
-  // Set max time steps based on clouds data (assuming it drives the animation)
+  // Set max time steps from clouds data
   m_maxTimeSteps = numTimeSteps;
   m_currentTimeStep = 0;
 
