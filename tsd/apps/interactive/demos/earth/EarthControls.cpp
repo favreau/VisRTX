@@ -15,6 +15,8 @@
 #include <tsd/ui/imgui/modals/BlockingTaskModal.h>
 // std
 #include <filesystem>
+// cuda
+#include <cuda_runtime.h>
 
 namespace tsd::demo {
 
@@ -350,23 +352,19 @@ void EarthControls::setTimeStepVolumes()
   if (m_currentTimeStep >= m_maxTimeSteps || m_currentTimeStep < 0)
     return;
 
-  if (m_cloudsVolume
-      && m_currentTimeStep < static_cast<int>(m_cloudsTimeSteps.size())) {
+  if (m_cloudsVolume) {
     auto &scene = appCore()->tsd.scene;
 
-    // Get the spatial field from the volume
+    // Get the spatial field from the volume's "value" parameter
     auto valueParam = m_cloudsVolume->parameter("value");
-    if (valueParam && valueParam->value().type() == ANARI_OBJECT) {
+    if (valueParam) {
       auto fieldIndex = valueParam->value().getAsObjectIndex();
-      if (auto spatialField =
-              scene.getObject<tsd::core::SpatialField>(fieldIndex)) {
-        // Update the spatial field with new time step data
-        if (tsd::io::update_CLOUDS(
-                scene, spatialField, m_cloudsFile.c_str(), m_currentTimeStep)) {
-          tsd::core::logInfo(
-              "[earth_demo] Updated clouds texture for time step %d",
-              m_currentTimeStep);
-        }
+      auto spatialField = scene.getObject<tsd::core::SpatialField>(fieldIndex);
+      if (tsd::io::update_CLOUDS(
+              scene, spatialField, m_cloudsFile.c_str(), m_currentTimeStep)) {
+        // tsd::core::logInfo(
+        //     "[earth_demo] Updated clouds texture for time step %d",
+        //     m_currentTimeStep);
       }
     }
   }

@@ -61,6 +61,22 @@ VolumeRef import_volume(Scene &scene,
 
   auto tx = scene.insertChildTransformNode(scene.defaultLayer()->root());
 
+  // Check if field has scaling factor metadata and apply to transform
+  if (field) {
+    auto scalingFactorParam = field->getMetadataValue("scale");
+    if (scalingFactorParam) {
+      auto scaling = scalingFactorParam.get<tsd::math::float3>();
+      auto srt = (*tx)->getTransformSRT();
+      srt[0] = scaling; // Scale component
+      (*tx)->setAsTransform(srt);
+      logInfo(
+          "[import_volume] Applied scaling factor (%f, %f, %f) to volume transform",
+          scaling.x,
+          scaling.y,
+          scaling.z);
+    }
+  }
+
   auto [inst, volume] = scene.insertNewChildObjectNode<Volume>(
       tx, tokens::volume::transferFunction1D);
   volume->setName(fileOf(filepath).c_str());

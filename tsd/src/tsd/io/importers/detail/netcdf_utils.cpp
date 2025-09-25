@@ -23,12 +23,67 @@ NetCDFVariableInfo getNetCDFVariableInfo(
 
   try {
     netCDF::NcFile file(filepath, netCDF::NcFile::read);
+
+    // Display all available variables in the file
+    // logDebug("[netcdf_utils] Opening NetCDF file: %s", filepath.c_str());
+    auto vars = file.getVars();
+    // logDebug("[netcdf_utils] Available variables (%zu total):", vars.size());
+
+    for (const auto &varPair : vars) {
+      const string &varName = varPair.first;
+      const netCDF::NcVar &variable = varPair.second;
+
+      // Get variable dimensions
+      vector<netCDF::NcDim> varDims = variable.getDims();
+      string dimStr = "";
+      for (size_t i = 0; i < varDims.size(); ++i) {
+        if (i > 0)
+          dimStr += ", ";
+        dimStr += varDims[i].getName() + "("
+            + std::to_string(varDims[i].getSize()) + ")";
+      }
+
+      // Get data type name
+      string typeName;
+      nc_type varType = variable.getType().getId();
+      switch (varType) {
+      case NC_FLOAT:
+        typeName = "float";
+        break;
+      case NC_DOUBLE:
+        typeName = "double";
+        break;
+      case NC_INT:
+        typeName = "int";
+        break;
+      case NC_SHORT:
+        typeName = "short";
+        break;
+      case NC_CHAR:
+        typeName = "char";
+        break;
+      case NC_BYTE:
+        typeName = "byte";
+        break;
+      default:
+        typeName = "unknown";
+        break;
+      }
+
+      // logDebug("[netcdf_utils]   - %s (%s) [%s]",
+      //     varName.c_str(),
+      //     typeName.c_str(),
+      //     dimStr.empty() ? "scalar" : dimStr.c_str());
+    }
+
+    // Now get the specific variable requested
     netCDF::NcVar var = file.getVar(variableName);
 
     if (var.isNull()) {
       logError("[netcdf_utils] Variable '%s' not found in file '%s'",
           variableName.c_str(),
           filepath.c_str());
+      logError("[netcdf_utils] Available variables listed above.");
       return info;
     }
 
@@ -51,10 +106,10 @@ NetCDFVariableInfo getNetCDFVariableInfo(
       info.totalElements *= dim;
     }
 
-    logInfo("[netcdf_utils] Variable '%s': %zu dimensions, %zu total elements",
-        variableName.c_str(),
-        info.dimensions.size(),
-        info.totalElements);
+    // logDebug(
+    //     "[netcdf_utils] Selected variable '%s': %zu dimensions, %zu total
+    //     elements", variableName.c_str(), info.dimensions.size(),
+    //     info.totalElements);
 
   } catch (const netCDF::exceptions::NcException &e) {
     logError("[netcdf_utils] NetCDF error reading '%s': %s",
@@ -104,13 +159,12 @@ ArrayRef unstructuredDataTo3DTexture(Scene &scene,
   size_t adaptiveHeight =
       min(512UL, static_cast<size_t>(180.0f / avgCellSpacing));
 
-  logInfo(
-      "[netcdf_utils] Creating 3D equirectangular texture: %zux%zux%zu (nearest neighbor, levels %zu-%zu)",
-      adaptiveWidth,
-      adaptiveHeight,
-      levelCount,
-      startLevel,
-      endLevel);
+  // logDebug(
+  //     "[netcdf_utils] Creating 3D equirectangular texture: %zux%zux%zu
+  //     (nearest neighbor, levels %zu-%zu)", adaptiveWidth, adaptiveHeight,
+  //     levelCount,
+  //     startLevel,
+  //     endLevel);
 
   // Create 3D texture array
   ArrayRef array = scene.createArray(
@@ -123,25 +177,41 @@ ArrayRef unstructuredDataTo3DTexture(Scene &scene,
       texture + (adaptiveWidth * adaptiveHeight * levelCount),
       fillValue);
 
-  logInfo(
-      "[netcdf_utils] Processing levels %zu-%zu (%zu levels) with cloudData size: %zu (expected: %zu)",
-      startLevel,
-      endLevel,
-      levelCount,
-      cloudData.size(),
-      numCells * numLevels);
+  // logDebug(
+  //     "[netcdf_utils] Processing levels %zu-%zu (%zu levels) with cloudData
+  //     size: %zu (expected: %zu)", startLevel, endLevel, levelCount,
+  //     cloudData.size(),
+  //     numCells * numLevels);
 
   // Track statistics
   size_t totalPixels = adaptiveWidth * adaptiveHeight * levelCount;
   size_t pixelsWithData = 0;
 
-  // Track data value range
+  // First pass: find data value range
   float minValue = numeric_limits<float>::max();
   float maxValue = numeric_limits<float>::lowest();
-  float minScaledValue = numeric_limits<float>::max();
-  float maxScaledValue = numeric_limits<float>::lowest();
 
-  // Simple direct mapping: place each cell's value at its grid position
+  for (size_t level = startLevel; level <= endLevel; ++level) {
+    for (size_t cellIdx = 0; cellIdx < numCells; ++cellIdx) {
+      size_t cloudIdx = level * numCells + cellIdx;
+      if (cloudIdx < cloudData.size()) {
+        float rawValue = cloudData[cloudIdx];
+        minValue = min(minValue, rawValue);
+        maxValue = max(maxValue, rawValue);
+      }
+    }
+  }
+
+  // Calculate normalization parameters
+  float valueRange = maxValue - minValue;
+  bool hasValidRange = (valueRange > 1e-10f);
+
+  // logDebug("[netcdf_utils] Data range: [%.6e, %.6e], range=%.6e",
+  //     minValue,
+  //     maxValue,
+  //     valueRange);
+
+  // Second pass: normalize and place values
   for (size_t level = startLevel; level <= endLevel; ++level) {
     for (size_t cellIdx = 0; cellIdx < numCells; ++cellIdx) {
       // Get cell coordinates
@@ -173,19 +243,18 @@ ArrayRef unstructuredDataTo3DTexture(Scene &scene,
         size_t texIdx = texZ * (adaptiveWidth * adaptiveHeight)
             + (adaptiveHeight - 1 - gridY) * adaptiveWidth + gridX;
 
-        // Track raw data range
         float rawValue = cloudData[cloudIdx];
-        minValue = min(minValue, rawValue);
-        maxValue = max(maxValue, rawValue);
 
-        // Store scaled value
-        float scaledValue = rawValue * 1e4f;
-        texture[texIdx] = scaledValue;
+        // Normalize value to [0, 1] range based on actual data range
+        float normalizedValue;
+        if (hasValidRange) {
+          normalizedValue = (rawValue - minValue) / valueRange;
+        } else {
+          // If all values are the same, use 0.5 as normalized value
+          normalizedValue = 0.5f;
+        }
 
-        // Track scaled data range
-        minScaledValue = min(minScaledValue, scaledValue);
-        maxScaledValue = max(maxScaledValue, scaledValue);
-
+        texture[texIdx] = normalizedValue;
         pixelsWithData++;
       }
     }
@@ -193,20 +262,16 @@ ArrayRef unstructuredDataTo3DTexture(Scene &scene,
 
   array->unmap();
 
-  logInfo(
-      "[netcdf_utils] 3D texture complete: %zu/%zu pixels have data (%.1f%%)",
-      pixelsWithData,
-      totalPixels,
-      (100.0f * pixelsWithData) / totalPixels);
+  // logDebug(
+  //     "[netcdf_utils] 3D texture complete: %zu/%zu pixels have data
+  //     (%.1f%%)", pixelsWithData, totalPixels, (100.0f * pixelsWithData) /
+  //     totalPixels);
 
-  if (pixelsWithData > 0) {
-    logInfo(
-        "[netcdf_utils] 3D data range - Raw: [%.6e, %.6e], Scaled: [%.6e, %.6e]",
-        minValue,
-        maxValue,
-        minScaledValue,
-        maxScaledValue);
-  }
+  // if (pixelsWithData > 0) {
+  //   logDebug(
+  //       "[netcdf_utils] 3D data range - Raw: [%.6e, %.6e], Normalized:
+  //       [0.0, 1.0]", minValue, maxValue);
+  // }
 
   return array;
 }
@@ -229,9 +294,9 @@ ArrayRef loadNetCDFVariable(Scene &scene,
 
     // Get dimensions
     vector<netCDF::NcDim> dims = var.getDims();
-    logInfo("[netcdf_utils] Variable '%s' has %zu dimensions",
-        variableName.c_str(),
-        dims.size());
+    // logDebug("[netcdf_utils] Variable '%s' has %zu dimensions",
+    //     variableName.c_str(),
+    //     dims.size());
 
     // Check if this is unstructured data (like ICON model)
     bool isUnstructured = false;
@@ -242,7 +307,8 @@ ArrayRef loadNetCDFVariable(Scene &scene,
     for (const auto &dim : dims) {
       string dimName = dim.getName();
       size_t dimSize = dim.getSize();
-      logInfo("[netcdf_utils] Dimension '%s': %zu", dimName.c_str(), dimSize);
+      // logDebug("[netcdf_utils] Dimension '%s': %zu", dimName.c_str(),
+      // dimSize);
 
       if (dimName == "cell") {
         isUnstructured = true;
@@ -263,9 +329,9 @@ ArrayRef loadNetCDFVariable(Scene &scene,
       return {};
     }
 
-    logInfo("[netcdf_utils] Loading data for time index %zu/%zu",
-        timeIndex,
-        numTimes - 1);
+    // logDebug("[netcdf_utils] Loading data for time index %zu/%zu",
+    //     timeIndex,
+    //     numTimes - 1);
 
     // Create array based on data type
     ArrayRef array;
@@ -274,8 +340,9 @@ ArrayRef loadNetCDFVariable(Scene &scene,
     if (dataType == NC_FLOAT) {
       if (isUnstructured) {
         // Handle unstructured grid (ICON model format)
-        logInfo("[netcdf_utils] Processing unstructured grid data for time %zu",
-            timeIndex);
+        // logDebug(
+        //     "[netcdf_utils] Processing unstructured grid data for time %zu",
+        //     timeIndex);
 
         // Read longitude and latitude coordinates (in radians)
         netCDF::NcVar clonVar = file.getVar("clon");
@@ -301,8 +368,9 @@ ArrayRef loadNetCDFVariable(Scene &scene,
           for (size_t i = 0; i < numLevels; ++i) {
             heightData[i] = static_cast<double>(i);
           }
-          logInfo(
-              "[netcdf_utils] No height coordinate found, using level indices");
+          // logDebug(
+          //     "[netcdf_utils] No height coordinate found, using level
+          //     indices");
         }
 
         // Read cloud data for all height levels at specific time
@@ -320,21 +388,157 @@ ArrayRef loadNetCDFVariable(Scene &scene,
           latDeg[i] = static_cast<float>(latRad[i] * 180.0 / M_PI);
         }
 
-        logInfo(
-            "[netcdf_utils] Converting %zu cells x %zu levels to 3D texture",
-            numCells,
-            numLevels);
+        // logDebug(
+        //     "[netcdf_utils] Converting %zu cells x %zu levels to 3D texture",
+        //     numCells,
+        //     numLevels);
 
         // Convert to 3D texture
         array = unstructuredDataTo3DTexture(
             scene, lonDeg, latDeg, cloudData, numCells, 0, numLevels - 1);
 
-        logInfo("[netcdf_utils] 3D texture conversion complete for time %zu",
-            timeIndex);
+        // logDebug("[netcdf_utils] 3D texture conversion complete for time
+        // %zu",
+        //     timeIndex);
       } else {
-        logError(
-            "[netcdf_utils] Structured grid time-stamping not yet implemented");
-        return {};
+        // Handle structured grid (regular lat/lon grid)
+        // logDebug("[netcdf_utils] Processing structured grid data for time
+        // %zu",
+        //     timeIndex);
+
+        // Determine grid dimensions (assume typical structured grid layout)
+        size_t nx = 0, ny = 0, nz = 0;
+        bool hasTime = false;
+
+        for (const auto &dim : dims) {
+          string dimName = dim.getName();
+          size_t dimSize = dim.getSize();
+
+          if (dimName == "time") {
+            hasTime = true;
+          } else if (dimName == "lon" || dimName == "longitude"
+              || dimName == "x") {
+            nx = dimSize;
+          } else if (dimName == "lat" || dimName == "latitude"
+              || dimName == "y") {
+            ny = dimSize;
+          } else if (dimName == "lev" || dimName == "level"
+              || dimName == "height" || dimName == "z") {
+            nz = dimSize;
+          }
+        }
+
+        // logDebug("[netcdf_utils] Structured grid dimensions: %zu x %zu x
+        // %zu",
+        //     nx,
+        //     ny,
+        //     nz);
+
+        // Calculate total size more carefully
+        vector<size_t> start, count;
+        size_t totalDataSize = 1;
+
+        // Build start/count arrays to match NetCDF variable dimension order
+        // We need to respect the actual dimension order in the file
+        vector<size_t> spatialDims;
+        for (const auto &dim : dims) {
+          string dimName = dim.getName();
+          size_t dimSize = dim.getSize();
+
+          if (dimName == "time") {
+            start.push_back(timeIndex);
+            count.push_back(1);
+            // Don't include time dimension in data size for single time step
+          } else {
+            start.push_back(0);
+            count.push_back(dimSize);
+            totalDataSize *= dimSize;
+            spatialDims.push_back(dimSize);
+          }
+        }
+
+        // logDebug(
+        //     "[netcdf_utils] Calculated data size: %zu elements",
+        //     totalDataSize);
+        // logDebug(
+        //     "[netcdf_utils] Dimension arrays: start=%zu, count=%zu,
+        //     var_dims=%zu", start.size(), count.size(), dims.size());
+
+        // Validate arrays match variable dimensions
+        if (start.size() != dims.size() || count.size() != dims.size()) {
+          logError(
+              "[netcdf_utils] Array size mismatch: var has %zu dims, start=%zu, count=%zu",
+              dims.size(),
+              start.size(),
+              count.size());
+          return {};
+        }
+
+        // Validate data size is reasonable
+        if (totalDataSize == 0 || totalDataSize > 1e9) {
+          logError("[netcdf_utils] Invalid data size: %zu", totalDataSize);
+          return {};
+        }
+
+        // Read data for specific time step
+        vector<float> data(totalDataSize);
+
+        try {
+          if (hasTime && numTimes > 1) {
+            // Multi-dimensional array with time - use hyperslab
+            // logDebug("[netcdf_utils] Reading hyperslab for time index %zu",
+            //     timeIndex);
+            var.getVar(start, count, data.data());
+          } else {
+            // No time dimension or single time step
+            // logDebug("[netcdf_utils] Reading entire variable");
+            var.getVar(data.data());
+          }
+        } catch (const netCDF::exceptions::NcException &e) {
+          logError("[netcdf_utils] NetCDF read error: %s", e.what());
+          return {};
+        }
+
+        // Create ANARI array using NetCDF file dimension order to match data
+        // layout
+        if (spatialDims.size() == 3) {
+          // 3D array: use file order
+          array = scene.createArray(
+              ANARI_FLOAT32, spatialDims[2], spatialDims[1], spatialDims[0]);
+          // logDebug(
+          //     "[netcdf_utils] Created 3D array: %zu(X) x %zu(Y) x %zu(Z)
+          //     (reversed from NetCDF order %zu x %zu x %zu)", spatialDims[2],
+          //     spatialDims[1],
+          //     spatialDims[0],
+          //     spatialDims[0],
+          //     spatialDims[1],
+          //     spatialDims[2]);
+        } else if (spatialDims.size() == 2) {
+          // 2D array: reverse for (lon,lat) order
+          array =
+              scene.createArray(ANARI_FLOAT32, spatialDims[1], spatialDims[0]);
+          // logDebug(
+          //     "[netcdf_utils] Created 2D array: %zu(X) x %zu(Y) (reversed
+          //     from NetCDF order %zu x %zu)", spatialDims[1], spatialDims[0],
+          //     spatialDims[0],
+          //     spatialDims[1]);
+        } else if (spatialDims.size() == 1) {
+          // 1D array
+          array = scene.createArray(ANARI_FLOAT32, spatialDims[0]);
+          // logDebug("[netcdf_utils] Created 1D array: %zu (NetCDF file
+          // order)",
+          //     spatialDims[0]);
+        } else {
+          logError(
+              "[netcdf_utils] No valid spatial dimensions found: %zu spatial dims",
+              spatialDims.size());
+          return {};
+        }
+
+        array->setData(data.data());
+        // logDebug("[netcdf_utils] Structured grid loading complete for time
+        // %zu",
+        //     timeIndex);
       }
     } else {
       logError("[netcdf_utils] Unsupported data type %d for variable '%s'",
@@ -343,9 +547,9 @@ ArrayRef loadNetCDFVariable(Scene &scene,
       return {};
     }
 
-    logInfo("[netcdf_utils] Successfully loaded %s for time %zu",
-        variableName.c_str(),
-        timeIndex);
+    // logDebug("[netcdf_utils] Successfully loaded %s for time %zu",
+    //     variableName.c_str(),
+    //     timeIndex);
     return array;
   } catch (const netCDF::exceptions::NcException &e) {
     logError("[netcdf_utils] NetCDF error loading '%s': %s",

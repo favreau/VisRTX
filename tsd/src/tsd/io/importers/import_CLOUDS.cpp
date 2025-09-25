@@ -86,12 +86,12 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
   field->setName(fileOf(filepath).c_str());
 
   // Log the parsed parameters
-  logInfo("[import_Clouds] Cloud parameters loaded:");
+  // [import_Clouds] Cloud parameters loaded:
   if (!header.netCDFPath.empty()) {
-    logInfo("  netCDFPath: %s", header.netCDFPath.c_str());
+    //   netCDFPath: header.netCDFPath
   }
   if (!header.variableName.empty()) {
-    logInfo("  variableName: %s", header.variableName.c_str());
+    //   variableName: header.variableName
   }
 
   // Set Cloud-specific parameters
@@ -128,17 +128,11 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
     }
   }
 
-  logInfo("[import_Clouds] Found %zu time steps in NetCDF file", numTimeSteps);
+  // [import_Clouds] Found time steps in NetCDF file: numTimeSteps
 
   // Load the data for first time step
-  ArrayRef dataArray;
-  if (numTimeSteps > 1) {
-    dataArray =
-        loadNetCDFVariable(scene, fullNetCDFPath, header.variableName, 0);
-  } else {
-    dataArray =
-        loadNetCDFVariable(scene, fullNetCDFPath, header.variableName, 0);
-  }
+  ArrayRef dataArray =
+      loadNetCDFVariable(scene, fullNetCDFPath, header.variableName, 0);
 
   if (!dataArray) {
     logError("[import_Clouds] Failed to load NetCDF data");
@@ -150,9 +144,8 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
   field->setMetadataValue("unitDistance", header.unitDistance);
   field->setMetadataValue("numTimeSteps", static_cast<int>(numTimeSteps));
 
-  logInfo(
-      "[import_Clouds] Successfully loaded cloud data from NetCDF file with %zu time steps",
-      numTimeSteps);
+  // [import_Clouds] Successfully loaded cloud data from NetCDF file with time
+  // steps: numTimeSteps
   return field;
 #else
   logError(
@@ -231,8 +224,7 @@ bool update_CLOUDS(
   // Update the spatial field's cloudData parameter
   field->setParameterObject("cloudData"_t, *dataArray);
 
-  logInfo("[update_Clouds] Successfully updated cloud data for time step %zu",
-      timeIndex);
+  // [update_Clouds] Successfully updated cloud data for time step: timeIndex
   return true;
 #else
   logError(
