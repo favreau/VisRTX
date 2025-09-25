@@ -85,15 +85,6 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
   auto field = scene.createObject<SpatialField>(tokens::spatial_field::clouds);
   field->setName(fileOf(filepath).c_str());
 
-  // Log the parsed parameters
-  // [import_Clouds] Cloud parameters loaded:
-  if (!header.netCDFPath.empty()) {
-    //   netCDFPath: header.netCDFPath
-  }
-  if (!header.variableName.empty()) {
-    //   variableName: header.variableName
-  }
-
   // Set Cloud-specific parameters
   field->setParameter("planetRadius"_t, header.planetRadius);
   field->setParameter("atmosphereThickness"_t, header.atmosphereThickness);
@@ -128,8 +119,6 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
     }
   }
 
-  // [import_Clouds] Found time steps in NetCDF file: numTimeSteps
-
   // Load the data for first time step
   ArrayRef dataArray =
       loadNetCDFVariable(scene, fullNetCDFPath, header.variableName, 0);
@@ -143,9 +132,6 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
   field->setParameterObject("cloudData"_t, *dataArray);
   field->setMetadataValue("unitDistance", header.unitDistance);
   field->setMetadataValue("numTimeSteps", static_cast<int>(numTimeSteps));
-
-  // [import_Clouds] Successfully loaded cloud data from NetCDF file with time
-  // steps: numTimeSteps
   return field;
 #else
   logError(
@@ -224,7 +210,6 @@ bool update_CLOUDS(
   // Update the spatial field's cloudData parameter
   field->setParameterObject("cloudData"_t, *dataArray);
 
-  // [update_Clouds] Successfully updated cloud data for time step: timeIndex
   return true;
 #else
   logError(
