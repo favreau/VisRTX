@@ -333,6 +333,7 @@ ArrayRef loadNetCDFVariable(Scene &scene,
         // Convert to 3D texture
         array = unstructuredDataTo3DTexture(
             scene, lonDeg, latDeg, cloudData, numCells, 0, numLevels - 1);
+        return array;
       } else {
         // Determine grid dimensions (assume typical structured grid layout)
         size_t nx = 0, ny = 0, nz = 0;
@@ -404,47 +405,50 @@ ArrayRef loadNetCDFVariable(Scene &scene,
             var.getVar(start, count, data.data());
           } else {
             // No time dimension or single time step
-            // layout
-            if (spatialDims.size() == 3) {
-              // 3D array: use file order
-              array = scene.createArray(ANARI_FLOAT32,
-                  spatialDims[2],
-                  spatialDims[1],
-                  spatialDims[0]);
-            } else if (spatialDims.size() == 2) {
-              // 2D array: reverse for (lon,lat) order
-              array = scene.createArray(
-                  ANARI_FLOAT32, spatialDims[1], spatialDims[0]);
-            } else if (spatialDims.size() == 1) {
-              // 1D array
-              array = scene.createArray(ANARI_FLOAT32, spatialDims[0]);
-            } else {
-              logError(
-                  "[netcdf_utils] No valid spatial dimensions found: %zu spatial dims",
-                  spatialDims.size());
-              return {};
-            }
-
-            array->setData(data.data());
+            var.getVar(data.data());
           }
-        }
-        else
-        {
-          logError("[netcdf_utils] Unsupported data type %d for variable '%s'",
-              dataType,
-              variableName.c_str());
+        } catch (const netCDF::exceptions::NcException &e) {
+          logError("[netcdf_utils] NetCDF read error: %s", e.what());
           return {};
         }
-        return array;
+
+        // Create ANARI array using NetCDF file dimension order to match data
+        // layout
+        if (spatialDims.size() == 3) {
+          // 3D array: use file order
+          array = scene.createArray(
+              ANARI_FLOAT32, spatialDims[2], spatialDims[1], spatialDims[0]);
+        } else if (spatialDims.size() == 2) {
+          // 2D array: reverse for (lon,lat) order
+          array =
+              scene.createArray(ANARI_FLOAT32, spatialDims[1], spatialDims[0]);
+        } else if (spatialDims.size() == 1) {
+          // 1D array
+          array = scene.createArray(ANARI_FLOAT32, spatialDims[0]);
+        } else {
+          logError(
+              "[netcdf_utils] No valid spatial dimensions found: %zu spatial dims",
+              spatialDims.size());
+          return {};
+        }
+
+        array->setData(data.data());
       }
-      catch (const netCDF::exceptions::NcException &e)
-      {
-        logError("[netcdf_utils] NetCDF error loading '%s': %s",
-            filepath.c_str(),
-            e.what());
-        return {};
-      }
+    } else {
+      logError("[netcdf_utils] Unsupported data type %d for variable '%s'",
+          dataType,
+          variableName.c_str());
+      return {};
     }
 
-  } // namespace tsd::io
+    return array;
+  } catch (const netCDF::exceptions::NcException &e) {
+    logError("[netcdf_utils] NetCDF error loading '%s': %s",
+        filepath.c_str(),
+        e.what());
+    return {};
+  }
+}
+
+} // namespace tsd::io
 #endif // TSD_USE_NETCDF
