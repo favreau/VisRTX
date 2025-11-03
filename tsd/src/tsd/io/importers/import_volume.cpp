@@ -14,6 +14,7 @@ using namespace tsd::core;
 
 VolumeRef import_volume(Scene &scene,
     const char *filepath,
+    LayerNodeRef location,
     ArrayRef colorArray,
     ArrayRef opacityArray)
 {
@@ -59,7 +60,8 @@ VolumeRef import_volume(Scene &scene,
   if (field)
     valueRange = field->computeValueRange();
 
-  auto tx = scene.insertChildTransformNode(scene.defaultLayer()->root());
+  auto tx = scene.insertChildTransformNode(
+      location ? location : scene.defaultLayer()->root());
 
   // Check if field has scaling factor metadata and apply to transform
   if (field) {
@@ -85,6 +87,16 @@ VolumeRef import_volume(Scene &scene,
   if (opacityArray)
     volume->setParameterObject("opacity", *opacityArray);
   volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &valueRange);
+
+  // Check if field has unitDistance metadata and set as volume parameter
+  if (field) {
+    auto unitDistanceParam = field->getMetadataValue("unitDistance");
+    if (unitDistanceParam) {
+      auto unitDistance = unitDistanceParam.get<float>();
+      volume->setParameter("unitDistance", unitDistance);
+      logInfo("[import_volume] Set unitDistance parameter to %f", unitDistance);
+    }
+  }
 
   return volume;
 }
