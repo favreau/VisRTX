@@ -123,6 +123,7 @@ const Token unstructured = "unstructured";
 const Token amr = "amr";
 const Token nanovdb = "nanovdb";
 const Token magnetic = "magnetic";
+const Token aurora = "aurora";
 const Token planet = "planet";
 const Token clouds = "clouds";
 

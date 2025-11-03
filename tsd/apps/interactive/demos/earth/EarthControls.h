@@ -24,6 +24,8 @@ struct EarthControls : public tsd::ui::imgui::Window
       const std::string &magneticFile,
       const std::string &planetFile);
 
+  void setAuroraField(tsd::core::SpatialFieldRef auroraField);
+
   void buildUI() override;
 
  private:
@@ -48,6 +50,7 @@ struct EarthControls : public tsd::ui::imgui::Window
   tsd::core::ObjectUsePtr<tsd::core::Volume> m_cloudsVolume;
   tsd::core::ObjectUsePtr<tsd::core::Volume> m_magneticVolume;
   tsd::core::ObjectUsePtr<tsd::core::Volume> m_planetVolume;
+  tsd::core::SpatialFieldRef m_auroraField;
 
   // Time step data (only clouds have time steps)
   std::vector<tsd::core::ObjectUsePtr<tsd::core::SpatialField>>

@@ -34,6 +34,7 @@ extern const Token unstructured;
 extern const Token amr;
 extern const Token nanovdb;
 extern const Token magnetic;
+extern const Token aurora;
 extern const Token planet;
 extern const Token clouds;
 

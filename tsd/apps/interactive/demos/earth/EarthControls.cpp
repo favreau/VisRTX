@@ -41,6 +41,11 @@ void EarthControls::setEarthDataFiles(const std::string &cloudsFile,
   }
 }
 
+void EarthControls::setAuroraField(tsd::core::SpatialFieldRef auroraField)
+{
+  m_auroraField = auroraField;
+}
+
 void EarthControls::buildUI()
 {
   if (ImGui::IsKeyPressed(ImGuiKey_Space) && m_cloudsVolume)
@@ -241,7 +246,7 @@ void EarthControls::importEarthData()
         }
       }
       auto cloudsVolume = tsd::io::import_volume(
-          scene, m_cloudsFile.c_str(), cloudsColorArray, {});
+          scene, m_cloudsFile.c_str(), m_earthRoot, cloudsColorArray, {});
       m_cloudsVolume = cloudsVolume;
       // Get unitDistance from the spatial field metadata
       auto unitDistanceParam = cloudsField->getMetadataValue("unitDistance");
@@ -273,7 +278,7 @@ void EarthControls::importEarthData()
       }
     }
     auto magneticVolume = tsd::io::import_volume(
-        scene, m_magneticFile.c_str(), magneticColorArray, {});
+        scene, m_magneticFile.c_str(), m_earthRoot, magneticColorArray, {});
     m_magneticVolume = magneticVolume;
 
     // Get magnetic field for unitDistance
@@ -308,7 +313,7 @@ void EarthControls::importEarthData()
       }
     }
     auto planetVolume = tsd::io::import_volume(
-        scene, m_planetFile.c_str(), planetColorArray, {});
+        scene, m_planetFile.c_str(), m_earthRoot, planetColorArray, {});
     m_planetVolume = planetVolume;
 
     // Get planet field for unitDistance
@@ -352,9 +357,9 @@ void EarthControls::setTimeStepVolumes()
   if (m_currentTimeStep >= m_maxTimeSteps || m_currentTimeStep < 0)
     return;
 
-  if (m_cloudsVolume) {
-    auto &scene = appCore()->tsd.scene;
+  auto &scene = appCore()->tsd.scene;
 
+  if (m_cloudsVolume) {
     // Get the spatial field from the volume's "value" parameter
     auto valueParam = m_cloudsVolume->parameter("value");
     if (valueParam) {
@@ -367,6 +372,18 @@ void EarthControls::setTimeStepVolumes()
         //     m_currentTimeStep);
       }
     }
+  }
+
+  // Update aurora time parameter with current timestep
+  if (m_auroraField) {
+    // Normalize time step to 0.0-1.0 range
+    float normalizedTime = m_maxTimeSteps > 0
+        ? static_cast<float>(m_currentTimeStep)
+            / static_cast<float>(m_maxTimeSteps - 1)
+        : 0.0f;
+
+    m_auroraField->setParameter("time", normalizedTime * 100.f);
+    scene.signalLayerChange(scene.defaultLayer());
   }
 }
 

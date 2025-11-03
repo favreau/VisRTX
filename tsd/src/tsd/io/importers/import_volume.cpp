@@ -38,6 +38,8 @@ VolumeRef import_volume(Scene &scene,
     field = import_CLOUDS(scene, filepath);
   else if (ext == ".magnetic")
     field = import_MAGNETIC(scene, filepath);
+  else if (ext == ".aurora")
+    field = import_AURORA(scene, filepath);
   else if (ext == ".planet")
     field = import_PLANET(scene, filepath);
   else {
