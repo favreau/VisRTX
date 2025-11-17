@@ -8,6 +8,7 @@
 #include "tsd/core/Logging.hpp"
 // tsd_io
 #include "tsd/io/importers.hpp"
+#include "tsd/io/importers/detail/importer_common.hpp"
 #include "tsd/io/procedural.hpp"
 #include "tsd/io/serialization.hpp"
 // tsd_rendering
@@ -45,7 +46,7 @@ void anariStatusFunc(const void *_core,
     tsd::core::logDebug("[ANARI][DEBUG][%s][%p] %s", typeStr, source, message);
 }
 
-static std::vector<std::string> parseLibraryList()
+static std::vector<std::string> parseLibraryList(bool defaultNone)
 {
   const char *libsFromEnv = getenv("TSD_ANARI_LIBRARIES");
 
@@ -73,7 +74,10 @@ static std::vector<std::string> parseLibraryList()
       libList.push_back("environment");
   }
 
-  libList.push_back("{none}");
+  if (defaultNone)
+    libList.insert(libList.begin(), "{none}");
+  else
+    libList.push_back("{none}");
 
   return libList;
 }
@@ -92,14 +96,17 @@ Core::~Core()
 
 void Core::parseCommandLine(int argc, const char **argv)
 {
-  this->commandLine.libraryList = parseLibraryList();
-
-  if (argc < 2 || argv == nullptr)
+  if (argc < 2 || argv == nullptr) {
+    this->commandLine.libraryList =
+        parseLibraryList(!this->commandLine.useDefaultRenderer);
     return;
+  }
 
   auto importerType = ImporterType::NONE;
 
   for (int i = 1; i < argc; i++) {
+    if (!argv[i])
+      continue;
     std::string arg = argv[i];
     if (arg == "-v" || arg == "--verbose")
       this->logging.verbose = true;
@@ -111,46 +118,86 @@ void Core::parseCommandLine(int argc, const char **argv)
       this->commandLine.preloadDevices = true;
     else if (arg == "--secondaryView" || arg == "-sv")
       this->commandLine.secondaryViewportLibrary = argv[++i];
+    else if (arg == "--noDefaultRenderer")
+      this->commandLine.useDefaultRenderer = false;
+    else if (arg == "-l" || arg == "--layer")
+      this->commandLine.currentLayerName = argv[++i];
     else if (arg == "-tsd") {
       importerType = ImporterType::TSD;
       this->commandLine.loadingScene = true;
-    } else if (arg == "-hdri")
-      importerType = ImporterType::HDRI;
-    else if (arg == "-dlaf")
-      importerType = ImporterType::DLAF;
-    else if (arg == "-e57xyz")
-      importerType = ImporterType::E57XYZ;
-    else if (arg == "-nbody")
-      importerType = ImporterType::NBODY;
-    else if (arg == "-obj")
-      importerType = ImporterType::OBJ;
-    else if (arg == "-usd")
-      importerType = ImporterType::USD;
+    } else if (arg == "-agx")
+      importerType = ImporterType::AGX;
     else if (arg == "-assimp")
       importerType = ImporterType::ASSIMP;
     else if (arg == "-assimp_flat")
       importerType = ImporterType::ASSIMP_FLAT;
-    else if (arg == "-ply")
-      importerType = ImporterType::PLY;
-    else if (arg == "-volume")
-      importerType = ImporterType::VOLUME;
-    else if (arg == "-swc")
-      importerType = ImporterType::SWC;
-    else if (arg == "-pdb")
-      importerType = ImporterType::PDB;
-    else if (arg == "-xyzdp")
-      importerType = ImporterType::XYZDP;
-    else if (arg == "-hsmesh")
-      importerType = ImporterType::HSMESH;
-    else if (arg == "-pt")
-      importerType = ImporterType::NEURAL;
-    else if (arg == "-gltf")
-      importerType = ImporterType::GLTF;
     else if (arg == "-axyz")
       importerType = ImporterType::AXYZ;
-    else
-      this->commandLine.filenames.push_back({importerType, arg});
+    else if (arg == "-dlaf")
+      importerType = ImporterType::DLAF;
+    else if (arg == "-e57xyz")
+      importerType = ImporterType::E57XYZ;
+    else if (arg == "-gltf")
+      importerType = ImporterType::GLTF;
+    else if (arg == "-hdri")
+      importerType = ImporterType::HDRI;
+    else if (arg == "-hsmesh")
+      importerType = ImporterType::HSMESH;
+    else if (arg == "-nbody")
+      importerType = ImporterType::NBODY;
+    else if (arg == "-obj")
+      importerType = ImporterType::OBJ;
+    else if (arg == "-pdb")
+      importerType = ImporterType::PDB;
+    else if (arg == "-ply")
+      importerType = ImporterType::PLY;
+    else if (arg == "-pointsbin") {
+      this->commandLine.currentAnimationSequence = nullptr; // reset to new seq
+      importerType = ImporterType::POINTSBIN_MULTIFILE;
+    } else if (arg == "-pt")
+      importerType = ImporterType::PT;
+    else if (arg == "-smesh")
+      importerType = ImporterType::SMESH;
+    else if (arg == "-smesh_animation")
+      importerType = ImporterType::SMESH_ANIMATION;
+    else if (arg == "-swc")
+      importerType = ImporterType::SWC;
+    else if (arg == "-trk")
+      importerType = ImporterType::TRK;
+    else if (arg == "-usd")
+      importerType = ImporterType::USD;
+    else if (arg == "-xyzdp")
+      importerType = ImporterType::XYZDP;
+    else if (arg == "-volume")
+      importerType = ImporterType::VOLUME;
+    else {
+      if (importerType != ImporterType::NONE) {
+        if (importerType == ImporterType::POINTSBIN_MULTIFILE) {
+          if (!this->commandLine.currentAnimationSequence) {
+            this->commandLine.animationFilenames.push_back(
+                {ImporterType::POINTSBIN_MULTIFILE, {}});
+            this->commandLine.currentAnimationSequence =
+                &this->commandLine.animationFilenames.back();
+            this->commandLine.animationLayerNames.push_back(
+                this->commandLine.currentLayerName);
+          }
+          this->commandLine.currentAnimationSequence->second.push_back(arg);
+        } else {
+          this->commandLine.filenames.push_back(
+              {importerType, arg + ';' + this->commandLine.currentLayerName});
+          this->commandLine.currentAnimationSequence = nullptr;
+        }
+      } else {
+        this->commandLine.stateFile = arg;
+        this->commandLine.loadedFromStateFile = true;
+      }
+    }
   }
+
+  this->commandLine.currentAnimationSequence = nullptr;
+
+  this->commandLine.libraryList =
+      parseLibraryList(!this->commandLine.useDefaultRenderer);
 }
 
 void Core::setupSceneFromCommandLine(bool hdriOnly)
@@ -164,57 +211,118 @@ void Core::setupSceneFromCommandLine(bool hdriOnly)
     return;
   }
 
-  if (!commandLine.loadedFromStateFile && commandLine.filenames.empty()) {
+  const bool generateOrb = !commandLine.loadingScene
+      && !commandLine.loadedFromStateFile && commandLine.filenames.size() == 0
+      && commandLine.animationFilenames.size() == 0;
+
+  if (generateOrb) {
     tsd::core::logStatus("...generating material_orb from embedded data");
     tsd::io::generate_material_orb(tsd.scene);
+  } else if (!commandLine.loadedFromStateFile) {
+    importFiles(commandLine.filenames);
+    importAnimations(commandLine.animationFilenames);
+  }
+}
+
+void Core::importFile(const ImportFile &f, tsd::core::LayerNodeRef root)
+{
+  const bool customLocation = root;
+
+  auto files = tsd::io::splitString(f.second, ';');
+  std::string file = files[0];
+  std::string layerName = files.size() > 1 ? files[1] : "";
+  if (layerName.empty())
+    layerName = "default";
+
+  if (!customLocation) {
+    tsd::core::logStatus(
+        "...loading file '%s' in layer '%s'", file.c_str(), layerName.c_str());
+    root = tsd.scene.addLayer(layerName)->root();
   } else {
-    for (const auto &f : commandLine.filenames) {
-      tsd::core::logStatus("...loading file '%s'", f.second.c_str());
-      auto root = tsd.scene.defaultLayer()->root();
-      if (f.first == ImporterType::TSD)
-        tsd::io::load_Scene(tsd.scene, f.second.c_str());
-      else if (f.first == ImporterType::PLY)
-        tsd::io::import_PLY(tsd.scene, f.second.c_str());
-      else if (f.first == ImporterType::OBJ)
-        tsd::io::import_OBJ(tsd.scene, f.second.c_str());
-      else if (f.first == ImporterType::USD)
-        tsd::io::import_USD(tsd.scene, f.second.c_str());
-      else if (f.first == ImporterType::ASSIMP)
-        tsd::io::import_ASSIMP(tsd.scene, f.second.c_str(), root, false);
-      else if (f.first == ImporterType::ASSIMP_FLAT)
-        tsd::io::import_ASSIMP(tsd.scene, f.second.c_str(), root, true);
-      else if (f.first == ImporterType::DLAF)
-        tsd::io::import_DLAF(tsd.scene, f.second.c_str());
-      else if (f.first == ImporterType::E57XYZ)
-        tsd::io::import_E57XYZ(tsd.scene, f.second.c_str());
-      else if (f.first == ImporterType::NBODY)
-        tsd::io::import_NBODY(tsd.scene, f.second.c_str());
-      else if (f.first == ImporterType::HDRI)
-        tsd::io::import_HDRI(tsd.scene, f.second.c_str());
-      else if (f.first == ImporterType::SWC)
-        tsd::io::import_SWC(tsd.scene, f.second.c_str());
-      else if (f.first == ImporterType::PDB)
-        tsd::io::import_PDB(tsd.scene, f.second.c_str(), root);
-      else if (f.first == ImporterType::XYZDP)
-        tsd::io::import_XYZDP(tsd.scene, f.second.c_str());
-      else if (f.first == ImporterType::HSMESH)
-        tsd::io::import_HSMESH(tsd.scene, f.second.c_str(), root);
-      else if (f.first == ImporterType::VOLUME)
-        tsd::io::import_volume(tsd.scene, f.second.c_str());
-      else if (f.first == ImporterType::NEURAL)
-        tsd::io::import_PT(tsd.scene, f.second.c_str(), root);
-      else if (f.first == ImporterType::GLTF)
-        tsd::io::import_GLTF(tsd.scene, f.second.c_str(), root);
-      else
-        tsd::core::logWarning(
-            "...skipping unknown file type for '%s'", f.second.c_str());
-    }
+    tsd::core::logStatus("...loading file '%s'", file.c_str());
+  }
+
+  if (f.first == ImporterType::TSD)
+    tsd::io::load_Scene(tsd.scene, file.c_str());
+  else if (f.first == ImporterType::AGX)
+    tsd::io::import_AGX(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::ASSIMP)
+    tsd::io::import_ASSIMP(tsd.scene, file.c_str(), root, false);
+  else if (f.first == ImporterType::ASSIMP_FLAT)
+    tsd::io::import_ASSIMP(tsd.scene, file.c_str(), root, true);
+  else if (f.first == ImporterType::AXYZ)
+    tsd::io::import_AXYZ(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::DLAF)
+    tsd::io::import_DLAF(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::E57XYZ)
+    tsd::io::import_E57XYZ(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::GLTF)
+    tsd::io::import_GLTF(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::HDRI)
+    tsd::io::import_HDRI(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::HSMESH)
+    tsd::io::import_HSMESH(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::NBODY)
+    tsd::io::import_NBODY(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::OBJ)
+    tsd::io::import_OBJ(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::PDB)
+    tsd::io::import_PDB(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::PLY)
+    tsd::io::import_PLY(tsd.scene, file.c_str());
+  else if (f.first == ImporterType::POINTSBIN_MULTIFILE)
+    tsd::io::import_POINTSBIN(tsd.scene, {file.c_str()}, root);
+  else if (f.first == ImporterType::PT)
+    tsd::io::import_PT(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::SMESH)
+    tsd::io::import_SMESH(tsd.scene, file.c_str(), root, false);
+  else if (f.first == ImporterType::SMESH_ANIMATION)
+    tsd::io::import_SMESH(tsd.scene, file.c_str(), root, true);
+  else if (f.first == ImporterType::SWC)
+    tsd::io::import_SWC(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::TRK)
+    tsd::io::import_TRK(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::USD)
+    tsd::io::import_USD(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::XYZDP)
+    tsd::io::import_XYZDP(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::VOLUME)
+    tsd::io::import_volume(tsd.scene, file.c_str(), root);
+  else {
+    tsd::core::logWarning(
+        "...skipping unknown file type for '%s'", file.c_str());
+  }
+}
+
+void Core::importFiles(
+    const std::vector<ImportFile> &files, tsd::core::LayerNodeRef root)
+{
+  for (const auto &f : files)
+    importFile(f, root);
+}
+
+void Core::importAnimations(const std::vector<ImportAnimationFiles> &files,
+    tsd::core::LayerNodeRef root)
+{
+  const bool customLocation = root;
+
+  for (size_t i = 0; i < commandLine.animationFilenames.size(); ++i) {
+    auto &f = commandLine.animationFilenames[i];
+    auto &l = commandLine.animationLayerNames[i];
+    if (!customLocation)
+      root = tsd.scene.addLayer(l)->root();
+
+    if (f.first == ImporterType::POINTSBIN_MULTIFILE)
+      tsd::io::import_POINTSBIN(tsd.scene, f.second, root);
+    else
+      tsd::core::logWarning("...skipping unknown animation file importer type");
   }
 }
 
 ANARIDeviceManager::ANARIDeviceManager(Core *core) : m_core(core) {}
 
-anari::Device ANARIDeviceManager::loadDevice(const std::string &libraryName)
+anari::Device ANARIDeviceManager::loadDevice(const std::string &libraryName,
+    const std::vector<DeviceInitParam> &initialDeviceParams)
 {
   if (libraryName.empty() || libraryName == "{none}")
     return nullptr;
@@ -238,6 +346,15 @@ anari::Device ANARIDeviceManager::loadDevice(const std::string &libraryName)
   anari::unloadLibrary(library);
 
   anari::setParameter(dev, dev, "glAPI", "OpenGL");
+
+  for (const auto &param : initialDeviceParams) {
+    anari::setParameter(dev,
+        dev,
+        param.first.c_str(),
+        param.second.type(),
+        param.second.data());
+  }
+
   anari::commitParameters(dev, dev);
 
   m_loadedDevices[libraryName] = dev;
@@ -457,10 +574,12 @@ void OfflineRenderSequenceConfig::saveSettings(tsd::core::DataNode &root)
   frameRoot["height"] = frame.height;
   frameRoot["colorFormat"] = frame.colorFormat;
   frameRoot["samples"] = frame.samples;
+  frameRoot["numFrames"] = frame.numFrames;
 
   auto &cameraRoot = root["camera"];
   cameraRoot["apertureRadius"] = camera.apertureRadius;
   cameraRoot["focusDistance"] = camera.focusDistance;
+  cameraRoot["cameraIndex"] = camera.cameraIndex;
 
   auto &rendererRoot = root["renderer"];
   rendererRoot["activeRenderer"] = renderer.activeRenderer;
@@ -469,6 +588,10 @@ void OfflineRenderSequenceConfig::saveSettings(tsd::core::DataNode &root)
   auto &rendererObjectsRoot = rendererRoot["rendererObjects"];
   for (auto &ro : renderer.rendererObjects)
     tsd::io::objectToNode(ro, rendererObjectsRoot[ro.name()]);
+
+  auto &outputRoot = root["output"];
+  outputRoot["outputDirectory"] = output.outputDirectory;
+  outputRoot["filePrefix"] = output.filePrefix;
 }
 
 void OfflineRenderSequenceConfig::loadSettings(tsd::core::DataNode &root)
@@ -478,10 +601,12 @@ void OfflineRenderSequenceConfig::loadSettings(tsd::core::DataNode &root)
   frameRoot["height"].getValue(ANARI_UINT32, &frame.height);
   frameRoot["colorFormat"].getValue(ANARI_DATA_TYPE, &frame.colorFormat);
   frameRoot["samples"].getValue(ANARI_UINT32, &frame.samples);
+  frameRoot["numFrames"].getValue(ANARI_INT32, &frame.numFrames);
 
   auto &cameraRoot = root["camera"];
   cameraRoot["apertureRadius"].getValue(ANARI_FLOAT32, &camera.apertureRadius);
   cameraRoot["focusDistance"].getValue(ANARI_FLOAT32, &camera.focusDistance);
+  cameraRoot["cameraIndex"].getValue(ANARI_UINT64, &camera.cameraIndex);
 
   auto &rendererRoot = root["renderer"];
   rendererRoot["activeRenderer"].getValue(
@@ -495,6 +620,10 @@ void OfflineRenderSequenceConfig::loadSettings(tsd::core::DataNode &root)
     tsd::io::nodeToObject(node, ro);
     renderer.rendererObjects.push_back(std::move(ro));
   });
+
+  auto &outputRoot = root["output"];
+  outputRoot["outputDirectory"].getValue(ANARI_STRING, &output.outputDirectory);
+  outputRoot["filePrefix"].getValue(ANARI_STRING, &output.filePrefix);
 }
 
 } // namespace tsd::app

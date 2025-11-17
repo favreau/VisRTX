@@ -10,8 +10,10 @@ project_add_library(OBJECT)
 project_sources(PRIVATE
   modals/AppSettingsDialog.cpp
   modals/BlockingTaskModal.cpp
+  modals/OfflineRenderModal.cpp
   modals/ImportFileDialog.cpp
   modals/Modal.cpp
+  windows/Animations.cpp
   windows/CameraPoses.cpp
   windows/DatabaseEditor.cpp
   windows/IsosurfaceEditor.cpp

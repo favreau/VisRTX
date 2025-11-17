@@ -14,11 +14,14 @@ PRIVATE
   algorithms/detail/computeScalarRange_ufixed16.cpp
   algorithms/detail/computeScalarRange_float32.cpp
   algorithms/detail/computeScalarRange_float64.cpp
+  scene/Animation.cpp
+  scene/AnyObjectUsePtr.cpp
   scene/Layer.cpp
   scene/Object.cpp
   scene/Scene.cpp
   scene/UpdateDelegate.cpp
   scene/objects/Array.cpp
+  scene/objects/Camera.cpp
   scene/objects/Geometry.cpp
   scene/objects/Light.cpp
   scene/objects/Material.cpp
@@ -27,6 +30,7 @@ PRIVATE
   scene/objects/Surface.cpp
   scene/objects/Volume.cpp
   AnariObjectCache.cpp
+  ColorMapUtil.cpp
   Logging.cpp
   Parameter.cpp
   Token.cpp
@@ -48,6 +52,9 @@ endif()
 if (TSD_USE_CUDA)
   project_compile_definitions(PUBLIC -DTSD_USE_CUDA=1)
   project_link_libraries(PUBLIC CUDA::cudart)
+  if(TARGET CCCL::CCCL)
+    project_link_libraries(PUBLIC CCCL::CCCL)
+  endif()
   set_source_files_properties(
     algorithms/detail/computeScalarRange_fixed8.cpp
     algorithms/detail/computeScalarRange_fixed16.cpp

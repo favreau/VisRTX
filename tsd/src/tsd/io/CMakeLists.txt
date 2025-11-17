@@ -11,8 +11,9 @@ PRIVATE
   importers/detail/importer_common.cpp
   importers/detail/netcdf_utils.cpp
   importers/import_ASSIMP.cpp
-  importers/import_AGX.cpp
   importers/import_AURORA.cpp
+  importers/import_AGX.cpp
+  importers/import_ASSIMP.cpp
   importers/import_AXYZ.cpp
   importers/import_CLOUDS.cpp
   importers/import_DLAF.cpp

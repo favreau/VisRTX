@@ -3,8 +3,10 @@
 
 #pragma once
 
+#include "tsd/core/scene/Animation.hpp"
 #include "tsd/core/scene/Layer.hpp"
 #include "tsd/core/scene/objects/Array.hpp"
+#include "tsd/core/scene/objects/Camera.hpp"
 #include "tsd/core/scene/objects/Geometry.hpp"
 #include "tsd/core/scene/objects/Light.hpp"
 #include "tsd/core/scene/objects/Material.hpp"
@@ -40,6 +42,7 @@ struct ObjectDatabase
   IndexedVector<Volume> volume;
   IndexedVector<SpatialField> field;
   IndexedVector<Light> light;
+  IndexedVector<Camera> camera;
 
   // Not copyable or moveable //
   ObjectDatabase() = default;
@@ -73,7 +76,7 @@ struct Scene
   Scene &operator=(Scene &&) = delete;
 
   MaterialRef defaultMaterial() const;
-  Layer *defaultLayer() const;
+  Layer *defaultLayer();
 
   /////////////////////////////
   // Flat object collections //
@@ -162,6 +165,25 @@ struct Scene
 
   void signalLayerChange(const Layer *l);
   void signalActiveLayersChanged();
+  void signalObjectParameterUseCountZero(const Object *obj);
+  void signalObjectLayerUseCountZero(const Object *obj);
+
+  ////////////////
+  // Animations //
+  ////////////////
+
+  Animation *addAnimation(const char *name = "");
+  size_t numberOfAnimations() const;
+  Animation *animation(size_t i) const;
+  void removeAnimation(Animation *a);
+  void removeAllAnimations();
+
+  void setAnimationTime(float time /* 0.f - 1.f */);
+  float getAnimationTime() const;
+
+  void setAnimationIncrement(float increment);
+  float getAnimationIncrement() const;
+  void incrementAnimationTime();
 
   ////////////////////////
   // Cleanup operations //
@@ -172,7 +194,7 @@ struct Scene
   void cleanupScene(); // remove unused + defragment
 
  private:
-  void removeAllSecondaryLayers();
+  void removeAllLayers();
 
   friend void ::tsd::io::save_Scene(Scene &scene, core::DataNode &root);
   friend void ::tsd::io::load_Scene(Scene &scene, core::DataNode &root);
@@ -193,6 +215,12 @@ struct Scene
   BaseUpdateDelegate *m_updateDelegate{nullptr};
   LayerMap m_layers;
   size_t m_numActiveLayers{0};
+  struct AnimationData
+  {
+    float incrementSize{0.01f};
+    float time{0.f};
+    std::vector<std::unique_ptr<Animation>> objects;
+  } m_animations;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -263,6 +291,12 @@ inline LightRef Scene::createObject(Token subtype)
   return createObjectImpl(m_db.light, subtype);
 }
 
+template <>
+inline CameraRef Scene::createObject(Token subtype)
+{
+  return createObjectImpl(m_db.camera, subtype);
+}
+
 template <typename T>
 inline IndexedVectorRef<T> Scene::getObject(size_t i) const
 {
@@ -311,6 +345,12 @@ template <>
 inline LightRef Scene::getObject(size_t i) const
 {
   return m_db.light.at(i);
+}
+
+template <>
+inline CameraRef Scene::getObject(size_t i) const
+{
+  return m_db.camera.at(i);
 }
 
 template <typename OBJ_T>

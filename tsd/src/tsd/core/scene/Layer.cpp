@@ -278,6 +278,11 @@ std::string &LayerNodeData::name()
   return m_name;
 }
 
+const std::string &LayerNodeData::name() const
+{
+  return m_name;
+}
+
 Any LayerNodeData::getValueRaw() const
 {
   return m_value;
@@ -310,13 +315,13 @@ void LayerNodeData::clearInstanceParameters()
 void LayerNodeData::incObjectUseCount()
 {
   if (auto *o = getObject(); o)
-    o->incUseCount();
+    o->incUseCount(Object::UseKind::LAYER);
 }
 
 void LayerNodeData::decObjectUseCount()
 {
   if (auto *o = getObject(); o)
-    o->decUseCount();
+    o->decUseCount(Object::UseKind::LAYER);
 }
 
 } // namespace tsd::core

@@ -46,6 +46,11 @@ Light::Light(Token subtype) : Object(ANARI_LIGHT, subtype)
     addParameter("position")
         .setValue(float3(0.f, 0.f, 0.f))
         .setDescription("the position of the point light");
+    addParameter("radius")
+        .setValue(0.f)
+        .setDescription(
+            "the radius of the sphere that emits light, in case of an arealight.")
+        .setMin(0.f);
     addParameter("intensity")
         .setValue(1.f)
         .setDescription(
@@ -68,6 +73,10 @@ Light::Light(Token subtype) : Object(ANARI_LIGHT, subtype)
             "overall amount of light emitted "
             "in a direction, in W/sr")
         .setMin(0.f);
+    addParameter("side")
+        .setValue("front")
+        .setDescription("which side of the rectangle emits light")
+        .setStringValues({"front", "back", "both"});
   } else if (subtype == tokens::light::spot) {
     addParameter("position")
         .setValue(float3(0.f, 0.f, 0.f))
@@ -81,6 +90,33 @@ Light::Light(Token subtype) : Object(ANARI_LIGHT, subtype)
     addParameter("falloffAngle")
         .setValue(0.1f)
         .setDescription("size (angle in radians) between rim and spot");
+    addParameter("intensity")
+        .setValue(1.f)
+        .setDescription(
+            "the overall amount of light emitted by the "
+            "light in a direction, in W/sr")
+        .setMin(0.f);
+  } else if (subtype == tokens::light::ring) {
+    addParameter("position")
+        .setValue(float3(0.f, 0.f, 0.f))
+        .setDescription("the center of the ring light");
+    addParameter("direction")
+        .setValue(float3(0.f, 0.f, -1.f))
+        .setDescription("main emission direction, the center axis of the ring");
+    addParameter("openingAngle")
+        .setValue(float(M_PI))
+        .setDescription("full opening angle (in radians) of the cone of directions");
+    addParameter("falloffAngle")
+        .setValue(0.1f)
+        .setDescription("size (angle in radians) of the region between the rim and full intensity");
+    addParameter("radius")
+        .setValue(0.f)
+        .setDescription("the (outer) size of the ring, the radius of a disk with normal direction")
+        .setMin(0.f);
+    addParameter("innerRadius")
+        .setValue(0.f)
+        .setDescription("in combination with radius turns the disk into a ring; must be smaller than radius")
+        .setMin(0.f);
     addParameter("intensity")
         .setValue(1.f)
         .setDescription(

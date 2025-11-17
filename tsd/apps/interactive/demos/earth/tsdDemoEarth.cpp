@@ -73,56 +73,21 @@ class Application : public TSDApplication
                              vp2 = viewport2,
                              ec = earthcontrols,
                              core = core]() {
-      core->setupSceneFromCommandLine(true);
+      core->setupSceneFromCommandLine(false);
 
       // Parse custom command line arguments for earth data
       std::string cloudsFile, magneticFile, planetFile, auroraFile;
 
-      // Look for earth data arguments
+      // Detect files by their extensions
       for (int i = 1; i < m_argc; ++i) {
         std::string arg = m_argv[i];
-        if (arg == "-clouds" && i + 1 < m_argc) {
-          cloudsFile = m_argv[i + 1];
-        } else if (arg == "-magnetic-field" && i + 1 < m_argc) {
-          magneticFile = m_argv[i + 1];
-        } else if (arg == "-planet" && i + 1 < m_argc) {
-          planetFile = m_argv[i + 1];
-        } else if (arg == "-aurora" && i + 1 < m_argc) {
-          auroraFile = m_argv[i + 1];
-        }
+
+        // Skip known flags and options
+        if (arg[0] == '-' && arg.length() > 1)
+          continue;
       }
 
       auto &scene = core->tsd.scene;
-
-      // Load earth data if required files are specified
-      if (!cloudsFile.empty() && !magneticFile.empty() && !planetFile.empty()) {
-        ec->setEarthDataFiles(cloudsFile, magneticFile, planetFile);
-      }
-
-      // Load aurora as optional additional atmospheric effect
-      if (!auroraFile.empty()) {
-        tsd::core::logInfo(
-            "[earth_demo] Loading aurora data: %s", auroraFile.c_str());
-
-        // Create the volume with the aurora field
-        auto auroraVolume = tsd::io::import_volume(scene, auroraFile.c_str());
-        if (auroraVolume) {
-          // Find the aurora spatial field in the scene
-          const auto &fields = scene.objectDB().field;
-          for (size_t i = 0; i < fields.capacity(); i++) {
-            auto field = fields.at(i);
-            if (field
-                && (*field).subtype()
-                    == tsd::core::tokens::spatial_field::aurora) {
-              // Pass the aurora field to EarthControls
-              ec->setAuroraField(field);
-              tsd::core::logInfo(
-                  "[earth_demo] Aurora data loaded successfully");
-              break;
-            }
-          }
-        }
-      }
 
       // Ensure at least a default layer exists
       if (scene.layers().size() == 0) {
@@ -130,6 +95,9 @@ class Application : public TSDApplication
       }
 
       core->tsd.sceneLoadComplete = true;
+
+      // Initialize earth controls with loaded scene data
+      ec->importEarthData();
 
       // Set Barney as default renderer for Earth visualization if available
       std::string defaultLibrary = "barney";

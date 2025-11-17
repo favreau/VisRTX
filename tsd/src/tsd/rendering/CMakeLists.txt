@@ -18,8 +18,10 @@ PRIVATE
   pipeline/passes/OutlineRenderPass.cpp
   pipeline/passes/PickPass.cpp
   pipeline/passes/RenderPass.cpp
+  pipeline/passes/SaveToFilePass.cpp
   pipeline/passes/VisualizeDepthPass.cpp
   pipeline/RenderPipeline.cpp
+  view/CameraUpdateDelegate.cpp
   view/ManipulatorToAnari.cpp
 )
 
@@ -28,10 +30,11 @@ PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/../..>
 )
 
-project_link_libraries(PUBLIC tsd_core)
+project_link_libraries(PUBLIC tsd_core PRIVATE $<BUILD_INTERFACE:stb_image>)
 
 if (TSD_USE_CUDA)
-  project_link_libraries(PRIVATE CUDA::cudart)
+  find_package(thrust REQUIRED HINTS ${CUDAToolkit_LIBRARY_DIR}/cmake)
+  project_link_libraries(PRIVATE CUDA::cudart Thrust::Thrust)
   set_source_files_properties(
     pipeline/passes/AnariAxesRenderPass.cpp
     pipeline/passes/AnariSceneRenderPass.cpp

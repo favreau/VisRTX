@@ -63,6 +63,24 @@ std::vector<std::string> splitString(const std::string &s, char delim)
   return result;
 }
 
+tsd::core::ArrayRef readArray(
+    tsd::core::Scene &scene, anari::DataType elementType, std::FILE *fp)
+{
+  tsd::core::ArrayRef retval;
+
+  size_t size = 0;
+  auto r = std::fread(&size, sizeof(size_t), 1, fp);
+
+  if (size > 0) {
+    retval = scene.createArray(elementType, size);
+    auto *dst = retval->map();
+    r = std::fread(dst, anari::sizeOf(elementType), size, fp);
+    retval->unmap();
+  }
+
+  return retval;
+}
+
 SamplerRef importDdsTexture(
     Scene &scene, std::string filepath, TextureCache &cache)
 {
@@ -198,11 +216,8 @@ SamplerRef importDdsTexture(
             filepath.c_str());
       }
 
-      std::vector<std::byte> imageContent(linearSize);
-      dds::vflipImage(dds, data(imageContent));
-
       dataArray = scene.createArray(ANARI_INT8, linearSize);
-      dataArray->setData(data(imageContent));
+      dataArray->setData(dds::getDataPointer(dds));
       dataArray->setMetadataValue("compressedFormat", compressedFormat.value());
       dataArray->setMetadataValue(
           "imageSize", U64Vec2(dds->header.width, dds->header.height));
@@ -213,7 +228,7 @@ SamplerRef importDdsTexture(
   }
 
   auto compressedFormat =
-      dataArray->getMetadataValue("compressedFormat").get<std::string>();
+      dataArray->getMetadataValue("compressedFormat").getString();
 
   auto tex = scene.createObject<Sampler>(tokens::sampler::compressedImage2D);
   tex->setParameterObject("image"_t, *dataArray);

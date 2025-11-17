@@ -2,21 +2,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "Viewport.h"
-#include "Log.h"
 // tsd_ui_imgui
 #include "tsd/ui/imgui/Application.h"
 #include "tsd/ui/imgui/tsd_ui_imgui.h"
+// tsd_core
+#include "tsd/core/Logging.hpp"
+#include "tsd/core/scene/objects/Camera.hpp"
 // tsd_rendering
 #include "tsd/rendering/view/ManipulatorToAnari.hpp"
 // tsd_io
 #include "tsd/io/serialization.hpp"
+
 // std
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <iomanip>
 #include <limits>
+#include <memory>
 #include <sstream>
+#include <string>
+#include <utility>
+
 // stb
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -71,11 +78,13 @@ void Viewport::buildUI()
 
   ImGui::EndDisabled();
 
-  // Make is so that right-click gets the window focused.
-  // This enables right-click-drag to work right away even if the window is not focused
-  // same as left-click-drag works without requiring a prior left-click-focus.
-  if (ImGui::IsWindowHovered() && ImGui::IsMouseDown(ImGuiMouseButton_Right))
-  {
+  // Make is so that middle and right-clicks get the window focused.
+  // This enables middle/right-click-drag to work right away even if the window
+  // is not focused same as left-click-drag works without requiring a prior
+  // left-click-focus.
+  if (ImGui::IsWindowHovered()
+      && (ImGui::IsMouseDown(ImGuiMouseButton_Right)
+          || ImGui::IsMouseDown(ImGuiMouseButton_Middle))) {
     ImGui::SetWindowFocus();
   }
 
@@ -270,6 +279,12 @@ void Viewport::saveSettings(tsd::core::DataNode &root)
   camera["apertureRadius"] = m_apertureRadius;
   camera["focusDistance"] = m_focusDistance;
 
+  // Database Camera //
+
+  if (m_selectedCamera) {
+    root["selectedCamera"] = static_cast<uint64_t>(m_selectedCamera.index());
+  }
+
   // Renderer settings //
 
   auto &renderers = root["renderers"];
@@ -319,11 +334,24 @@ void Viewport::loadSettings(tsd::core::DataNode &root)
     m_arcball->setConfig(at, distance, azel);
   }
 
+  // Database Camera //
+
+  if (auto *c = root.child("selectedCamera"); c) {
+    uint64_t idx = 0;
+    c->getValue(ANARI_UINT64, &idx);
+    m_selectedCamera = appCore()->tsd.scene.getObject<tsd::core::Camera>(idx);
+  }
+
   // Setup library //
 
-  std::string libraryName;
-  root["anariLibrary"].getValue(ANARI_STRING, &libraryName);
-  setLibrary(libraryName, false);
+  auto *core = appCore();
+  if (core->commandLine.useDefaultRenderer) {
+    std::string libraryName;
+    root["anariLibrary"].getValue(ANARI_STRING, &libraryName);
+    setLibrary(libraryName, false);
+  } else {
+    setLibrary("", false);
+  }
 
   // Renderer settings //
 
@@ -371,8 +399,14 @@ void Viewport::setupRenderPipeline()
   tsd::core::logStatus("[viewport] initialized scene for '%s' device in %.2fs",
       m_libName.c_str(),
       m_timeToLoadDevice);
+
   m_anariPass =
       m_pipeline.emplace_back<tsd::rendering::AnariSceneRenderPass>(m_device);
+
+  m_saveToFilePass = m_pipeline.emplace_back<tsd::rendering::SaveToFilePass>();
+  m_saveToFilePass->setEnabled(false);
+  m_saveToFilePass->setSingleShotMode(true);
+
   m_pickPass = m_pipeline.emplace_back<tsd::rendering::PickPass>();
   m_pickPass->setEnabled(false);
   m_pickPass->setPickOperation([&](tsd::rendering::RenderBuffers &b) {
@@ -457,15 +491,20 @@ void Viewport::setupRenderPipeline()
 
     m_pickPass->setEnabled(false);
   });
+
   m_visualizeDepthPass =
       m_pipeline.emplace_back<tsd::rendering::VisualizeDepthPass>();
   m_visualizeDepthPass->setEnabled(false);
+
   m_outlinePass = m_pipeline.emplace_back<tsd::rendering::OutlineRenderPass>();
+
   m_axesPass = m_pipeline.emplace_back<tsd::rendering::AnariAxesRenderPass>(
       m_device, m_extensions);
   m_axesPass->setEnabled(m_showAxes);
+
   m_outputPass = m_pipeline.emplace_back<tsd::rendering::CopyToSDLTexturePass>(
       m_app->sdlRenderer());
+
   reshape(m_viewportSize);
 }
 
@@ -478,6 +517,7 @@ void Viewport::teardownDevice()
   m_anariPass = nullptr;
   m_outlinePass = nullptr;
   m_outputPass = nullptr;
+  m_saveToFilePass = nullptr;
 
   appCore()->anari.releaseRenderIndex(m_device);
   m_rIdx = nullptr;
@@ -551,51 +591,76 @@ void Viewport::updateCamera(bool force)
   if (!m_anariPass)
     return;
 
-  if ((!force && !m_arcball->hasChanged(m_cameraToken)))
+  // Check if camera changed, might it be database camera or manipulator one.
+  bool isDbCamera = m_selectedCamera && m_cameraDelegate;
+
+  // Before proceeding, check if the camera still does exist
+  if (isDbCamera && !m_selectedCamera->self()) {
+    tsd::core::logWarning(
+        "[viewport] selected camera no longer exists, reverting to manipulator camera");
+    clearDatabaseCamera();
+    isDbCamera = false;
+  }
+
+  if (!force
+      && !(isDbCamera ? m_cameraDelegate->hasChanged(m_cameraToken)
+                      : m_arcball->hasChanged(m_cameraToken)))
     return;
 
-  // perspective camera //
-
-  tsd::rendering::updateCameraParametersPerspective(
-      m_device, m_perspCamera, *m_arcball);
-  anari::setParameter(m_device,
-      m_perspCamera,
-      "aspect",
-      m_viewportSize.x / float(m_viewportSize.y));
-  anari::setParameter(
-      m_device, m_perspCamera, "apertureRadius", m_apertureRadius);
-  anari::setParameter(
-      m_device, m_perspCamera, "focusDistance", m_focusDistance);
-
-  anari::setParameter(m_device, m_perspCamera, "fovy", anari::radians(m_fov));
-  anari::commitParameters(m_device, m_perspCamera);
-
-  // orthographic camera //
-
-  if (m_orthoCamera) {
-    tsd::rendering::updateCameraParametersOrthographic(
-        m_device, m_orthoCamera, *m_arcball);
+  // Get compass information
+  tsd::math::float3 axesDir;
+  tsd::math::float3 axesUp;
+  if (isDbCamera) {
+    applyCameraParameters(&*m_selectedCamera);
+    axesDir = m_selectedCamera->parameterValueAs<tsd::math::float3>("direction")
+                  .value_or(tsd::math::float3(0.0f, 0.0f, -1.0f));
+    axesUp =
+        m_selectedCamera->parameterValueAs<tsd::math::float3>("up").value_or(
+            tsd::math::float3(0.0f, 1.0f, 0.0f));
+  } else {
+    // perspective camera //
+    tsd::rendering::updateCameraParametersPerspective(
+        m_device, m_perspCamera, *m_arcball);
     anari::setParameter(m_device,
-        m_orthoCamera,
+        m_perspCamera,
         "aspect",
         m_viewportSize.x / float(m_viewportSize.y));
-    anari::commitParameters(m_device, m_orthoCamera);
+    anari::setParameter(
+        m_device, m_perspCamera, "apertureRadius", m_apertureRadius);
+    anari::setParameter(
+        m_device, m_perspCamera, "focusDistance", m_focusDistance);
+
+    anari::setParameter(m_device, m_perspCamera, "fovy", anari::radians(m_fov));
+    anari::commitParameters(m_device, m_perspCamera);
+
+    // orthographic camera //
+
+    if (m_orthoCamera) {
+      tsd::rendering::updateCameraParametersOrthographic(
+          m_device, m_orthoCamera, *m_arcball);
+      anari::setParameter(m_device,
+          m_orthoCamera,
+          "aspect",
+          m_viewportSize.x / float(m_viewportSize.y));
+      anari::commitParameters(m_device, m_orthoCamera);
+    }
+
+    // omnidirectional camera //
+
+    if (m_omniCamera) {
+      tsd::rendering::updateCameraParametersPerspective( // also works for omni
+          m_device,
+          m_omniCamera,
+          *m_arcball);
+      anari::commitParameters(m_device, m_omniCamera);
+    }
+    if (m_echoCameraConfig)
+      echoCameraConfig();
+    axesUp = m_arcball->up();
+    axesDir = m_arcball->dir();
   }
 
-  // omnidirectional camera //
-
-  if (m_omniCamera) {
-    tsd::rendering::updateCameraParametersPerspective( // also works for omni
-        m_device,
-        m_omniCamera,
-        *m_arcball);
-    anari::commitParameters(m_device, m_omniCamera);
-  }
-
-  if (m_echoCameraConfig)
-    echoCameraConfig();
-
-  m_axesPass->setView(m_arcball->dir(), m_arcball->up());
+  m_axesPass->setView(axesDir, axesUp);
 }
 
 void Viewport::updateImage()
@@ -632,57 +697,124 @@ void Viewport::updateImage()
   m_latestAnariFL = duration * 1000;
   m_minFL = std::min(m_minFL, m_latestAnariFL);
   m_maxFL = std::max(m_maxFL, m_latestAnariFL);
+}
 
-  // Handle screenshot saving
-  if (m_saveNextFrame) {
-    // Wait for the frame to be ready
-    anari::wait(m_device, frame);
+void Viewport::applyCameraParameters(tsd::core::Camera *cam)
+{
+  if (!cam || !m_device || !m_currentCamera)
+    return;
 
-    // Map the color channel to get the frame buffer data
-    auto fb = anari::map<uint32_t>(m_device, frame, "channel.color");
-
-    if (fb.data) {
-      // Generate timestamped filename
-      auto now = std::chrono::system_clock::now();
-      auto time_t = std::chrono::system_clock::to_time_t(now);
-      auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now.time_since_epoch())
-          % 1000;
-
-      std::stringstream ss;
-      ss << "screenshot_"
-         << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S") << "_"
-         << std::setfill('0') << std::setw(3) << ms.count() << ".png";
-
-      // Ensure the screenshot is saved in the current working directory
-      std::filesystem::path workingDir = std::filesystem::current_path();
-      std::filesystem::path filename = workingDir / ss.str();
-
-      // Use STB's built-in vertical flip functionality for simplicity
-      stbi_flip_vertically_on_write(1);
-
-      // Save the screenshot with full alpha channel preservation
-      stbi_write_png(filename.string().c_str(),
-          fb.width,
-          fb.height,
-          4,
-          fb.data,
-          4 * fb.width);
-
-      // Reset the flip setting to avoid affecting other code
-      stbi_flip_vertically_on_write(0);
-
-      tsd::core::logStatus(
-          "Screenshot saved to '%s'", filename.string().c_str());
-    } else {
-      tsd::core::logWarning("Failed to map frame buffer for screenshot");
-    }
-
-    // Unmap the frame buffer
-    anari::unmap(m_device, frame, "channel.color");
-
-    m_saveNextFrame = false;
+  auto d = m_device;
+  auto c = m_currentCamera; // ANARI camera
+  // Let's make sure we recompute the camera aspect ratio before
+  // handing off the parameters to the ANARI camera.
+  // Note that we don't want this to be accounted as a user change
+  // as it is only about automatic viewport adaptation.
+  // Not doing so creates an infinite invalidate->restart accumulation
+  // loop.
+  m_cameraDelegate->pushIgnoreChangeScope();
+  if (cam->subtype() == tsd::core::tokens::camera::perspective
+      || cam->subtype() == tsd::core::tokens::camera::orthographic) {
+    // Let's not check for cam->parameter("aspect")
+    // and always recompute an aspect ratio based on viewport size.
+    float aspect = m_viewportSize.x / float(m_viewportSize.y);
+    cam->setParameter("aspect", aspect);
   }
+  m_cameraDelegate->popIgnoreChangeScope();
+  cam->updateAllANARIParameters(d, m_currentCamera);
+  anari::commitParameters(d, c);
+}
+
+void Viewport::setDatabaseCamera(tsd::core::CameraRef cam)
+{
+  // Detach previous delegate if any
+  if (m_cameraDelegate)
+    m_cameraDelegate->detach();
+  m_cameraDelegate.reset();
+
+  m_selectedCamera = cam;
+  m_cameraToken = 0;
+  // Wire new delegate
+  if (m_selectedCamera) {
+    m_cameraDelegate = std::make_unique<tsd::core::CameraUpdateDelegate>(
+        m_selectedCamera.data());
+  }
+  updateCamera(true);
+  tsd::core::logStatus(
+      "Viewport using database camera '%s'", cam->name().c_str());
+}
+
+void Viewport::clearDatabaseCamera()
+{
+  // Detach delegate if any
+  if (m_cameraDelegate)
+    m_cameraDelegate->detach();
+  m_cameraDelegate.reset();
+  m_selectedCamera = {};
+  m_cameraToken = 0;
+  updateCamera(true);
+  tsd::core::logStatus("Viewport using manipulator");
+}
+
+void Viewport::createCameraFromCurrentView()
+{
+  auto &scene = appCore()->tsd.scene;
+
+  tsd::core::CameraRef cam;
+
+  if (m_selectedCamera) {
+    // If a database camera is selected, copy it
+    auto sourceCam = m_selectedCamera;
+
+    // Create new camera with same subtype
+    cam = scene.createObject<tsd::core::Camera>(sourceCam->subtype());
+
+    // Copy all parameters
+    for (size_t i = 0; i < sourceCam->numParameters(); i++) {
+      const auto &srcParam = sourceCam->parameterAt(i);
+      const char *paramName = sourceCam->parameterNameAt(i);
+      cam->parameter(paramName)->setValue(srcParam.value());
+    }
+  } else {
+    // No database camera selected, create from manipulator state
+
+    // Determine camera type from current ANARI camera
+    tsd::core::Token subtype = tsd::core::tokens::camera::perspective;
+    if (m_currentCamera == m_orthoCamera)
+      subtype = tsd::core::tokens::camera::orthographic;
+    else if (m_currentCamera == m_omniCamera)
+      subtype = tsd::core::tokens::camera::omnidirectional;
+
+    // Create camera object
+    cam = scene.createObject<tsd::core::Camera>(subtype);
+
+    // Set parameters from manipulator
+    auto eye = m_arcball->eye();
+    auto dir = tsd::math::normalize(m_arcball->at() - eye);
+    auto up = m_arcball->up();
+
+    cam->parameter("position")->setValue(eye);
+    cam->parameter("direction")->setValue(dir);
+    cam->parameter("up")->setValue(up);
+
+    // Set type-specific params
+    if (subtype == tsd::core::tokens::camera::perspective) {
+      cam->parameter("fovy")->setValue(tsd::math::radians(m_fov));
+      cam->parameter("apertureRadius")->setValue(m_apertureRadius);
+      cam->parameter("focusDistance")->setValue(m_focusDistance);
+    } else if (subtype == tsd::core::tokens::camera::orthographic) {
+      // Nothing to set here
+    }
+  }
+
+  // Set name
+  std::string name = "ViewCamera_" + std::to_string(cam.index());
+  cam->setName(name.c_str());
+
+  // Auto-select it
+  setDatabaseCamera(cam);
+
+  tsd::core::logStatus("Created camera '%s' from current view", name.c_str());
 }
 
 void Viewport::echoCameraConfig()
@@ -707,6 +839,11 @@ void Viewport::ui_menubar()
         const bool isThisLibrary = m_libName == libName;
         if (ImGui::RadioButton(libName.c_str(), isThisLibrary))
           setLibrary(libName, false);
+      }
+      ImGui::Separator();
+      if (ImGui::MenuItem("reload device")) {
+        auto lib = m_libName; // setLibrary() clears m_libName
+        setLibrary(lib, false);
       }
       ImGui::EndMenu();
     }
@@ -734,7 +871,7 @@ void Viewport::ui_menubar()
         ImGui::Indent(INDENT_AMOUNT);
 
         tsd::ui::buildUI_object(
-            m_rendererObjects[m_currentRenderer], appCore()->tsd.scene, false);
+            m_rendererObjects[m_currentRenderer], appCore()->tsd.scene, true);
 
         ImGui::Unindent(INDENT_AMOUNT);
         ImGui::Separator();
@@ -839,6 +976,52 @@ void Viewport::ui_menubar()
           && m_echoCameraConfig)
         echoCameraConfig();
 
+      ImGui::Separator();
+
+      // Database Camera Selection
+      ImGui::Text("Database Camera:");
+      ImGui::Indent(INDENT_AMOUNT);
+
+      // Build camera list
+      std::vector<std::string> cameraNames = {"<Manipulator>"};
+      m_menuCameraRefs.resize(1);
+      m_menuCameraRefs[0] = {};
+      int currentSelection = 0;
+
+      const auto &cameraDB = appCore()->tsd.scene.objectDB().camera;
+      tsd::core::foreach_item_const(cameraDB, [&](const auto *cam) {
+        if (cam) {
+          cameraNames.push_back(cam->name());
+          m_menuCameraRefs.push_back(cam->self());
+          if (m_selectedCamera == cam->self()) {
+            currentSelection = static_cast<int>(cameraNames.size() - 1);
+          }
+        }
+      });
+
+      if (ImGui::Combo(
+              "Select",
+              &currentSelection,
+              [](void *data, int idx, const char **out) {
+                auto *names = (std::vector<std::string> *)data;
+                *out = (*names)[idx].c_str();
+                return true;
+              },
+              &cameraNames,
+              static_cast<int>(cameraNames.size()))) {
+        if (currentSelection == 0) {
+          clearDatabaseCamera();
+        } else {
+          setDatabaseCamera(m_menuCameraRefs[currentSelection]);
+        }
+      }
+
+      if (ImGui::Button("Create from Current View")) {
+        createCameraFromCurrentView();
+      }
+
+      ImGui::Unindent(INDENT_AMOUNT);
+
       ImGui::EndMenu();
     }
 
@@ -920,8 +1103,26 @@ void Viewport::ui_menubar()
 
       ImGui::Separator();
 
-      if (ImGui::MenuItem("take screenshot"))
-        m_saveNextFrame = true;
+      if (ImGui::MenuItem("take screenshot")) {
+        // Generate timestamped filename
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      now.time_since_epoch())
+            % 1000;
+
+        std::stringstream ss;
+        ss << "screenshot_"
+           << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S") << "_"
+           << std::setfill('0') << std::setw(3) << ms.count() << ".png";
+
+        // Ensure the screenshot is saved in the current working directory
+        std::filesystem::path workingDir = std::filesystem::current_path();
+        std::filesystem::path filename = workingDir / ss.str();
+
+        m_saveToFilePass->setFilename(filename.string());
+        m_saveToFilePass->setEnabled(true);
+      }
 
       ImGui::EndMenu();
     }
@@ -962,6 +1163,10 @@ void Viewport::ui_menubar()
 void Viewport::ui_handleInput()
 {
   if (!m_deviceReadyToUse || !ImGui::IsWindowFocused())
+    return;
+
+  // Block arcball input when a database camera is selected
+  if (m_selectedCamera)
     return;
 
   ImGuiIO &io = ImGui::GetIO();
@@ -1073,6 +1278,16 @@ void Viewport::ui_overlay()
 
   if (ImGui::Begin(m_overlayWindowName.c_str(), nullptr, window_flags)) {
     ImGui::Text("  device: %s", m_libName.c_str());
+
+    // Camera indicator
+    if (m_selectedCamera) {
+      ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f),
+          "  camera: %s",
+          m_selectedCamera->name().c_str());
+    } else {
+      ImGui::Text("  camera: <Manipulator>");
+    }
+
     ImGui::Text("Viewport: %i x %i", m_viewportSize.x, m_viewportSize.y);
     ImGui::Text("  render: %i x %i", m_renderSize.x, m_renderSize.y);
     ImGui::Text(" samples: %i", m_frameSamples);
@@ -1084,7 +1299,7 @@ void Viewport::ui_overlay()
 
     ImGui::Separator();
 
-    ImGui::Checkbox("camera setup", &m_showCameraInfo);
+    ImGui::Checkbox("camera config", &m_showCameraInfo);
     if (m_showCameraInfo) {
       auto at = m_arcball->at();
       auto azel = m_arcball->azel();

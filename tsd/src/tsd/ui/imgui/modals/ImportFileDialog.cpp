@@ -22,26 +22,32 @@ void ImportFileDialog::buildUI()
   constexpr int MAX_LENGTH = 2000;
   m_filename.reserve(MAX_LENGTH);
 
-  const char *importers[] = {"ASSIMP",
+  const char *importers[] = {
+      "AGX",
+      "ASSIMP",
       "ASSIMP_FLAT",
+      "AXYZ",
       "DLAF",
       "E57XYZ",
-      "NBODY",
-      "PLY",
-      "OBJ",
-      "USD",
-      "HDRI",
-      "VOLUME",
-      "SWC",
-      "PDB",
-      "XYZDP",
-      "HSMESH",
-      "NEURAL",
       "GLTF",
-      };
+      "HDRI",
+      "HSMESH",
+      "NBODY",
+      "OBJ",
+      "PDB",
+      "PLY",
+      "PT (neural)",
+      "SMESH",
+      "SMESH_ANIMATION",
+      "SWC",
+      "TRK",
+      "USD",
+      "XYZDP",
+      "VOLUME",
+  };
 
-  ImGui::Combo("importer type", &m_selectedFileType, importers,
-      std::size(importers));
+  ImGui::Combo(
+      "importer type", &m_selectedFileType, importers, std::size(importers));
 
   static std::string outPath;
   if (ImGui::Button("...")) {
@@ -89,41 +95,9 @@ void ImportFileDialog::buildUI()
       auto importRoot = core->tsd.selectedNode;
       if (!importRoot)
         importRoot = layer->root();
-
-      auto selectedFileType =
-          static_cast<app::ImporterType>(m_selectedFileType);
-      if (selectedFileType == app::ImporterType::PLY)
-        tsd::io::import_PLY(scene, m_filename.c_str(), importRoot);
-      else if (selectedFileType == app::ImporterType::OBJ)
-        tsd::io::import_OBJ(scene, m_filename.c_str(), importRoot);
-      else if (selectedFileType == app::ImporterType::USD)
-        tsd::io::import_USD(scene, m_filename.c_str(), importRoot);
-      else if (selectedFileType == app::ImporterType::ASSIMP)
-        tsd::io::import_ASSIMP(scene, m_filename.c_str(), importRoot, false);
-      else if (selectedFileType == app::ImporterType::ASSIMP_FLAT)
-        tsd::io::import_ASSIMP(scene, m_filename.c_str(), importRoot, true);
-      else if (selectedFileType == app::ImporterType::DLAF)
-        tsd::io::import_DLAF(scene, m_filename.c_str(), importRoot);
-      else if (selectedFileType == app::ImporterType::E57XYZ)
-        tsd::io::import_E57XYZ(scene, m_filename.c_str());
-      else if (selectedFileType == app::ImporterType::NBODY)
-        tsd::io::import_NBODY(scene, m_filename.c_str(), importRoot);
-      else if (selectedFileType == app::ImporterType::HDRI)
-        tsd::io::import_HDRI(scene, m_filename.c_str(), importRoot);
-      else if (selectedFileType == app::ImporterType::SWC)
-        tsd::io::import_SWC(scene, m_filename.c_str(), importRoot);
-      else if (selectedFileType == app::ImporterType::PDB)
-        tsd::io::import_PDB(scene, m_filename.c_str(), importRoot);
-      else if (selectedFileType == app::ImporterType::XYZDP)
-        tsd::io::import_XYZDP(scene, m_filename.c_str());
-      else if (selectedFileType == app::ImporterType::HSMESH)
-        tsd::io::import_HSMESH(scene, m_filename.c_str(), importRoot);
-      else if (selectedFileType == app::ImporterType::VOLUME)
-        tsd::io::import_volume(scene, m_filename.c_str());
-      else if (selectedFileType == app::ImporterType::NEURAL)
-        tsd::io::import_PT(scene, m_filename.c_str(), importRoot);
-      else if (selectedFileType == app::ImporterType::GLTF)
-        tsd::io::import_GLTF(scene, m_filename.c_str(), importRoot);
+      app::ImportFile file{
+          static_cast<app::ImporterType>(m_selectedFileType), m_filename};
+      core->importFile(file, importRoot);
       scene.signalLayerChange(layer);
     };
 

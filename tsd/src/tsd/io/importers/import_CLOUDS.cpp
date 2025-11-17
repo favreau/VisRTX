@@ -130,6 +130,8 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
 
   // Set the data as a parameter
   field->setParameterObject("cloudData"_t, *dataArray);
+
+  field->setMetadataValue("filepath", filepath);
   field->setMetadataValue("unitDistance", header.unitDistance);
   field->setMetadataValue("numTimeSteps", static_cast<int>(numTimeSteps));
   return field;

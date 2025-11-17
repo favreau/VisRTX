@@ -11,6 +11,6 @@ int main()
 {
   tsd::core::Scene scene;
   tsd::io::generate_material_orb(scene, scene.defaultLayer()->root());
-  tsd::io::save_Scene(scene, "saved_context.tsd");
+  tsd::io::save_Scene(scene, "scene.tsd");
   return 0;
 }

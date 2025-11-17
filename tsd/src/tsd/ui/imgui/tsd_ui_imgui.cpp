@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/ui/imgui/tsd_ui_imgui.h"
+// tsd_core
+#include "tsd/core/ColorMapUtil.hpp"
 
 namespace tsd::ui {
 
@@ -16,74 +18,95 @@ static bool UI_stringList_callback(void *p, int index, const char **out_text)
   return true;
 }
 
+static void buildUI_array_info_tooltip_text(
+    const tsd::core::Scene &scene, size_t idx)
+{
+  const auto &a = *scene.getObject<tsd::core::Array>(idx);
+  ImGui::Text("  idx: [%zu]", idx);
+  const auto t = a.type();
+  if (t == ANARI_ARRAY3D)
+    ImGui::Text(" size: %zu x %zu x %zu", a.dim(0), a.dim(1), a.dim(2));
+  else if (t == ANARI_ARRAY2D)
+    ImGui::Text(" size: %zu x %zu", a.dim(0), a.dim(1));
+  else
+    ImGui::Text(" size: %zu", a.dim(0));
+  ImGui::Text(" type: %s", anari::toString(a.elementType()));
+}
+
 static void buildUI_parameter_contextMenu(
     tsd::core::Scene &scene, tsd::core::Object *o, tsd::core::Parameter *p)
 {
   if (ImGui::BeginPopup("buildUI_parameter_contextMenu")) {
-    if (ImGui::BeginMenu("add new")) {
-      ImGui::InputText("name", &s_newParameterName);
-      if (ImGui::Button("ok"))
-        o->addParameter(s_newParameterName);
-      ImGui::EndMenu(); // "add"
-    }
-
-    ImGui::Separator();
-
     if (ImGui::BeginMenu("set type")) {
       if (ImGui::BeginMenu("uniform")) {
         if (ImGui::MenuItem("direction")) {
-          p->setValue(tsd::math::float2(0.f));
           p->setUsage(tsd::core::ParameterUsageHint::DIRECTION);
+          p->setValue(tsd::math::float2(0.f));
         }
 
         if (ImGui::BeginMenu("color")) {
-          if (ImGui::MenuItem("float3") && p) {
+          if (ImGui::MenuItem("rgb") && p) {
+            p->setUsage(tsd::core::ParameterUsageHint::COLOR);
             p->setValue(tsd::math::float3(1));
-            p->setUsage(tsd::core::ParameterUsageHint::COLOR);
           }
-          if (ImGui::MenuItem("float4") && p) {
-            p->setValue(tsd::math::float4(1));
+          if (ImGui::MenuItem("rgba") && p) {
             p->setUsage(tsd::core::ParameterUsageHint::COLOR);
+            p->setValue(tsd::math::float4(1));
           }
           ImGui::EndMenu(); // "color"
         }
 
+        if (ImGui::BeginMenu("transform")) {
+          if (ImGui::MenuItem("identity") && p) {
+            p->setUsage(tsd::core::ParameterUsageHint::NONE);
+            p->setValue(tsd::math::scaling_matrix(tsd::math::float3(1.f)));
+          }
+          ImGui::Separator();
+          if (ImGui::MenuItem("value range") && p) {
+            p->setUsage(tsd::core::ParameterUsageHint::VALUE_RANGE_TRANSFORM);
+            p->setValue(tsd::math::float2(0.f, 1.f));
+          }
+          ImGui::EndMenu(); // "transform"
+        }
+
+        ImGui::Separator();
+
         if (ImGui::BeginMenu("float")) {
           if (ImGui::MenuItem("float1") && p) {
-            p->setValue(1.f);
             p->setUsage(tsd::core::ParameterUsageHint::NONE);
+            p->setValue(1.f);
           }
           if (ImGui::MenuItem("float2") && p) {
-            p->setValue(tsd::math::float2(1.f));
             p->setUsage(tsd::core::ParameterUsageHint::NONE);
+            p->setValue(tsd::math::float2(1.f));
           }
           if (ImGui::MenuItem("float3") && p) {
-            p->setValue(tsd::math::float3(1.f));
             p->setUsage(tsd::core::ParameterUsageHint::NONE);
+            p->setValue(tsd::math::float3(1.f));
           }
           if (ImGui::MenuItem("float4") && p) {
-            p->setValue(tsd::math::float4(1.f));
             p->setUsage(tsd::core::ParameterUsageHint::NONE);
+            p->setValue(tsd::math::float4(1.f));
           }
           ImGui::EndMenu(); // "float"
         }
 
         if (ImGui::BeginMenu("int")) {
           if (ImGui::MenuItem("int1") && p) {
-            p->setValue(0);
             p->setUsage(tsd::core::ParameterUsageHint::NONE);
+            p->setValue(0);
           }
           if (ImGui::MenuItem("int2") && p) {
-            p->setValue(tsd::math::int2(1));
             p->setUsage(tsd::core::ParameterUsageHint::NONE);
+            p->setValue(tsd::math::int2(1));
           }
           if (ImGui::MenuItem("int3") && p) {
-            p->setValue(tsd::math::int3(1));
             p->setUsage(tsd::core::ParameterUsageHint::NONE);
+            p->setValue(tsd::math::int3(1));
           }
           if (ImGui::MenuItem("int4") && p) {
-            p->setValue(tsd::math::int4(1));
             p->setUsage(tsd::core::ParameterUsageHint::NONE);
+            p->setValue(tsd::math::int4(1));
           }
           ImGui::EndMenu(); // "float"
         }
@@ -93,17 +116,41 @@ static void buildUI_parameter_contextMenu(
 
       ImGui::Separator();
 
-      if (ImGui::MenuItem("attribute")) {
-        p->setValue("attribute0");
-        p->setStringValues(
-            {"attribute0", "attribute1", "attribute2", "attribute3", "color"});
-        p->setStringSelection(0);
-      }
+      if (ImGui::MenuItem("attribute"))
+        p->setToAttribute();
 
       ImGui::Separator();
 
       if (ImGui::BeginMenu("object")) {
         if (ImGui::BeginMenu("new")) {
+
+          if (ImGui::BeginMenu("array")) {
+            tsd::core::ArrayRef a;
+
+            if (ImGui::BeginMenu("color map (RGB)")) {
+#define OBJECT_UI_MENU_ITEM(text, name)                                        \
+  if (ImGui::MenuItem(text)) {                                                 \
+    a = scene.createArray(ANARI_FLOAT32_VEC3, 128);                            \
+    auto colormap = tsd::core::resampleArray(tsd::core::colormap::name, 128);  \
+    a->setData(colormap);                                                      \
+    a->setName("colormap_" #name);                                             \
+  }
+              OBJECT_UI_MENU_ITEM("jet", jet);
+              OBJECT_UI_MENU_ITEM("cool to warm", cool_to_warm);
+              OBJECT_UI_MENU_ITEM("viridis", viridis);
+              OBJECT_UI_MENU_ITEM("black body", black_body);
+              OBJECT_UI_MENU_ITEM("inferno", inferno);
+              OBJECT_UI_MENU_ITEM("ice fire", ice_fire);
+              OBJECT_UI_MENU_ITEM("grayscale", grayscale);
+#undef OBJECT_UI_MENU_ITEM
+              ImGui::EndMenu(); // "color map"
+            }
+
+            if (a)
+              p->setValue({a->type(), a->index()});
+            ImGui::EndMenu(); // "array"
+          }
+
           if (ImGui::BeginMenu("material")) {
             tsd::core::MaterialRef m;
             if (ImGui::MenuItem("matte")) {
@@ -116,10 +163,60 @@ static void buildUI_parameter_contextMenu(
                   tsd::core::tokens::material::physicallyBased);
             }
 
+            if (ImGui::MenuItem("mdl")) {
+              m = scene.createObject<tsd::core::Material>(
+                  tsd::core::tokens::material::mdl);
+            }
+
             if (m)
               p->setValue({m->type(), m->index()});
             ImGui::EndMenu(); // "material"
           }
+
+          if (ImGui::BeginMenu("geometry")) {
+            tsd::core::GeometryRef g;
+
+#define OBJECT_UI_MENU_ITEM(text, subtype)                                     \
+  if (ImGui::MenuItem(text)) {                                                 \
+    g = scene.createObject<tsd::core::Geometry>(                               \
+        tsd::core::tokens::geometry::subtype);                                 \
+  }
+            OBJECT_UI_MENU_ITEM("cone", cone);
+            OBJECT_UI_MENU_ITEM("curve", curve);
+            OBJECT_UI_MENU_ITEM("cylinder", cylinder);
+            OBJECT_UI_MENU_ITEM("isosurface", isosurface);
+            OBJECT_UI_MENU_ITEM("neural", neural);
+            OBJECT_UI_MENU_ITEM("quad", quad);
+            OBJECT_UI_MENU_ITEM("sphere", sphere);
+            OBJECT_UI_MENU_ITEM("triangle", triangle);
+#undef OBJECT_UI_MENU_ITEM
+
+            if (g)
+              p->setValue({g->type(), g->index()});
+            ImGui::EndMenu(); // "geometry"
+          }
+
+          if (ImGui::BeginMenu("sampler")) {
+            tsd::core::SamplerRef s;
+
+#define OBJECT_UI_MENU_ITEM(text, subtype)                                     \
+  if (ImGui::MenuItem(text)) {                                                 \
+    s = scene.createObject<tsd::core::Sampler>(                                \
+        tsd::core::tokens::sampler::subtype);                                  \
+  }
+            OBJECT_UI_MENU_ITEM("compressedImage2D", compressedImage2D);
+            OBJECT_UI_MENU_ITEM("image1D", image1D);
+            OBJECT_UI_MENU_ITEM("image2D", image2D);
+            OBJECT_UI_MENU_ITEM("image3D", image3D);
+            OBJECT_UI_MENU_ITEM("primitive", primitive);
+            OBJECT_UI_MENU_ITEM("transform", transform);
+#undef OBJECT_UI_MENU_ITEM
+
+            if (s)
+              p->setValue({s->type(), s->index()});
+            ImGui::EndMenu(); // "material"
+          }
+
           ImGui::EndMenu(); // "new"
         }
 
@@ -127,17 +224,18 @@ static void buildUI_parameter_contextMenu(
 
 #define OBJECT_UI_MENU_ITEM(text, type)                                        \
   if (ImGui::BeginMenu(text)) {                                                \
-    if (auto i = buildUI_objects_menulist(scene, type);                        \
+    auto t = type;                                                             \
+    if (auto i = buildUI_objects_menulist(scene, t);                           \
         i != TSD_INVALID_INDEX && p)                                           \
-      p->setValue({type, i});                                                  \
+      p->setValue({t, i});                                                     \
     ImGui::EndMenu();                                                          \
   }
-
         OBJECT_UI_MENU_ITEM("array", ANARI_ARRAY);
         OBJECT_UI_MENU_ITEM("geometry", ANARI_GEOMETRY);
         OBJECT_UI_MENU_ITEM("material", ANARI_MATERIAL);
         OBJECT_UI_MENU_ITEM("sampler", ANARI_SAMPLER);
         OBJECT_UI_MENU_ITEM("spatial field", ANARI_SPATIAL_FIELD);
+#undef OBJECT_UI_MENU_ITEM
 
         ImGui::EndMenu(); // "object"
       }
@@ -155,7 +253,7 @@ static void buildUI_parameter_contextMenu(
 
     ImGui::EndPopup();
   }
-}
+} // namespace tsd::ui
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -166,7 +264,7 @@ void buildUI_object(tsd::core::Object &o,
 {
   static anari::DataType typeForSelection = ANARI_UNKNOWN;
   static tsd::core::Parameter *paramForSelection = nullptr;
-  static bool openPopup = false;
+  static bool openContextMenu = false;
 
   ImGui::PushID(&o);
 
@@ -193,99 +291,118 @@ void buildUI_object(tsd::core::Object &o,
         o.subtype().c_str());
   }
 
-  ImGui::Text("use count: %zu", o.useCount());
+  ImGui::Text("use counts: %zu | %zu | %zu",
+      o.useCount(tsd::core::Object::UseKind::APP),
+      o.useCount(tsd::core::Object::UseKind::PARAMETER),
+      o.useCount(tsd::core::Object::UseKind::LAYER));
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "references to this object:"
+        " application | parameter | layer");
+  }
 
   ImGui::Separator();
 
-  if (o.numParameters() > 0) {
-    // regular parameters //
+  // regular parameters //
 
-    if (useTableForParameters) {
-      const ImGuiTableFlags flags =
-          ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable;
-      if (ImGui::BeginTable("parameters", 2, flags)) {
-        ImGui::TableSetupColumn("Parameter");
-        ImGui::TableSetupColumn("Value");
-        ImGui::TableHeadersRow();
+  if (useTableForParameters) {
+    const ImGuiTableFlags flags = ImGuiTableFlags_RowBg
+        | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchSame;
+    if (ImGui::BeginTable("parameters", 2, flags)) {
+      ImGui::TableSetupColumn("Parameter");
+      ImGui::TableSetupColumn("Value");
+      ImGui::TableHeadersRow();
 
-        for (size_t i = 0; i < o.numParameters(); i++) {
-          auto &p = o.parameterAt(i);
-          ImGui::TableNextRow();
-          buildUI_parameter(o, p, scene, useTableForParameters);
-        }
-
-        ImGui::EndTable();
-      }
-    } else {
-      for (size_t i = 0; i < o.numParameters(); i++)
-        buildUI_parameter(o, o.parameterAt(i), scene);
-    }
-
-    // object parameters //
-
-    if (level > 0)
-      ImGui::Indent(tsd::ui::INDENT_AMOUNT);
-
-    for (size_t i = 0; i < o.numParameters(); i++) {
-      auto &p = o.parameterAt(i);
-      auto &pVal = p.value();
-      if (!pVal.holdsObject() || anari::isArray(pVal.type()))
-        continue;
-
-      ImGui::PushID(i);
-
-      ImGui::NewLine();
-
-      auto *obj = scene.getObject(pVal);
-
-      static std::string pName;
-      pName = p.name().c_str();
-      pName += " : ";
-      pName += anari::toString(pVal.type());
-
-      ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-      if (ImGui::CollapsingHeader(pName.c_str(), ImGuiTreeNodeFlags_None)) {
-        ImGui::BeginDisabled(obj == nullptr);
-        if (ImGui::Button("unset"))
-          p.setValue({pVal.type()});
-        ImGui::EndDisabled();
-
-        ImGui::SameLine();
-
-        if (ImGui::Button("clear"))
-          p.setValue({});
-
-        ImGui::SameLine();
-
-        ImGui::BeginDisabled(scene.numberOfObjects(pVal.type()) == 0);
-        if (ImGui::Button("select")) {
-          typeForSelection = pVal.type();
-          paramForSelection = &p;
-          openPopup = true;
-        }
-        ImGui::EndDisabled();
-
-        if (obj != nullptr)
-          buildUI_object(*obj, scene, useTableForParameters, level + 1);
+      for (size_t i = 0; i < o.numParameters(); i++) {
+        auto &p = o.parameterAt(i);
+        ImGui::TableNextRow();
+        buildUI_parameter(o, p, scene, useTableForParameters);
       }
 
-      ImGui::PopID();
+      ImGui::EndTable();
+    }
+  } else {
+    for (size_t i = 0; i < o.numParameters(); i++)
+      buildUI_parameter(o, o.parameterAt(i), scene);
+  }
+
+  // object parameters //
+
+  if (level > 0)
+    ImGui::Indent(tsd::ui::INDENT_AMOUNT);
+
+  for (size_t i = 0; i < o.numParameters(); i++) {
+    auto &p = o.parameterAt(i);
+    auto &pVal = p.value();
+    if (!pVal.holdsObject() || anari::isArray(pVal.type()))
+      continue;
+
+    ImGui::PushID(i);
+
+    auto *obj = scene.getObject(pVal);
+
+    static std::string pName;
+    pName = p.name().c_str();
+    pName += " : ";
+    pName += anari::toString(pVal.type());
+
+    ImGui::SetNextItemOpen(false, ImGuiCond_FirstUseEver);
+    if (ImGui::CollapsingHeader(pName.c_str(), ImGuiTreeNodeFlags_None)) {
+      ImGui::BeginDisabled(obj == nullptr);
+      if (ImGui::Button("unset"))
+        p.setValue({pVal.type()});
+      ImGui::EndDisabled();
+
+      ImGui::SameLine();
+
+      if (ImGui::Button("clear"))
+        p.setValue({});
+
+      ImGui::SameLine();
+
+      ImGui::BeginDisabled(scene.numberOfObjects(pVal.type()) == 0);
+      if (ImGui::Button("select")) {
+        typeForSelection = pVal.type();
+        paramForSelection = &p;
+        openContextMenu = true;
+      }
+      ImGui::EndDisabled();
+
+      if (obj != nullptr)
+        buildUI_object(*obj, scene, useTableForParameters, level + 1);
     }
 
-    if (level > 0)
-      ImGui::Unindent(tsd::ui::INDENT_AMOUNT);
+    ImGui::PopID();
+  }
+
+  if (level > 0)
+    ImGui::Unindent(tsd::ui::INDENT_AMOUNT);
+
+  ImGui::Separator();
+
+  if (ImGui::Button("add parameter")) {
+    s_newParameterName.reserve(200);
+    s_newParameterName = "";
+    ImGui::OpenPopup("buildUI_newParameter_popupMenu");
+  }
+
+  if (ImGui::BeginPopup("buildUI_newParameter_popupMenu")) {
+    ImGui::InputText("name", &s_newParameterName);
+    if (ImGui::Button("ok"))
+      o.addParameter(s_newParameterName);
+    ImGui::EndPopup();
   }
 
   ImGui::PopID();
 
-  // popup menu //
+  // context menu //
 
   if (level != 0)
     return;
 
-  if (openPopup) {
+  if (openContextMenu) {
     ImGui::OpenPopup("buildUI_object_contextMenu");
-    openPopup = false;
+    openContextMenu = false;
   }
 
   if (ImGui::BeginPopup("buildUI_object_contextMenu")) {
@@ -345,11 +462,8 @@ void buildUI_parameter(tsd::core::Object &o,
 
     const bool showSceneMenu =
         ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-    if (showSceneMenu) {
-      s_newParameterName.reserve(200);
-      s_newParameterName = "";
+    if (showSceneMenu)
       ImGui::OpenPopup("buildUI_parameter_contextMenu");
-    }
 
     ImGui::TableSetColumnIndex(1);
     ImGui::PushItemWidth(-FLT_MIN); // Right-aligned
@@ -430,9 +544,12 @@ void buildUI_parameter(tsd::core::Object &o,
         p.setStringSelection(ss);
       }
     } else {
-      if (useTable)
-        ImGui::Text("\"%s\"", pVal.getString().c_str());
-      else
+      if (useTable) {
+        auto val = pVal.getString();
+        update |= ImGui::InputText(
+            "\"%s\"", &val, ImGuiInputTextFlags_EnterReturnsTrue);
+        pVal = val.c_str();
+      } else
         ImGui::BulletText("%s | '%s'", name, pVal.getString().c_str());
     }
   } break;
@@ -457,16 +574,7 @@ void buildUI_parameter(tsd::core::Object &o,
     ImGui::BeginTooltip();
     if (isArray) {
       const auto idx = pVal.getAsObjectIndex();
-      const auto &a = *scene.getObject<tsd::core::Array>(idx);
-      ImGui::Text("  idx: [%zu]", idx);
-      const auto t = a.type();
-      if (t == ANARI_ARRAY3D)
-        ImGui::Text(" size: %zu x %zu x %zu", a.dim(0), a.dim(1), a.dim(2));
-      else if (t == ANARI_ARRAY2D)
-        ImGui::Text(" size: %zu x %zu", a.dim(0), a.dim(1));
-      else
-        ImGui::Text(" size: %zu", a.dim(0));
-      ImGui::Text(" type: %s", anari::toString(a.elementType()));
+      buildUI_array_info_tooltip_text(scene, idx);
     } else {
       if (p.description().empty())
         ImGui::Text("%s", anari::toString(type));
@@ -496,7 +604,7 @@ void buildUI_parameter(tsd::core::Object &o,
 }
 
 size_t buildUI_objects_menulist(
-    const tsd::core::Scene &scene, anari::DataType type)
+    const tsd::core::Scene &scene, anari::DataType &type)
 {
   size_t retval = TSD_INVALID_INDEX;
 
@@ -512,8 +620,16 @@ size_t buildUI_objects_menulist(
     oTitle += std::to_string(i);
     oTitle += ']';
     oTitle += obj->name();
-    if (ImGui::MenuItem(oTitle.c_str()))
+    if (ImGui::MenuItem(oTitle.c_str())) {
       retval = i;
+      type = obj->type();
+    }
+
+    if (anari::isArray(type) && ImGui::IsItemHovered()) {
+      ImGui::BeginTooltip();
+      buildUI_array_info_tooltip_text(scene, i);
+      ImGui::EndTooltip();
+    }
 
     ImGui::PopID();
   }

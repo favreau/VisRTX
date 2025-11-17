@@ -25,6 +25,8 @@ struct BaseUpdateDelegate
   virtual void signalParameterRemoved(const Object *o, const Parameter *p) = 0;
   virtual void signalArrayMapped(const Array *a) = 0;
   virtual void signalArrayUnmapped(const Array *a) = 0;
+  virtual void signalObjectParameterUseCountZero(const Object *obj) = 0;
+  virtual void signalObjectLayerUseCountZero(const Object *obj) = 0;
   virtual void signalObjectRemoved(const Object *o) = 0;
   virtual void signalRemoveAllObjects() = 0;
   virtual void signalLayerAdded(const Layer *l) = 0;
@@ -52,6 +54,8 @@ struct EmptyUpdateDelegate : public BaseUpdateDelegate
   void signalParameterRemoved(const Object *, const Parameter *) override {}
   void signalArrayMapped(const Array *) override {}
   void signalArrayUnmapped(const Array *) override {}
+  void signalObjectParameterUseCountZero(const Object *obj) override {};
+  void signalObjectLayerUseCountZero(const Object *obj) override {};
   void signalObjectRemoved(const Object *) override {}
   void signalRemoveAllObjects() override {}
   void signalLayerAdded(const Layer *) override {}
@@ -85,6 +89,8 @@ struct MultiUpdateDelegate : public BaseUpdateDelegate
   void signalParameterRemoved(const Object *o, const Parameter *p) override;
   void signalArrayMapped(const Array *a) override;
   void signalArrayUnmapped(const Array *a) override;
+  void signalObjectParameterUseCountZero(const Object *obj) override;
+  void signalObjectLayerUseCountZero(const Object *obj) override;
   void signalObjectRemoved(const Object *o) override;
   void signalRemoveAllObjects() override;
   void signalLayerAdded(const Layer *) override;

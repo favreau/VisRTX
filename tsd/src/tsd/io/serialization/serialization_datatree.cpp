@@ -128,6 +128,8 @@ static void layerToNode(Layer &layer, core::DataNode &node)
 
     currentNode->append("name") = tsdNode->name();
     currentNode->append("value") = tsdNode->getValueRaw();
+    if (tsdNode->isTransform())
+      currentNode->append("transformSRT") = tsdNode->getTransformSRT();
     currentNode->append("enabled") = tsdNode->isEnabled();
     currentNode->append("children");
 
@@ -141,7 +143,7 @@ static void layerToNode(Layer &layer, core::DataNode &node)
 
 static void nodeToParameter(core::DataNode &node, Parameter &p)
 {
-  if (auto *c = node.child("desription"); c != nullptr)
+  if (auto *c = node.child("description"); c != nullptr)
     p.setDescription(c->getValueAs<std::string>().c_str());
 
   if (auto *c = node.child("usage"); c != nullptr)
@@ -274,6 +276,9 @@ static void nodeToNewObject(Scene &scene, core::DataNode &node)
   case ANARI_LIGHT:
     obj = scene.createObject<Light>(subtype).data();
     break;
+  case ANARI_CAMERA:
+    obj = scene.createObject<Camera>(subtype).data();
+    break;
   default:
     break;
   }
@@ -318,10 +323,13 @@ static void nodeToLayer(core::DataNode &rootNode, Layer &layer, Scene &scene)
     if (level == 0)
       currentNode = layer.root();
     else {
-      currentNode = layer.insert_last_child(
-          currentParentNode, {node["name"].getValueAs<std::string>().c_str()});
-      (*currentNode)->setValueRaw(node["value"].getValue(), &scene);
+      currentNode = layer.insert_last_child(currentParentNode, {});
+      if (auto *c = node.child("transformSRT"); c != nullptr)
+        (*currentNode)->setAsTransform(c->getValueAs<math::mat3>());
+      else
+        (*currentNode)->setValueRaw(node["value"].getValue(), &scene);
       (*currentNode)->setEnabled(node["enabled"].getValueOr(true));
+      (*currentNode)->name() = node["name"].getValueAs<std::string>();
     }
 
     return true;
@@ -345,6 +353,10 @@ void save_Scene(Scene &scene, const char *filename)
 
 void save_Scene(Scene &scene, core::DataNode &root)
 {
+  // Layers //
+
+  tsd::core::logStatus("    ...serializing %zu layers", scene.numberOfLayers());
+
   auto &layersRoot = root["layers"];
   for (auto l : scene.layers()) {
     if (l.second.ptr) {
@@ -353,6 +365,23 @@ void save_Scene(Scene &scene, core::DataNode &root)
       layerRoot["isActive"] = l.second.active;
     }
   }
+
+  // Animations //
+
+  tsd::core::logStatus(
+      "    ...serializing %zu animations", scene.numberOfAnimations());
+
+  auto &animationsRoot = root["animation"];
+
+  auto &animationObjects = animationsRoot["objects"];
+  for (size_t i = 0; i < scene.numberOfAnimations(); i++)
+    scene.animation(i)->serialize(animationObjects.append());
+
+  auto &animationSettings = animationsRoot["settings"];
+  animationSettings["time"] = scene.getAnimationTime();
+  animationSettings["increment"] = scene.getAnimationIncrement();
+
+  // ObjectDB //
 
   auto &objectDB = root["objectDB"];
   auto objectArrayToNode = [](core::DataNode &objArrayRoot,
@@ -384,6 +413,7 @@ void save_Scene(Scene &scene, core::DataNode &root)
   objectArrayToNode(objectDB, scene.m_db.field, "spatialfield");
   objectArrayToNode(objectDB, scene.m_db.volume, "volume");
   objectArrayToNode(objectDB, scene.m_db.light, "light");
+  objectArrayToNode(objectDB, scene.m_db.camera, "camera");
   objectArrayToNode(objectDB, scene.m_db.array, "array");
 }
 
@@ -407,10 +437,11 @@ void load_Scene(Scene &scene, core::DataNode &root)
   tsd::core::logStatus("  ...clearing old context");
 
   scene.removeAllObjects();
-  scene.removeAllSecondaryLayers();
-  scene.defaultLayer()->root()->erase_subtree();
+  scene.removeAllLayers();
 
-  // Load from the conduit file (objects then layer) //
+  // Load data from file (objects then layer) //
+
+  // ObjectDB
 
   tsd::core::logStatus("  ...converting objects");
 
@@ -429,6 +460,9 @@ void load_Scene(Scene &scene, core::DataNode &root)
   nodeToObjectArray(objectDB, scene, "spatialfield");
   nodeToObjectArray(objectDB, scene, "volume");
   nodeToObjectArray(objectDB, scene, "light");
+  nodeToObjectArray(objectDB, scene, "camera");
+
+  // Layers
 
   tsd::core::logStatus("  ...converting layers");
 
@@ -450,6 +484,25 @@ void load_Scene(Scene &scene, core::DataNode &root)
   }
 
   scene.signalActiveLayersChanged();
+
+  // Animations
+
+  if (auto *c = root.child("animation"); c != nullptr) {
+    tsd::core::logStatus("  ...converting animations");
+
+    auto &animationRoot = *c;
+    auto &animationObjects = animationRoot["objects"];
+    animationObjects.foreach_child([&](auto &animationNode) {
+      scene.addAnimation()->deserialize(animationNode);
+    });
+
+    auto &animationSettings = animationRoot["settings"];
+    scene.setAnimationTime(animationSettings["time"].getValueAs<float>());
+    scene.setAnimationIncrement(
+        animationSettings["increment"].getValueAs<float>());
+  } else {
+    tsd::core::logStatus("  ...no animations found!");
+  }
 
   tsd::core::logStatus("  ...done!");
 }

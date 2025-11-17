@@ -51,6 +51,17 @@ void LayerTree::buildUI_layerHeader()
   auto &scene = appCore()->tsd.scene;
   const auto &layers = scene.layers();
 
+  if (scene.numberOfLayers() == 0) {
+    ImGui::Text("No layers in scene");
+    ImGui::BeginDisabled(!m_enableAddRemove);
+    if (ImGui::Button("new")) {
+      s_newLayerName.clear();
+      ImGui::OpenPopup("LayerTree_contextMenu_newLayer");
+    }
+    ImGui::EndDisabled();
+    return;
+  }
+
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::Combo("##layer",
       &m_layerIdx,
@@ -94,6 +105,10 @@ void LayerTree::buildUI_layerHeader()
 void LayerTree::buildUI_tree()
 {
   auto &scene = appCore()->tsd.scene;
+
+  if (scene.numberOfLayers() == 0)
+    return;
+
   auto &layer = *scene.layer(m_layerIdx);
 
   if (!m_menuVisible)
@@ -246,6 +261,10 @@ void LayerTree::buildUI_activateObjectSceneMenu()
 void LayerTree::buildUI_objectSceneMenu()
 {
   auto &scene = appCore()->tsd.scene;
+
+  if (scene.numberOfLayers() == 0)
+    return;
+
   auto &layer = *scene.layer(m_layerIdx);
   const bool nodeSelected = m_menuNode != TSD_INVALID_INDEX;
   auto menuNode = nodeSelected ? layer.at(m_menuNode) : layer.root();
@@ -258,6 +277,24 @@ void LayerTree::buildUI_objectSceneMenu()
       (*menuNode)->setEnabled(enabled);
       scene.signalLayerChange(&layer);
     }
+
+    if (nodeSelected && ImGui::MenuItem("show all")) {
+      layer.traverse(menuNode, [&](auto &n, int) {
+        n->setEnabled(true);
+        return true;
+      });
+      scene.signalLayerChange(&layer);
+    }
+
+    if (nodeSelected && ImGui::MenuItem("hide all")) {
+      layer.traverse(menuNode, [&](auto &n, int) {
+        n->setEnabled(false);
+        return true;
+      });
+      scene.signalLayerChange(&layer);
+    }
+
+    ImGui::Separator();
 
     if (nodeSelected && ImGui::BeginMenu("rename")) {
       ImGui::InputText("##edit_node_name", &(*menuNode)->name());
@@ -272,24 +309,102 @@ void LayerTree::buildUI_objectSceneMenu()
 
       ImGui::Separator();
 
-      if (ImGui::MenuItem("imported file"))
-        appCore()->windows.importDialog->show();
+      if (ImGui::BeginMenu("new object")) {
+        if (ImGui::BeginMenu("light")) {
+          if (ImGui::MenuItem("directional")) {
+            scene.insertNewChildObjectNode<tsd::core::Light>(menuNode,
+                tsd::core::tokens::light::directional,
+                "directional light");
+            clearSelectedNode = true;
+          }
 
-      ImGui::Separator();
+          if (ImGui::MenuItem("point")) {
+            scene.insertNewChildObjectNode<tsd::core::Light>(
+                menuNode, tsd::core::tokens::light::point, "point light");
+            clearSelectedNode = true;
+          }
+
+          if (ImGui::MenuItem("quad")) {
+            scene.insertNewChildObjectNode<tsd::core::Light>(
+                menuNode, tsd::core::tokens::light::quad, "quad light");
+            clearSelectedNode = true;
+          }
+
+          if (ImGui::MenuItem("spot")) {
+            scene.insertNewChildObjectNode<tsd::core::Light>(
+                menuNode, tsd::core::tokens::light::spot, "spot light");
+            clearSelectedNode = true;
+          }
+
+          if (ImGui::MenuItem("ring")) {
+            scene.insertNewChildObjectNode<tsd::core::Light>(
+                menuNode, tsd::core::tokens::light::ring, "ring light");
+            clearSelectedNode = true;
+          }
+
+          if (ImGui::BeginMenu("hdri")) {
+            if (ImGui::MenuItem("simple dome")) {
+              tsd::io::generate_hdri_dome(scene, menuNode);
+              clearSelectedNode = true;
+            }
+
+            if (ImGui::MenuItem("test image")) {
+              tsd::io::generate_hdri_test_image(scene, menuNode);
+              clearSelectedNode = true;
+            }
+            ImGui::EndMenu(); // "hdri"
+          }
+
+          ImGui::EndMenu(); // "light"
+        }
+
+        if (ImGui::BeginMenu("surface")) {
+          tsd::core::GeometryRef g;
+#define OBJECT_UI_MENU_ITEM(text, subtype)                                     \
+  if (ImGui::MenuItem(text)) {                                                 \
+    g = scene.createObject<tsd::core::Geometry>(                               \
+        tsd::core::tokens::geometry::subtype);                                 \
+  }
+          OBJECT_UI_MENU_ITEM("cone", cone);
+          OBJECT_UI_MENU_ITEM("curve", curve);
+          OBJECT_UI_MENU_ITEM("cylinder", cylinder);
+          OBJECT_UI_MENU_ITEM("isosurface", isosurface);
+          OBJECT_UI_MENU_ITEM("neural", neural);
+          OBJECT_UI_MENU_ITEM("quad", quad);
+          OBJECT_UI_MENU_ITEM("sphere", sphere);
+          OBJECT_UI_MENU_ITEM("triangle", triangle);
+#undef OBJECT_UI_MENU_ITEM
+          if (g) {
+            auto s = scene.createSurface("", g, scene.defaultMaterial());
+            scene.insertChildObjectNode(menuNode, s, "surface");
+            clearSelectedNode = true;
+          }
+
+          ImGui::EndMenu(); // "surface"
+        }
+
+        ImGui::EndMenu(); // "new object"
+      }
 
       if (ImGui::BeginMenu("existing object")) {
 #define OBJECT_UI_MENU_ITEM(text, type)                                        \
   if (scene.numberOfObjects(type) > 0 && ImGui::BeginMenu(text)) {             \
-    if (auto i = tsd::ui::buildUI_objects_menulist(scene, type);               \
+    auto t = type;                                                             \
+    if (auto i = tsd::ui::buildUI_objects_menulist(scene, t);                  \
         i != TSD_INVALID_INDEX)                                                \
-      scene.insertChildObjectNode(menuNode, type, i);                          \
+      scene.insertChildObjectNode(menuNode, t, i);                             \
     ImGui::EndMenu();                                                          \
   }
+        OBJECT_UI_MENU_ITEM("light", ANARI_LIGHT);
         OBJECT_UI_MENU_ITEM("surface", ANARI_SURFACE);
         OBJECT_UI_MENU_ITEM("volume", ANARI_VOLUME);
-        OBJECT_UI_MENU_ITEM("light", ANARI_LIGHT);
         ImGui::EndMenu();
       }
+
+      ImGui::Separator();
+
+      if (ImGui::MenuItem("import..."))
+        appCore()->windows.importDialog->show();
 
       ImGui::Separator();
 
@@ -322,50 +437,6 @@ void LayerTree::buildUI_objectSceneMenu()
         if (ImGui::MenuItem("noise volume")) {
           tsd::io::generate_noiseVolume(scene, menuNode);
           clearSelectedNode = true;
-        }
-
-        ImGui::EndMenu();
-      }
-
-      ImGui::Separator();
-
-      if (ImGui::BeginMenu("light")) {
-        if (ImGui::MenuItem("directional")) {
-          scene.insertNewChildObjectNode<tsd::core::Light>(menuNode,
-              tsd::core::tokens::light::directional,
-              "directional light");
-          clearSelectedNode = true;
-        }
-
-        if (ImGui::MenuItem("point")) {
-          scene.insertNewChildObjectNode<tsd::core::Light>(
-              menuNode, tsd::core::tokens::light::point, "point light");
-          clearSelectedNode = true;
-        }
-
-        if (ImGui::MenuItem("quad")) {
-          scene.insertNewChildObjectNode<tsd::core::Light>(
-              menuNode, tsd::core::tokens::light::quad, "quad light");
-          clearSelectedNode = true;
-        }
-
-        if (ImGui::MenuItem("spot")) {
-          scene.insertNewChildObjectNode<tsd::core::Light>(
-              menuNode, tsd::core::tokens::light::spot, "spot light");
-          clearSelectedNode = true;
-        }
-
-        if (ImGui::BeginMenu("hdri")) {
-          if (ImGui::MenuItem("simple dome")) {
-            tsd::io::generate_hdri_dome(scene, menuNode);
-            clearSelectedNode = true;
-          }
-
-          if (ImGui::MenuItem("test image")) {
-            tsd::io::generate_hdri_test_image(scene, menuNode);
-            clearSelectedNode = true;
-          }
-          ImGui::EndMenu();
         }
 
         ImGui::EndMenu();

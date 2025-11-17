@@ -12,44 +12,41 @@ Sampler::Sampler(Token subtype) : Object(ANARI_SAMPLER, subtype)
       || subtype == tokens::sampler::image1D
       || subtype == tokens::sampler::image2D
       || subtype == tokens::sampler::image3D) {
-    addParameter("inAttribute")
-        .setValue("attribute0")
-        .setStringValues(
-            {"attribute0", "attribute1", "attribute2", "attribute3", "color"});
+    addParameter("inAttribute").setToAttribute();
     addParameter("filter").setValue("linear").setStringValues(
         {"linear", "nearest"});
     if (subtype == tokens::sampler::image1D) {
       addParameter("wrapMode")
           .setValue("clampToEdge")
-          .setStringValues({"clampToEdge", "repeat", "mirrorRepeat"});
+          .setStringValues({"clampToEdge", "clampToBorder", "repeat", "mirrorRepeat"});
     } else if (subtype == tokens::sampler::compressedImage2D
         || subtype == tokens::sampler::image2D) {
       addParameter("wrapMode1")
           .setValue("clampToEdge")
-          .setStringValues({"clampToEdge", "repeat", "mirrorRepeat"});
+          .setStringValues({"clampToEdge", "clampToBorder", "repeat", "mirrorRepeat"});
       addParameter("wrapMode2")
           .setValue("clampToEdge")
-          .setStringValues({"clampToEdge", "repeat", "mirrorRepeat"});
+          .setStringValues({"clampToEdge", "clampToBorder", "repeat", "mirrorRepeat"});
     } else if (subtype == tokens::sampler::image3D) {
       addParameter("wrapMode1")
           .setValue("clampToEdge")
-          .setStringValues({"clampToEdge", "repeat", "mirrorRepeat"});
+          .setStringValues({"clampToEdge", "clampToBorder", "repeat", "mirrorRepeat"});
       addParameter("wrapMode2")
           .setValue("clampToEdge")
-          .setStringValues({"clampToEdge", "repeat", "mirrorRepeat"});
+          .setStringValues({"clampToEdge", "clampToBorder", "repeat", "mirrorRepeat"});
       addParameter("wrapMode3")
           .setValue("clampToEdge")
-          .setStringValues({"clampToEdge", "repeat", "mirrorRepeat"});
+          .setStringValues({"clampToEdge", "clampToBorder", "repeat", "mirrorRepeat"});
     }
+
+    addParameter("borderColor").setValue(float4(0.f)).setUsage(ParameterUsageHint::COLOR);
     addParameter("inTransform").setValue(math::scaling_matrix(float3(1.f)));
     addParameter("inOffset").setValue(float4(0.f));
     addParameter("outTransform").setValue(math::scaling_matrix(float3(1.f)));
     addParameter("outOffset").setValue(float4(0.f));
+    addParameter("image").setDescription("The image array to sample from");
   } else if (subtype == tokens::sampler::transform) {
-    addParameter("inAttribute")
-        .setValue("attribute0")
-        .setStringValues(
-            {"attribute0", "attribute1", "attribute2", "attribute3", "color"});
+    addParameter("inAttribute").setToAttribute();
     addParameter("outTransform").setValue(math::scaling_matrix(float3(1.f)));
     addParameter("outOffset").setValue(float4(0.f));
   }

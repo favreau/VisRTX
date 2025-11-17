@@ -56,7 +56,7 @@ Object::Object(Object &&o)
   m_index = std::move(o.m_index);
   m_updateDelegate = std::move(o.m_updateDelegate);
   m_metadata = std::move(o.m_metadata);
-  m_useCount = std::move(o.m_useCount);
+  m_useCounts = std::move(o.m_useCounts);
   for (auto &p : m_parameters)
     p.second.setObserver(this);
 }
@@ -73,7 +73,7 @@ Object &Object::operator=(Object &&o)
   m_index = std::move(o.m_index);
   m_updateDelegate = std::move(o.m_updateDelegate);
   m_metadata = std::move(o.m_metadata);
-  m_useCount = std::move(o.m_useCount);
+  m_useCounts = std::move(o.m_useCounts);
   for (auto &p : m_parameters)
     p.second.setObserver(this);
   return *this;
@@ -99,26 +99,80 @@ Scene *Object::scene() const
   return m_scene;
 }
 
-size_t Object::useCount() const
+size_t Object::totalUseCount() const
 {
-  return m_useCount;
+  return useCount(UseKind::APP) + useCount(UseKind::PARAMETER)
+      + useCount(UseKind::LAYER);
 }
 
-void Object::incUseCount()
+size_t Object::useCount(UseKind kind) const
 {
-  m_useCount++;
+  switch (kind) {
+  case UseKind::APP:
+    return m_useCounts.app;
+  case UseKind::PARAMETER:
+    return m_useCounts.parameter;
+  case UseKind::LAYER:
+    return m_useCounts.layer;
+  }
+
+  logError("Object::UseCount() called with an unhandled UseKind");
+  return 0;
 }
 
-void Object::decUseCount()
+void Object::incUseCount(UseKind kind)
 {
-  if (m_useCount > 0)
-    m_useCount--;
+  switch (kind) {
+  case UseKind::APP:
+    m_useCounts.app++;
+    break;
+  case UseKind::PARAMETER:
+    m_useCounts.parameter++;
+    break;
+  case UseKind::LAYER:
+    m_useCounts.layer++;
+    break;
+  }
+}
+
+void Object::decUseCount(UseKind kind)
+{
+  size_t *useCount = nullptr;
+  const char *typeStr = "UNKNOWN";
+  switch (kind) {
+  case UseKind::APP:
+    useCount = &m_useCounts.app;
+    typeStr = "APP";
+    break;
+  case UseKind::PARAMETER:
+    useCount = &m_useCounts.parameter;
+    typeStr = "PARAMETER";
+    break;
+  case UseKind::LAYER:
+    useCount = &m_useCounts.layer;
+    typeStr = "LAYER";
+    break;
+  }
+
+  if (*useCount > 0)
+    (*useCount)--;
   else {
     logError(
         "Object::decUseCount() called on object with zero use count on object"
-        " of type %s and name '%s'",
+        " of type %s and name '%s', with use kind of {%s}",
         anari::toString(type()),
-        name().c_str());
+        name().c_str(),
+        typeStr);
+  }
+
+  if (kind == UseKind::PARAMETER && *useCount == 0 && m_scene) {
+    // If parameter use count just went to zero, notify scene that this object's
+    // corresponding ANARI handle might be garbage-collectable now.
+    m_scene->signalObjectParameterUseCountZero(this);
+  } else if (kind == UseKind::LAYER && *useCount == 0 && m_scene) {
+    // If parameter use count just went to zero, notify scene that this object's
+    // corresponding ANARI handle might be garbage-collectable now.
+    m_scene->signalObjectLayerUseCountZero(this);
   }
 }
 
@@ -292,7 +346,7 @@ void Object::updateANARIParameter(anari::Device d,
   if (!o)
     return;
 
-  if (cache && !p.isEnabled()) {
+  if (!p.isEnabled()) {
     anari::unsetParameter(d, o, n);
   } else if (cache && p.value().holdsObject()) {
     auto objType = p.value().type();
@@ -335,7 +389,7 @@ void Object::parameterChanged(const Parameter *p, const Any &oldValue)
 {
   if (m_scene) {
     if (auto *obj = m_scene->getObject(oldValue); obj != nullptr)
-      obj->decUseCount();
+      obj->decUseCount(UseKind::PARAMETER);
   }
   incObjectUseCountParameter(p);
   if (m_updateDelegate)
@@ -357,7 +411,7 @@ void Object::incObjectUseCountParameter(const Parameter *p)
   if (!m_scene)
     return;
   if (auto *obj = m_scene->getObject(p->value()))
-    obj->incUseCount();
+    obj->incUseCount(UseKind::PARAMETER);
 }
 
 void Object::decObjectUseCountParameter(const Parameter *p)
@@ -365,7 +419,7 @@ void Object::decObjectUseCountParameter(const Parameter *p)
   if (!m_scene)
     return;
   if (auto *obj = m_scene->getObject(p->value()))
-    obj->decUseCount();
+    obj->decUseCount(UseKind::PARAMETER);
 }
 
 void Object::initMetadata() const

@@ -5,8 +5,13 @@
 #include "tsd/core/Logging.hpp"
 #include "tsd/io/importers.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
+#include "tsd/io/importers/import_AURORA.hpp"
+#include "tsd/io/importers/import_CLOUDS.hpp"
+#include "tsd/io/importers/import_MAGNETIC.hpp"
+#include "tsd/io/importers/import_PLANET.hpp"
 // std
 #include <cstdio>
+#include <filesystem>
 
 namespace tsd::io {
 
@@ -53,9 +58,38 @@ VolumeRef import_volume(Scene &scene,
     return {};
   }
 
+  // Try to load colormap from transfer function if not provided
   if (!colorArray) {
-    colorArray = scene.createArray(ANARI_FLOAT32_VEC4, 256);
-    colorArray->setData(makeDefaultColorMap(colorArray->size()).data());
+    std::string tfName;
+
+    // Get transfer function name based on file type
+    if (ext == ".clouds")
+      tfName = getTransferFunctionName_CLOUDS(filepath);
+    else if (ext == ".planet")
+      tfName = getTransferFunctionName_PLANET(filepath);
+    else if (ext == ".magnetic")
+      tfName = getTransferFunctionName_MAGNETIC(filepath);
+    else if (ext == ".aurora")
+      tfName = getTransferFunctionName_AURORA(filepath);
+
+    // Try to load the transfer function
+    if (!tfName.empty()) {
+      const auto basePath =
+          std::filesystem::path(filepath).parent_path().string();
+      auto tfData = loadTransferFunction(tfName, basePath);
+      if (tfData.loaded) {
+        colorArray = createColormapArray(scene, tfData);
+        logInfo("[import_volume] Loaded colormap '%s' for '%s'",
+            tfName.c_str(),
+            file.c_str());
+      }
+    }
+
+    // Fall back to default colormap if transfer function not found
+    if (!colorArray) {
+      colorArray = scene.createArray(ANARI_FLOAT32_VEC4, 256);
+      colorArray->setData(makeDefaultColorMap(colorArray->size()).data());
+    }
   }
 
   float2 valueRange{0.f, 1.f};

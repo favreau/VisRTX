@@ -12,8 +12,10 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "tsd/app/TaskQueue.h"
+#include "tsd/app/renderAnimationSequence.h"
 
 namespace tsd::ui::imgui {
 struct BlockingTaskModal;
@@ -25,37 +27,56 @@ namespace tsd::app {
 struct Core;
 
 using CameraPose = tsd::rendering::CameraPose;
+using DeviceInitParam = std::pair<std::string, tsd::core::Any>;
 
 enum class ImporterType
 {
-  ASSIMP = 0,
+  AGX,
+  ASSIMP,
   ASSIMP_FLAT,
+  AXYZ,
   DLAF,
   E57XYZ,
-  NBODY,
-  PLY,
-  OBJ,
-  USD,
-  HDRI,
-  VOLUME,
-  SWC,
-  PDB,
-  XYZDP,
-  HSMESH,
-  NEURAL,
-  TSD,
   GLTF,
-  AXYZ, // only valid for time series demo app
+  HDRI,
+  HSMESH,
+  NBODY,
+  OBJ,
+  PDB,
+  PLY,
+  POINTSBIN_MULTIFILE,
+  PT,
+  SMESH,
+  SMESH_ANIMATION, // time series version
+  SWC,
+  TRK,
+  USD,
+  XYZDP,
+  VOLUME,
+  PLANET,
+  AURORA,
+  CLOUDS,
+  MAGNETIC,
+  TSD,
   NONE
 };
+
+using ImportFile = std::pair<ImporterType, std::string>;
+using ImportAnimationFiles = std::pair<ImporterType, std::vector<std::string>>;
 
 struct CommandLineOptions
 {
   bool useDefaultLayout{true};
+  bool useDefaultRenderer{true};
   bool loadingScene{false};
   bool preloadDevices{false};
   bool loadedFromStateFile{false};
-  std::vector<std::pair<ImporterType, std::string>> filenames;
+  std::string stateFile;
+  std::string currentLayerName{"default"};
+  std::vector<ImportFile> filenames;
+  std::vector<ImportAnimationFiles> animationFilenames;
+  std::vector<tsd::core::Token> animationLayerNames;
+  ImportAnimationFiles *currentAnimationSequence{nullptr};
   ImporterType importerType{ImporterType::NONE};
   std::vector<std::string> libraryList;
   std::string secondaryViewportLibrary;
@@ -73,7 +94,9 @@ struct ANARIDeviceManager
 {
   ANARIDeviceManager(Core *core);
 
-  anari::Device loadDevice(const std::string &libName);
+  anari::Device loadDevice(const std::string &libName,
+      const std::vector<DeviceInitParam> &initialDeviceParams = {});
+
   const anari::Extensions *loadDeviceExtensions(const std::string &libName);
   tsd::rendering::RenderIndex *acquireRenderIndex(
       tsd::core::Scene &c, anari::Device device);
@@ -131,12 +154,14 @@ struct OfflineRenderSequenceConfig
     uint32_t height{768};
     anari::DataType colorFormat{ANARI_UFIXED8_RGBA_SRGB};
     uint32_t samples{128};
+    int numFrames{1};
   } frame;
 
   struct CameraSettings
   {
     float apertureRadius{0.f};
     float focusDistance{1.f};
+    size_t cameraIndex{TSD_INVALID_INDEX};
   } camera;
 
   struct RenderSettings
@@ -145,6 +170,12 @@ struct OfflineRenderSequenceConfig
     int activeRenderer{-1};
     std::string libraryName;
   } renderer;
+
+  struct OutputSettings
+  {
+    std::string outputDirectory{"./"};
+    std::string filePrefix{"frame_"};
+  } output;
 
   void saveSettings(tsd::core::DataNode &root);
   void loadSettings(tsd::core::DataNode &root);
@@ -183,10 +214,16 @@ struct Core
 
   void parseCommandLine(int argc, const char **argv);
   void setupSceneFromCommandLine(bool hdriOnly = false);
+  void importFile(const ImportFile &file, tsd::core::LayerNodeRef root = {});
+  void importFiles(
+      const std::vector<ImportFile> &files, tsd::core::LayerNodeRef root = {});
+  void importAnimations(const std::vector<ImportAnimationFiles> &files,
+      tsd::core::LayerNodeRef root = {});
 
-  // ANARI device management //
+  // Offline rendering //
 
   void setOfflineRenderingLibrary(const std::string &libName);
+  void renderOfflineAnimationSequence(RenderSequenceCallback cb = {});
 
   // Selection //
 

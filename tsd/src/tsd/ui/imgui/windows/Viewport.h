@@ -9,15 +9,21 @@
 // tsd_core
 #include "tsd/core/scene/Object.hpp"
 #include "tsd/core/scene/UpdateDelegate.hpp"
+#include "tsd/core/scene/objects/Camera.hpp"
+
 // tsd_rendering
 #include "tsd/rendering/index/RenderIndex.hpp"
 #include "tsd/rendering/pipeline/RenderPipeline.h"
 #include "tsd/rendering/view/Manipulator.hpp"
+#include "tsd/rendering/view/CameraUpdateDelegate.hpp"
 // std
 #include <array>
 #include <functional>
 #include <future>
 #include <limits>
+#include <memory>
+#include <vector>
+#include <string>
 
 namespace tsd::ui::imgui {
 
@@ -39,6 +45,10 @@ struct Viewport : public Window
   void setExternalInstances(
       const anari::Instance *instances = nullptr, size_t count = 0);
 
+  void setDatabaseCamera(tsd::core::CameraRef cam);
+  void clearDatabaseCamera();
+  void createCameraFromCurrentView();
+
  private:
   void saveSettings(tsd::core::DataNode &thisWindowRoot) override;
   void loadSettings(tsd::core::DataNode &thisWindowRoot) override;
@@ -55,6 +65,8 @@ struct Viewport : public Window
   void updateFrame();
   void updateCamera(bool force = false);
   void updateImage();
+
+  void applyCameraParameters(tsd::core::Camera *cam);
 
   void echoCameraConfig();
   void ui_menubar();
@@ -77,9 +89,7 @@ struct Viewport : public Window
   bool m_mouseRotating{false};
   bool m_manipulating{false};
   bool m_frameCancelled{false};
-  bool m_saveNextFrame{false};
   bool m_echoCameraConfig{false};
-  int m_screenshotIndex{0};
 
   bool m_showOverlay{true};
   bool m_showCameraInfo{false};
@@ -122,7 +132,7 @@ struct Viewport : public Window
     anari::Renderer r{nullptr};
   } m_rud;
 
-  // camera manipulator
+  // Camera manipulator //
 
   int m_arcballUp{1};
   tsd::rendering::Manipulator m_localArcball;
@@ -131,7 +141,13 @@ struct Viewport : public Window
   float m_apertureRadius{0.f};
   float m_focusDistance{1.f};
 
-  // display
+  // Database camera state //
+
+  tsd::core::CameraRef m_selectedCamera;
+  std::unique_ptr<tsd::core::CameraUpdateDelegate> m_cameraDelegate;
+  std::vector<tsd::core::CameraRef> m_menuCameraRefs;
+
+  // Display //
 
   tsd::rendering::RenderPipeline m_pipeline;
   tsd::rendering::AnariSceneRenderPass *m_anariPass{nullptr};
@@ -140,6 +156,7 @@ struct Viewport : public Window
   tsd::rendering::OutlineRenderPass *m_outlinePass{nullptr};
   tsd::rendering::AnariAxesRenderPass *m_axesPass{nullptr};
   tsd::rendering::CopyToSDLTexturePass *m_outputPass{nullptr};
+  tsd::rendering::SaveToFilePass *m_saveToFilePass{nullptr};
 
   tsd::math::int2 m_viewportSize{0, 0};
   tsd::math::int2 m_renderSize{0, 0};

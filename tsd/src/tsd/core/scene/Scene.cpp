@@ -3,6 +3,7 @@
 
 #include "tsd/core/scene/Scene.hpp"
 #include "tsd/core/Logging.hpp"
+#include "tsd/core/scene/ObjectUsePtr.hpp"
 // std
 #include <sstream>
 
@@ -18,7 +19,8 @@ std::string objectDBInfo(const ObjectDatabase &db)
   ss << "    samplers: " << db.sampler.size() << '\n';
   ss << "     volumes: " << db.volume.size() << '\n';
   ss << "      fields: " << db.field.size() << '\n';
-  ss << "      lights: " << db.light.size();
+  ss << "      lights: " << db.light.size() << '\n';
+  ss << "     cameras: " << db.camera.size();
   return ss.str();
 }
 
@@ -26,17 +28,18 @@ std::string objectDBInfo(const ObjectDatabase &db)
 
 Scene::Scene()
 {
-  addLayer("default");
   createObject<Material>(tokens::material::matte)->setName("default_material");
 }
 
 Scene::~Scene()
 {
+  m_updateDelegate = nullptr;
   m_layers.clear();
+  m_animations.objects.clear();
 
   auto reportObjectUsages = [&](auto &array) {
     foreach_item_const(array, [&](auto *o) {
-      if (!o || o->useCount() == 0)
+      if (!o || o->totalUseCount() == 0)
         return;
 
       if (o->type() == ANARI_MATERIAL && o->index() == 0)
@@ -48,7 +51,7 @@ Scene::~Scene()
           anari::toString(o->type()),
           o->index(),
           o->name().c_str(),
-          o->useCount());
+          o->totalUseCount());
     });
     array.clear();
   };
@@ -61,6 +64,7 @@ Scene::~Scene()
   reportObjectUsages(m_db.sampler);
   reportObjectUsages(m_db.field);
   reportObjectUsages(m_db.array);
+  reportObjectUsages(m_db.camera);
 }
 
 MaterialRef Scene::defaultMaterial() const
@@ -68,8 +72,10 @@ MaterialRef Scene::defaultMaterial() const
   return getObject<Material>(0);
 }
 
-Layer *Scene::defaultLayer() const
+Layer *Scene::defaultLayer()
 {
+  if (m_layers.empty())
+    addLayer("default");
   return layer(0);
 }
 
@@ -125,6 +131,9 @@ Object *Scene::getObject(ANARIDataType type, size_t i) const
   case ANARI_LIGHT:
     obj = m_db.light.at(i).data();
     break;
+  case ANARI_CAMERA:
+    obj = m_db.camera.at(i).data();
+    break;
   case ANARI_ARRAY:
   case ANARI_ARRAY1D:
   case ANARI_ARRAY2D:
@@ -163,6 +172,9 @@ size_t Scene::numberOfObjects(anari::DataType type) const
     break;
   case ANARI_LIGHT:
     numObjects = m_db.light.capacity();
+    break;
+  case ANARI_CAMERA:
+    numObjects = m_db.camera.capacity();
     break;
   case ANARI_ARRAY:
   case ANARI_ARRAY1D:
@@ -218,6 +230,9 @@ void Scene::removeObject(const Object *_o)
   case ANARI_LIGHT:
     m_db.light.erase(index);
     break;
+  case ANARI_CAMERA:
+    m_db.camera.erase(index);
+    break;
   case ANARI_ARRAY:
   case ANARI_ARRAY1D:
   case ANARI_ARRAY2D:
@@ -234,8 +249,7 @@ void Scene::removeAllObjects()
   if (m_updateDelegate)
     m_updateDelegate->signalRemoveAllObjects();
 
-  removeAllSecondaryLayers();
-  defaultLayer()->root()->erase_subtree();
+  removeAllLayers();
 
   m_db.array.clear();
   m_db.surface.clear();
@@ -245,6 +259,7 @@ void Scene::removeAllObjects()
   m_db.volume.clear();
   m_db.field.clear();
   m_db.light.clear();
+  m_db.camera.clear();
 }
 
 BaseUpdateDelegate *Scene::updateDelegate() const
@@ -271,6 +286,7 @@ void Scene::setUpdateDelegate(BaseUpdateDelegate *ud)
   setDelegateOnObjects(m_db.sampler);
   setDelegateOnObjects(m_db.volume);
   setDelegateOnObjects(m_db.field);
+  setDelegateOnObjects(m_db.camera);
 }
 
 const ObjectDatabase &Scene::objectDB() const
@@ -302,11 +318,12 @@ Layer *Scene::layer(size_t i) const
 Layer *Scene::addLayer(Token name)
 {
   auto &ls = m_layers[name];
-  if (!ls.ptr)
+  if (!ls.ptr) {
     ls.ptr.reset(new Layer({tsd::math::mat4(tsd::math::identity), "root"}));
-  if (m_updateDelegate)
-    m_updateDelegate->signalLayerAdded(ls.ptr.get());
-  m_numActiveLayers++;
+    if (m_updateDelegate)
+      m_updateDelegate->signalLayerAdded(ls.ptr.get());
+    m_numActiveLayers++;
+  }
   return ls.ptr.get();
 }
 
@@ -452,18 +469,99 @@ void Scene::signalActiveLayersChanged()
     m_updateDelegate->signalActiveLayersChanged();
 }
 
+void Scene::signalObjectParameterUseCountZero(const Object *obj)
+{
+  if (m_updateDelegate)
+    m_updateDelegate->signalObjectParameterUseCountZero(obj);
+}
+
+void Scene::signalObjectLayerUseCountZero(const Object *obj)
+{
+  if (m_updateDelegate)
+    m_updateDelegate->signalObjectLayerUseCountZero(obj);
+}
+
+Animation *Scene::addAnimation(const char *name)
+{
+  auto anim = std::unique_ptr<Animation>(new Animation(this, name));
+  auto *retval = anim.get();
+  m_animations.objects.push_back(std::move(anim));
+  return retval;
+}
+
+size_t Scene::numberOfAnimations() const
+{
+  return m_animations.objects.size();
+}
+
+Animation *Scene::animation(size_t i) const
+{
+  if (i < m_animations.objects.size())
+    return m_animations.objects[i].get();
+  return nullptr;
+}
+
+void Scene::removeAnimation(Animation *a)
+{
+  auto itr = std::find_if(m_animations.objects.begin(),
+      m_animations.objects.end(),
+      [&](auto &anim) { return anim.get() == a; });
+  if (itr != m_animations.objects.end())
+    m_animations.objects.erase(itr);
+}
+
+void Scene::removeAllAnimations()
+{
+  m_animations.objects.clear();
+}
+
+void Scene::setAnimationTime(float time)
+{
+  m_animations.time = time;
+  for (auto &a : m_animations.objects)
+    a->update(time);
+}
+
+float Scene::getAnimationTime() const
+{
+  return m_animations.time;
+}
+
+void Scene::setAnimationIncrement(float increment)
+{
+  m_animations.incrementSize = increment;
+  if (increment > 0.5f) {
+    logWarning(
+        "[scene] setting animation increment > 0.5 will cause odd"
+        " animation behavior.");
+  }
+}
+
+float Scene::getAnimationIncrement() const
+{
+  return m_animations.incrementSize;
+}
+
+void Scene::incrementAnimationTime()
+{
+  auto newTime = m_animations.time + m_animations.incrementSize;
+  if (newTime > 1.f)
+    newTime = 0.f;
+  setAnimationTime(newTime);
+}
+
 void Scene::removeUnusedObjects()
 {
   tsd::core::logStatus("Removing unused context objects");
 
   // Always keep around the default material //
-  ObjectUsePtr defaultMat = getObject<Material>(0).data();
+  ObjectUsePtr<Material> defaultMat = getObject<Material>(0).data();
 
   auto removeUnused = [&](auto &array) {
     foreach_item_ref(array, [&](auto ref) {
       if (!ref)
         return;
-      if (auto *obj = ref.data(); obj && obj->useCount() == 0)
+      if (auto *obj = ref.data(); obj && obj->totalUseCount() == 0)
         removeObject(ref.data());
     });
   };
@@ -494,6 +592,7 @@ void Scene::defragmentObjectStorage()
   defrag |= defragmentations[ANARI_VOLUME] = m_db.volume.defragment();
   defrag |= defragmentations[ANARI_SPATIAL_FIELD] = m_db.field.defragment();
   defrag |= defragmentations[ANARI_LIGHT] = m_db.light.defragment();
+  defrag |= defragmentations[ANARI_CAMERA] = m_db.camera.defragment();
 
   if (!defrag) {
     tsd::core::logStatus("No defragmentation needed");
@@ -530,6 +629,8 @@ void Scene::defragmentObjectStorage()
       return findIdx(m_db.field, idx);
     case ANARI_LIGHT:
       return findIdx(m_db.light, idx);
+    case ANARI_CAMERA:
+      return findIdx(m_db.camera, idx);
     case ANARI_ARRAY:
     case ANARI_ARRAY1D:
     case ANARI_ARRAY2D:
@@ -636,14 +737,14 @@ void Scene::cleanupScene()
   defragmentObjectStorage();
 }
 
-void Scene::removeAllSecondaryLayers()
+void Scene::removeAllLayers()
 {
-  for (auto itr = m_layers.begin() + 1; itr != m_layers.end(); itr++) {
+  for (auto itr = m_layers.begin(); itr != m_layers.end(); itr++) {
     if (m_updateDelegate)
       m_updateDelegate->signalLayerRemoved(itr->second.ptr.get());
   }
 
-  m_layers.shrink(1);
+  m_layers.clear();
 }
 
 ArrayRef Scene::createArrayImpl(anari::DataType type,
