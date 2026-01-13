@@ -6,6 +6,7 @@
 #include "passes/AnariAxesRenderPass.h"
 #include "passes/AnariSceneRenderPass.h"
 #include "passes/ClearBuffersPass.h"
+#include "passes/CosmosVisualizePass.h"
 #if ENABLE_SDL
 #include "passes/CopyToSDLTexturePass.h"
 #endif

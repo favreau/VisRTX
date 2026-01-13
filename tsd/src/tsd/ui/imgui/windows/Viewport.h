@@ -15,8 +15,8 @@
 // tsd_rendering
 #include "tsd/rendering/index/RenderIndex.hpp"
 #include "tsd/rendering/pipeline/RenderPipeline.h"
-#include "tsd/rendering/view/Manipulator.hpp"
 #include "tsd/rendering/view/CameraUpdateDelegate.hpp"
+#include "tsd/rendering/view/Manipulator.hpp"
 
 // ImGuizmo
 #include <ImGuizmo.h>
@@ -27,8 +27,8 @@
 #include <future>
 #include <limits>
 #include <memory>
-#include <vector>
 #include <string>
+#include <vector>
 
 namespace tsd::ui::imgui {
 
@@ -81,6 +81,7 @@ struct Viewport : public Window
   void ui_overlay();
   void ui_gizmo();
   bool canShowGizmo() const;
+  std::string generateCosmosConfig() const;
 
   int windowFlags() const override; // anari_viewer::Window
 
@@ -106,9 +107,14 @@ struct Viewport : public Window
   int m_frameSamples{0};
 
   tsd::rendering::AOVType m_visualizeAOV{tsd::rendering::AOVType::NONE};
+  tsd::rendering::CosmosMode m_cosmosMode{tsd::rendering::CosmosMode::NONE};
   bool m_showAxes{true};
   float m_depthVisualMinimum{0.f};
   float m_depthVisualMaximum{1.f};
+  float m_cosmosDepthMinimum{0.f};
+  float m_cosmosDepthMaximum{1.f};
+  float m_cosmosEdgeThreshold{0.1f};
+  bool m_cosmosInvertEdges{false};
 
   float m_fov{40.f};
 
@@ -168,6 +174,7 @@ struct Viewport : public Window
   tsd::rendering::AnariSceneRenderPass *m_anariPass{nullptr};
   tsd::rendering::PickPass *m_pickPass{nullptr};
   tsd::rendering::VisualizeAOVPass *m_visualizeAOVPass{nullptr};
+  tsd::rendering::CosmosVisualizePass *m_cosmosPass{nullptr};
   tsd::rendering::OutlineRenderPass *m_outlinePass{nullptr};
   tsd::rendering::AnariAxesRenderPass *m_axesPass{nullptr};
   tsd::rendering::CopyToSDLTexturePass *m_outputPass{nullptr};

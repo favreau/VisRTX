@@ -16,8 +16,10 @@
 
 // std
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -270,6 +272,11 @@ void Viewport::saveSettings(tsd::core::DataNode &root)
   root["visualizeAOV"] = static_cast<int>(m_visualizeAOV);
   root["depthVisualMinimum"] = m_depthVisualMinimum;
   root["depthVisualMaximum"] = m_depthVisualMaximum;
+  root["cosmosMode"] = static_cast<int>(m_cosmosMode);
+  root["cosmosDepthMinimum"] = m_cosmosDepthMinimum;
+  root["cosmosDepthMaximum"] = m_cosmosDepthMaximum;
+  root["cosmosEdgeThreshold"] = m_cosmosEdgeThreshold;
+  root["cosmosInvertEdges"] = m_cosmosInvertEdges;
   root["fov"] = m_fov;
   root["resolutionScale"] = m_resolutionScale;
   root["showAxes"] = m_showAxes;
@@ -326,6 +333,13 @@ void Viewport::loadSettings(tsd::core::DataNode &root)
   m_visualizeAOV = static_cast<tsd::rendering::AOVType>(aovType);
   root["depthVisualMinimum"].getValue(ANARI_FLOAT32, &m_depthVisualMinimum);
   root["depthVisualMaximum"].getValue(ANARI_FLOAT32, &m_depthVisualMaximum);
+  int cosmosMode = static_cast<int>(m_cosmosMode);
+  root["cosmosMode"].getValue(ANARI_INT32, &cosmosMode);
+  m_cosmosMode = static_cast<tsd::rendering::CosmosMode>(cosmosMode);
+  root["cosmosDepthMinimum"].getValue(ANARI_FLOAT32, &m_cosmosDepthMinimum);
+  root["cosmosDepthMaximum"].getValue(ANARI_FLOAT32, &m_cosmosDepthMaximum);
+  root["cosmosEdgeThreshold"].getValue(ANARI_FLOAT32, &m_cosmosEdgeThreshold);
+  root["cosmosInvertEdges"].getValue(ANARI_BOOL, &m_cosmosInvertEdges);
   root["fov"].getValue(ANARI_FLOAT32, &m_fov);
   root["resolutionScale"].getValue(ANARI_FLOAT32, &m_resolutionScale);
   root["showAxes"].getValue(ANARI_BOOL, &m_showAxes);
@@ -521,6 +535,9 @@ void Viewport::setupRenderPipeline()
   m_visualizeAOVPass =
       m_pipeline.emplace_back<tsd::rendering::VisualizeAOVPass>();
   m_visualizeAOVPass->setEnabled(false);
+
+  m_cosmosPass = m_pipeline.emplace_back<tsd::rendering::CosmosVisualizePass>();
+  m_cosmosPass->setEnabled(false);
 
   m_outlinePass = m_pipeline.emplace_back<tsd::rendering::OutlineRenderPass>();
 
@@ -1225,6 +1242,95 @@ void Viewport::ui_menubar()
       ImGui::EndMenu();
     }
 
+    // Cosmos //
+
+    if (ImGui::BeginMenu("Cosmos")) {
+      ImGui::Text("Visualization Mode:");
+      ImGui::Indent(INDENT_AMOUNT);
+
+      const char *cosmosItems[] = {"none", "depth", "edges"};
+      if (int cosmosMode = int(m_cosmosMode); ImGui::Combo(
+              "mode", &cosmosMode, cosmosItems, IM_ARRAYSIZE(cosmosItems))) {
+        if (cosmosMode != int(m_cosmosMode)) {
+          m_cosmosMode = static_cast<tsd::rendering::CosmosMode>(cosmosMode);
+          m_cosmosPass->setCosmosMode(m_cosmosMode);
+
+          // Disable AOV when cosmos is active
+          if (m_cosmosMode != tsd::rendering::CosmosMode::NONE) {
+            m_visualizeAOV = tsd::rendering::AOVType::NONE;
+            m_visualizeAOVPass->setEnabled(false);
+          }
+        }
+      }
+      ImGui::Unindent(INDENT_AMOUNT);
+
+      ImGui::Separator();
+
+      // Depth mode settings
+      ImGui::BeginDisabled(m_cosmosMode != tsd::rendering::CosmosMode::DEPTH);
+      ImGui::Text("Depth Settings:");
+      ImGui::Indent(INDENT_AMOUNT);
+      bool depthRangeChanged = false;
+      depthRangeChanged |= ImGui::DragFloat("depth minimum",
+          &m_cosmosDepthMinimum,
+          0.1f,
+          0.f,
+          m_cosmosDepthMaximum);
+      depthRangeChanged |= ImGui::DragFloat("depth maximum",
+          &m_cosmosDepthMaximum,
+          0.1f,
+          m_cosmosDepthMinimum,
+          1e20f);
+      if (depthRangeChanged)
+        m_cosmosPass->setDepthRange(m_cosmosDepthMinimum, m_cosmosDepthMaximum);
+      ImGui::Unindent(INDENT_AMOUNT);
+      ImGui::EndDisabled();
+
+      ImGui::Separator();
+
+      // Edge detection settings
+      ImGui::BeginDisabled(m_cosmosMode != tsd::rendering::CosmosMode::EDGES);
+      ImGui::Text("Edge Detection Settings:");
+      ImGui::Indent(INDENT_AMOUNT);
+      if (ImGui::SliderFloat("edge threshold",
+              &m_cosmosEdgeThreshold,
+              0.001f,
+              1000.0f,
+              "%.3f",
+              ImGuiSliderFlags_Logarithmic)) {
+        m_cosmosPass->setEdgeThreshold(m_cosmosEdgeThreshold);
+      }
+      if (ImGui::Checkbox("invert edges", &m_cosmosInvertEdges)) {
+        m_cosmosPass->setInvertEdges(m_cosmosInvertEdges);
+      }
+      ImGui::Unindent(INDENT_AMOUNT);
+      ImGui::EndDisabled();
+
+      ImGui::Separator();
+
+      // Export cosmos configuration
+      if (ImGui::MenuItem("Export Cosmos Config...")) {
+        // Generate cosmos configuration JSON
+        std::string cosmosConfig = generateCosmosConfig();
+
+        // Save to file
+        std::filesystem::path configPath =
+            std::filesystem::current_path() / "cosmos_config.json";
+        std::ofstream configFile(configPath);
+        if (configFile.is_open()) {
+          configFile << cosmosConfig;
+          configFile.close();
+          tsd::core::logStatus(
+              "[viewport] Saved Cosmos config to: %s", configPath.c_str());
+        } else {
+          tsd::core::logError("[viewport] Failed to save Cosmos config to: %s",
+              configPath.c_str());
+        }
+      }
+
+      ImGui::EndMenu();
+    }
+
     ImGui::EndDisabled();
 
     ImGui::EndMenuBar();
@@ -1577,6 +1683,70 @@ void Viewport::RendererUpdateDelegate::signalParameterUpdated(
     o->updateANARIParameter(d, r, *p, p->name().c_str());
     anari::commitParameters(d, r);
   }
+}
+
+std::string Viewport::generateCosmosConfig() const
+{
+  // Create JSON configuration for Cosmos extension
+  std::stringstream json;
+  json << "{\n";
+  json
+      << "  \"description\": \"Cosmos configuration exported from tsdViewer\",\n";
+  json << "  \"temp_folder\": \"/tmp/cosmos_frames\",\n";
+  json << "  \"frame_size\": {\n";
+  json << "    \"width\": " << m_viewportSize.x << ",\n";
+  json << "    \"height\": " << m_viewportSize.y << "\n";
+  json << "  },\n";
+  json << "  \"frame_range\": {\n";
+  json << "    \"start\": 0,\n";
+  json << "    \"end\": 60\n";
+  json << "  },\n";
+  json << "  \"control_strengths\": {\n";
+
+  // Map cosmos modes to control strengths
+  // Normalize edge threshold to 0-7 range (log scale from 0.001-1000)
+  float edgeStrength = 0.0f;
+  if (m_cosmosMode == tsd::rendering::CosmosMode::EDGES) {
+    // Map log scale threshold (0.001-1000) to strength (0-7)
+    float logMin = std::log10(0.001f);
+    float logMax = std::log10(1000.0f);
+    float logValue = std::log10(std::max(0.001f, m_cosmosEdgeThreshold));
+    edgeStrength = ((logValue - logMin) / (logMax - logMin)) * 7.0f;
+    edgeStrength = std::clamp(edgeStrength, 0.0f, 7.0f);
+  }
+
+  // Depth strength defaults to 3 when active
+  float depthStrength =
+      (m_cosmosMode == tsd::rendering::CosmosMode::DEPTH) ? 3.0f : 0.0f;
+
+  json << "    \"depth\": " << depthStrength << ",\n";
+  json << "    \"edge\": " << edgeStrength << ",\n";
+  json << "    \"segmentation\": 0\n";
+  json << "  },\n";
+  json << "  \"cosmos_settings\": {\n";
+  json << "    \"depth_range\": {\n";
+  json << "      \"min\": " << m_cosmosDepthMinimum << ",\n";
+  json << "      \"max\": " << m_cosmosDepthMaximum << "\n";
+  json << "    },\n";
+  json << "    \"edge_threshold\": " << m_cosmosEdgeThreshold << ",\n";
+  json << "    \"edge_inverted\": " << (m_cosmosInvertEdges ? "true" : "false")
+       << "\n";
+  json << "  },\n";
+  json << "  \"prompt\": {\n";
+  json
+      << "    \"text\": \"A photorealistic, stunning, high-quality video with remarkable attention to detail\",\n";
+  json << "    \"strength\": 7\n";
+  json << "  },\n";
+  json << "  \"api_url\": \"https://your-cosmos-api-url-here/\",\n";
+  json << "  \"notes\": [\n";
+  json << "    \"Control strengths range from 0 to 7\",\n";
+  json << "    \"Prompt strength ranges from 0 to 10\",\n";
+  json << "    \"Set control strength to 0 to disable that control type\",\n";
+  json << "    \"Exported from tsdViewer viewport settings\"\n";
+  json << "  ]\n";
+  json << "}\n";
+
+  return json.str();
 }
 
 } // namespace tsd::ui::imgui
