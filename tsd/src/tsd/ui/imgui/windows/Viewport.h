@@ -81,7 +81,6 @@ struct Viewport : public Window
   void ui_overlay();
   void ui_gizmo();
   bool canShowGizmo() const;
-  std::string generateCosmosConfig() const;
 
   int windowFlags() const override; // anari_viewer::Window
 

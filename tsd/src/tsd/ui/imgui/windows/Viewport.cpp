@@ -16,10 +16,8 @@
 
 // std
 #include <chrono>
-#include <cmath>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -1306,28 +1304,6 @@ void Viewport::ui_menubar()
       ImGui::Unindent(INDENT_AMOUNT);
       ImGui::EndDisabled();
 
-      ImGui::Separator();
-
-      // Export cosmos configuration
-      if (ImGui::MenuItem("Export Cosmos Config...")) {
-        // Generate cosmos configuration JSON
-        std::string cosmosConfig = generateCosmosConfig();
-
-        // Save to file
-        std::filesystem::path configPath =
-            std::filesystem::current_path() / "cosmos_config.json";
-        std::ofstream configFile(configPath);
-        if (configFile.is_open()) {
-          configFile << cosmosConfig;
-          configFile.close();
-          tsd::core::logStatus(
-              "[viewport] Saved Cosmos config to: %s", configPath.c_str());
-        } else {
-          tsd::core::logError("[viewport] Failed to save Cosmos config to: %s",
-              configPath.c_str());
-        }
-      }
-
       ImGui::EndMenu();
     }
 
@@ -1683,70 +1659,6 @@ void Viewport::RendererUpdateDelegate::signalParameterUpdated(
     o->updateANARIParameter(d, r, *p, p->name().c_str());
     anari::commitParameters(d, r);
   }
-}
-
-std::string Viewport::generateCosmosConfig() const
-{
-  // Create JSON configuration for Cosmos extension
-  std::stringstream json;
-  json << "{\n";
-  json
-      << "  \"description\": \"Cosmos configuration exported from tsdViewer\",\n";
-  json << "  \"temp_folder\": \"/tmp/cosmos_frames\",\n";
-  json << "  \"frame_size\": {\n";
-  json << "    \"width\": " << m_viewportSize.x << ",\n";
-  json << "    \"height\": " << m_viewportSize.y << "\n";
-  json << "  },\n";
-  json << "  \"frame_range\": {\n";
-  json << "    \"start\": 0,\n";
-  json << "    \"end\": 60\n";
-  json << "  },\n";
-  json << "  \"control_strengths\": {\n";
-
-  // Map cosmos modes to control strengths
-  // Normalize edge threshold to 0-7 range (log scale from 0.001-1000)
-  float edgeStrength = 0.0f;
-  if (m_cosmosMode == tsd::rendering::CosmosMode::EDGES) {
-    // Map log scale threshold (0.001-1000) to strength (0-7)
-    float logMin = std::log10(0.001f);
-    float logMax = std::log10(1000.0f);
-    float logValue = std::log10(std::max(0.001f, m_cosmosEdgeThreshold));
-    edgeStrength = ((logValue - logMin) / (logMax - logMin)) * 7.0f;
-    edgeStrength = std::clamp(edgeStrength, 0.0f, 7.0f);
-  }
-
-  // Depth strength defaults to 3 when active
-  float depthStrength =
-      (m_cosmosMode == tsd::rendering::CosmosMode::DEPTH) ? 3.0f : 0.0f;
-
-  json << "    \"depth\": " << depthStrength << ",\n";
-  json << "    \"edge\": " << edgeStrength << ",\n";
-  json << "    \"segmentation\": 0\n";
-  json << "  },\n";
-  json << "  \"cosmos_settings\": {\n";
-  json << "    \"depth_range\": {\n";
-  json << "      \"min\": " << m_cosmosDepthMinimum << ",\n";
-  json << "      \"max\": " << m_cosmosDepthMaximum << "\n";
-  json << "    },\n";
-  json << "    \"edge_threshold\": " << m_cosmosEdgeThreshold << ",\n";
-  json << "    \"edge_inverted\": " << (m_cosmosInvertEdges ? "true" : "false")
-       << "\n";
-  json << "  },\n";
-  json << "  \"prompt\": {\n";
-  json
-      << "    \"text\": \"A photorealistic, stunning, high-quality video with remarkable attention to detail\",\n";
-  json << "    \"strength\": 7\n";
-  json << "  },\n";
-  json << "  \"api_url\": \"https://your-cosmos-api-url-here/\",\n";
-  json << "  \"notes\": [\n";
-  json << "    \"Control strengths range from 0 to 7\",\n";
-  json << "    \"Prompt strength ranges from 0 to 10\",\n";
-  json << "    \"Set control strength to 0 to disable that control type\",\n";
-  json << "    \"Exported from tsdViewer viewport settings\"\n";
-  json << "  ]\n";
-  json << "}\n";
-
-  return json.str();
 }
 
 } // namespace tsd::ui::imgui
