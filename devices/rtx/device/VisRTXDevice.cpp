@@ -57,8 +57,10 @@
 // renderers
 #include "renderer/AmbientOcclusion.h"
 #include "renderer/Debug.h"
+#include "renderer/Depth.h"
 #include "renderer/DiffusePathTracer.h"
 #include "renderer/DirectLight.h"
+#include "renderer/Edges.h"
 #include "renderer/Raycast.h"
 #include "renderer/Test.h"
 
@@ -426,6 +428,8 @@ VisRTXDevice::~VisRTXDevice()
   CUDA_SYNC_CHECK();
 
   optixModuleDestroy(state.rendererModules.debug);
+  optixModuleDestroy(state.rendererModules.depth);
+  optixModuleDestroy(state.rendererModules.edges);
   optixModuleDestroy(state.rendererModules.raycast);
   optixModuleDestroy(state.rendererModules.ambientOcclusion);
   optixModuleDestroy(state.rendererModules.diffusePathTracer);
@@ -762,6 +766,10 @@ DeviceInitStatus VisRTXDevice::initOptix()
   auto compileTasks = std::array{
       init_module(
           &state.rendererModules.debug, Debug::ptx(), "'debug' renderer"),
+      init_module(
+          &state.rendererModules.depth, Depth::ptx(), "'depth' renderer"),
+      init_module(
+          &state.rendererModules.edges, Edges::ptx(), "'edges' renderer"),
       init_module(
           &state.rendererModules.raycast, Raycast::ptx(), "'raycast' renderer"),
       init_module(&state.rendererModules.ambientOcclusion,

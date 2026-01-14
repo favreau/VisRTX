@@ -270,11 +270,6 @@ void Viewport::saveSettings(tsd::core::DataNode &root)
   root["visualizeAOV"] = static_cast<int>(m_visualizeAOV);
   root["depthVisualMinimum"] = m_depthVisualMinimum;
   root["depthVisualMaximum"] = m_depthVisualMaximum;
-  root["cosmosMode"] = static_cast<int>(m_cosmosMode);
-  root["cosmosDepthMinimum"] = m_cosmosDepthMinimum;
-  root["cosmosDepthMaximum"] = m_cosmosDepthMaximum;
-  root["cosmosEdgeThreshold"] = m_cosmosEdgeThreshold;
-  root["cosmosInvertEdges"] = m_cosmosInvertEdges;
   root["fov"] = m_fov;
   root["resolutionScale"] = m_resolutionScale;
   root["showAxes"] = m_showAxes;
@@ -331,13 +326,6 @@ void Viewport::loadSettings(tsd::core::DataNode &root)
   m_visualizeAOV = static_cast<tsd::rendering::AOVType>(aovType);
   root["depthVisualMinimum"].getValue(ANARI_FLOAT32, &m_depthVisualMinimum);
   root["depthVisualMaximum"].getValue(ANARI_FLOAT32, &m_depthVisualMaximum);
-  int cosmosMode = static_cast<int>(m_cosmosMode);
-  root["cosmosMode"].getValue(ANARI_INT32, &cosmosMode);
-  m_cosmosMode = static_cast<tsd::rendering::CosmosMode>(cosmosMode);
-  root["cosmosDepthMinimum"].getValue(ANARI_FLOAT32, &m_cosmosDepthMinimum);
-  root["cosmosDepthMaximum"].getValue(ANARI_FLOAT32, &m_cosmosDepthMaximum);
-  root["cosmosEdgeThreshold"].getValue(ANARI_FLOAT32, &m_cosmosEdgeThreshold);
-  root["cosmosInvertEdges"].getValue(ANARI_BOOL, &m_cosmosInvertEdges);
   root["fov"].getValue(ANARI_FLOAT32, &m_fov);
   root["resolutionScale"].getValue(ANARI_FLOAT32, &m_resolutionScale);
   root["showAxes"].getValue(ANARI_BOOL, &m_showAxes);
@@ -533,9 +521,6 @@ void Viewport::setupRenderPipeline()
   m_visualizeAOVPass =
       m_pipeline.emplace_back<tsd::rendering::VisualizeAOVPass>();
   m_visualizeAOVPass->setEnabled(false);
-
-  m_cosmosPass = m_pipeline.emplace_back<tsd::rendering::CosmosVisualizePass>();
-  m_cosmosPass->setEnabled(false);
 
   m_outlinePass = m_pipeline.emplace_back<tsd::rendering::OutlineRenderPass>();
 
@@ -1236,73 +1221,6 @@ void Viewport::ui_menubar()
             bounds[1].y,
             bounds[1].z);
       }
-
-      ImGui::EndMenu();
-    }
-
-    // Cosmos //
-
-    if (ImGui::BeginMenu("Cosmos")) {
-      ImGui::Text("Visualization Mode:");
-      ImGui::Indent(INDENT_AMOUNT);
-
-      const char *cosmosItems[] = {"none", "depth", "edges"};
-      if (int cosmosMode = int(m_cosmosMode); ImGui::Combo(
-              "mode", &cosmosMode, cosmosItems, IM_ARRAYSIZE(cosmosItems))) {
-        if (cosmosMode != int(m_cosmosMode)) {
-          m_cosmosMode = static_cast<tsd::rendering::CosmosMode>(cosmosMode);
-          m_cosmosPass->setCosmosMode(m_cosmosMode);
-
-          // Disable AOV when cosmos is active
-          if (m_cosmosMode != tsd::rendering::CosmosMode::NONE) {
-            m_visualizeAOV = tsd::rendering::AOVType::NONE;
-            m_visualizeAOVPass->setEnabled(false);
-          }
-        }
-      }
-      ImGui::Unindent(INDENT_AMOUNT);
-
-      ImGui::Separator();
-
-      // Depth mode settings
-      ImGui::BeginDisabled(m_cosmosMode != tsd::rendering::CosmosMode::DEPTH);
-      ImGui::Text("Depth Settings:");
-      ImGui::Indent(INDENT_AMOUNT);
-      bool depthRangeChanged = false;
-      depthRangeChanged |= ImGui::DragFloat("depth minimum",
-          &m_cosmosDepthMinimum,
-          0.1f,
-          0.f,
-          m_cosmosDepthMaximum);
-      depthRangeChanged |= ImGui::DragFloat("depth maximum",
-          &m_cosmosDepthMaximum,
-          0.1f,
-          m_cosmosDepthMinimum,
-          1e20f);
-      if (depthRangeChanged)
-        m_cosmosPass->setDepthRange(m_cosmosDepthMinimum, m_cosmosDepthMaximum);
-      ImGui::Unindent(INDENT_AMOUNT);
-      ImGui::EndDisabled();
-
-      ImGui::Separator();
-
-      // Edge detection settings
-      ImGui::BeginDisabled(m_cosmosMode != tsd::rendering::CosmosMode::EDGES);
-      ImGui::Text("Edge Detection Settings:");
-      ImGui::Indent(INDENT_AMOUNT);
-      if (ImGui::SliderFloat("edge threshold",
-              &m_cosmosEdgeThreshold,
-              0.001f,
-              1000.0f,
-              "%.3f",
-              ImGuiSliderFlags_Logarithmic)) {
-        m_cosmosPass->setEdgeThreshold(m_cosmosEdgeThreshold);
-      }
-      if (ImGui::Checkbox("invert edges", &m_cosmosInvertEdges)) {
-        m_cosmosPass->setInvertEdges(m_cosmosInvertEdges);
-      }
-      ImGui::Unindent(INDENT_AMOUNT);
-      ImGui::EndDisabled();
 
       ImGui::EndMenu();
     }

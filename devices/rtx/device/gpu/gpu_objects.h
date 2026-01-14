@@ -642,6 +642,18 @@ struct DebugRendererGPUData
   int method;
 };
 
+struct DepthRendererGPUData
+{
+  float minDepth;
+  float maxDepth;
+};
+
+struct EdgesRendererGPUData
+{
+  float threshold;
+  bool invert;
+};
+
 struct AORendererGPUData
 {
   int aoSamples;
@@ -664,6 +676,8 @@ struct DirectLightRendererGPUData
 union RendererParametersGPUData
 {
   DebugRendererGPUData debug;
+  DepthRendererGPUData depth;
+  EdgesRendererGPUData edges;
   AORendererGPUData ao;
   DPTRendererGPUData dpt;
   DirectLightRendererGPUData directLight;
