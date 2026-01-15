@@ -172,7 +172,6 @@ struct DeviceGlobalState : public helium::BaseGlobalDeviceState
   struct RendererModules
   {
     OptixModule debug{nullptr};
-    OptixModule edges{nullptr};
     OptixModule raycast{nullptr};
     OptixModule ambientOcclusion{nullptr};
     OptixModule diffusePathTracer{nullptr};

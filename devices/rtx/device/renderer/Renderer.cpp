@@ -38,7 +38,6 @@
 #include "Debug.h"
 #include "DiffusePathTracer.h"
 #include "DirectLight.h"
-#include "Edges.h"
 #include "Raycast.h"
 #include "Test.h"
 #include "UnknownRenderer.h"
@@ -123,8 +122,6 @@ static Renderer *make_renderer(std::string_view subtype, DeviceGlobalState *d)
     return new DirectLight(d);
   else if (subtype == "test")
     return new Test(d);
-  else if (subtype == "edges")
-    return new Edges(d);
   else if (beginsWith(subtype, "debug")) {
     auto *retval = new Debug(d);
     auto names = splitString(std::string(subtype), "_");

@@ -439,32 +439,6 @@
           "description": "debug visualization mode"
         }
       ]
-    },
-    {
-      "type": "ANARI_RENDERER",
-      "name": "edges",
-      "parameters": [
-        {
-          "name": "threshold",
-          "types": [
-            "ANARI_FLOAT32"
-          ],
-          "tags": [],
-          "default": 0.01,
-          "minimum": 0.0,
-          "maximum": 1.0,
-          "description": "edge detection threshold"
-        },
-        {
-          "name": "invert",
-          "types": [
-            "ANARI_BOOL"
-          ],
-          "tags": [],
-          "default": false,
-          "description": "invert edge colors (black/white)"
-        }
-      ]
     }
   ]
 }

@@ -642,12 +642,6 @@ struct DebugRendererGPUData
   int method;
 };
 
-struct EdgesRendererGPUData
-{
-  float threshold;
-  bool invert;
-};
-
 struct AORendererGPUData
 {
   int aoSamples;
@@ -670,7 +664,6 @@ struct DirectLightRendererGPUData
 union RendererParametersGPUData
 {
   DebugRendererGPUData debug;
-  EdgesRendererGPUData edges;
   AORendererGPUData ao;
   DPTRendererGPUData dpt;
   DirectLightRendererGPUData directLight;
