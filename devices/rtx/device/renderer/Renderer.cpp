@@ -36,7 +36,6 @@
 // specific renderers
 #include "AmbientOcclusion.h"
 #include "Debug.h"
-#include "Depth.h"
 #include "DiffusePathTracer.h"
 #include "DirectLight.h"
 #include "Edges.h"
@@ -124,8 +123,6 @@ static Renderer *make_renderer(std::string_view subtype, DeviceGlobalState *d)
     return new DirectLight(d);
   else if (subtype == "test")
     return new Test(d);
-  else if (subtype == "depth")
-    return new Depth(d);
   else if (subtype == "edges")
     return new Edges(d);
   else if (beginsWith(subtype, "debug")) {

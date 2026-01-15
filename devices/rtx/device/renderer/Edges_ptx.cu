@@ -56,11 +56,11 @@ VISRTX_GLOBAL void __miss__()
   // no-op
 }
 
-// Helper function to trace a ray for a specific pixel
-VISRTX_DEVICE float traceDepth(glm::uvec2 pixel)
+// Helper function to trace a ray for a specific pixel and return object ID
+VISRTX_DEVICE uint32_t traceObjectId(glm::uvec2 pixel)
 {
   if (pixel.x >= frameData.fb.size.x || pixel.y >= frameData.fb.size.y)
-    return 1e30f;
+    return ~0u;
 
   ScreenSample ss;
   ss.pixel = pixel;
@@ -77,7 +77,7 @@ VISRTX_DEVICE float traceDepth(glm::uvec2 pixel)
       &surfaceHit,
       primaryRayOptiXFlags(frameData.renderer));
 
-  return surfaceHit.foundHit ? surfaceHit.t : 1e30f;
+  return surfaceHit.foundHit ? surfaceHit.objID : ~0u;
 }
 
 VISRTX_GLOBAL void __raygen__()
@@ -90,13 +90,8 @@ VISRTX_GLOBAL void __raygen__()
 
   glm::uvec2 pixel = ss.pixel;
 
-  // Sample neighboring pixels for Sobel edge detection
-  // Sobel kernels:
-  // Gx = [[-1, 0, 1],       Gy = [[-1, -2, -1],
-  //       [-2, 0, 2],              [ 0,  0,  0],
-  //       [-1, 0, 1]]              [ 1,  2,  1]]
-
-  float depths[3][3];
+  // Sample neighboring pixels and look for object ID discontinuities
+  uint32_t objIds[3][3];
   for (int dy = -1; dy <= 1; ++dy) {
     for (int dx = -1; dx <= 1; ++dx) {
       glm::uvec2 samplePixel = pixel;
@@ -104,21 +99,23 @@ VISRTX_GLOBAL void __raygen__()
         samplePixel.x += dx;
       if (pixel.y >= (uint32_t)abs(dy))
         samplePixel.y += dy;
-      depths[dy + 1][dx + 1] = traceDepth(samplePixel);
+      objIds[dy + 1][dx + 1] = traceObjectId(samplePixel);
     }
   }
 
-  // Apply Sobel operator
-  float gx = -depths[0][0] + depths[0][2] - 2.0f * depths[1][0]
-      + 2.0f * depths[1][2] - depths[2][0] + depths[2][2];
+  const uint32_t centerId = objIds[1][1];
+  int diffCount = 0;
+  for (int dy = 0; dy < 3; ++dy) {
+    for (int dx = 0; dx < 3; ++dx) {
+      if (dx == 1 && dy == 1)
+        continue;
+      if (objIds[dy][dx] != centerId)
+        diffCount++;
+    }
+  }
 
-  float gy = -depths[0][0] - 2.0f * depths[0][1] - depths[0][2] + depths[2][0]
-      + 2.0f * depths[2][1] + depths[2][2];
-
-  float edge = sqrtf(gx * gx + gy * gy);
-
-  // Normalize and threshold
-  float edgeIntensity = edge > rendererParams.threshold ? 1.f : 0.f;
+  const float edgeStrength = diffCount / 8.f;
+  float edgeIntensity = edgeStrength > rendererParams.threshold ? 1.f : 0.f;
 
   if (rendererParams.invert) {
     edgeIntensity = 1.f - edgeIntensity;

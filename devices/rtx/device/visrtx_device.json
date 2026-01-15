@@ -442,32 +442,6 @@
     },
     {
       "type": "ANARI_RENDERER",
-      "name": "depth",
-      "parameters": [
-        {
-          "name": "minDepth",
-          "types": [
-            "ANARI_FLOAT32"
-          ],
-          "tags": [],
-          "default": 0.0,
-          "minimum": 0.0,
-          "description": "minimum depth for normalization"
-        },
-        {
-          "name": "maxDepth",
-          "types": [
-            "ANARI_FLOAT32"
-          ],
-          "tags": [],
-          "default": 1.0,
-          "minimum": 0.0,
-          "description": "maximum depth for normalization"
-        }
-      ]
-    },
-    {
-      "type": "ANARI_RENDERER",
       "name": "edges",
       "parameters": [
         {
