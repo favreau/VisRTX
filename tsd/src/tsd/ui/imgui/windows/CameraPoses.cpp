@@ -48,7 +48,7 @@ void CameraPoses::buildUI()
     ImGui::OpenPopup("CameraPoses_turntablePopupMenu");
 
   ImGui::SameLine();
-  if (ImGui::Button("add camera object")) {
+  if (ImGui::Button("camera")) {
     if (m_viewport)
       m_viewport->addCameraObjectFromCurrentView();
     else
