@@ -39,14 +39,8 @@ VolumeRef import_volume(Scene &scene,
     field = import_VTU(scene, filepath);
   else if (ext == ".vti")
     field = import_VTI(scene, filepath);
-  else if (ext == ".clouds")
-    field = import_CLOUDS(scene, filepath);
-  else if (ext == ".magnetic")
-    field = import_MAGNETIC(scene, filepath);
-  else if (ext == ".aurora")
-    field = import_AURORA(scene, filepath);
-  else if (ext == ".planet")
-    field = import_PLANET(scene, filepath);
+  else if (ext == ".silo" || ext == ".sil")
+    field = import_SILO(scene, filepath);
   else {
     logError("[import_volume] no loader for file type '%s'", ext.c_str());
     return {};
@@ -133,6 +127,37 @@ VolumeRef import_volume(Scene &scene,
       logInfo("[import_volume] Set unitDistance parameter to %f", unitDistance);
     }
   }
+
+  return volume;
+}
+
+VolumeRef import_volume(Scene &scene,
+    const char *filepath,
+    const TransferFunction &transferFunction,
+    LayerNodeRef location)
+{
+  auto volume = import_volume(scene, filepath, location);
+
+  // Build RGBA colors with evenly-spaced positions
+  std::vector<tsd::math::float4> colormap;
+
+  constexpr const size_t numRGBPoints = 256;
+
+  for (size_t i = 0; i < numRGBPoints; ++i) {
+    float x = (i / float(numRGBPoints - 1));
+
+    auto color = detail::interpolateColor(transferFunction.colorPoints, x);
+    auto opacity = detail::interpolateOpacity(transferFunction.opacityPoints, x);
+    colormap.push_back({color.x, color.y, color.z, opacity});
+  }
+
+  auto colorArray = scene.createArray(ANARI_FLOAT32_VEC4, colormap.size());
+  colorArray->setData(colormap);
+  volume->setParameterObject("color", *colorArray);
+
+  if (transferFunction.range.lower < transferFunction.range.upper)
+    volume->setParameter(
+        "valueRange", ANARI_FLOAT32_BOX1, &transferFunction.range);
 
   return volume;
 }

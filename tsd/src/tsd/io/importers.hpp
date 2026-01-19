@@ -4,6 +4,7 @@
 #pragma once
 
 #include "tsd/core/scene/Scene.hpp"
+#include "tsd/core/ColorMapUtil.hpp"
 
 namespace tsd::io {
 
@@ -25,10 +26,12 @@ void import_PDB(Scene &scene, const char *filename, LayerNodeRef location = {});
 void import_PLY(Scene &scene, const char *filename, LayerNodeRef location = {});
 void import_POINTSBIN(Scene &scene, const std::vector<std::string> &filepaths, LayerNodeRef location = {});
 void import_PT(Scene &scene, const char *filename, LayerNodeRef location = {});
+void import_SILO(Scene &scene, const char *filename, LayerNodeRef location);
 void import_SMESH(Scene &scene, const char *filename, LayerNodeRef location = {}, bool isAnimation = false);
 void import_SWC(Scene &scene, const char *filename, LayerNodeRef location = {});
 void import_TRK(Scene &scene, const char *filename, LayerNodeRef location = {});
-void import_USD(Scene &scene, const char *filename, LayerNodeRef location = {}, bool useDefaultMaterial = false);
+void import_USD(Scene &scene, const char *filename, LayerNodeRef location = {});
+void import_USD2(Scene &scene, const char *filename, LayerNodeRef location = {});
 void import_XYZDP(Scene &scene, const char *filename, LayerNodeRef location = {});
 
 SpatialFieldRef import_RAW(Scene &scene, const char *filename);
@@ -37,6 +40,10 @@ SpatialFieldRef import_NVDB(Scene &scene, const char *filename);
 SpatialFieldRef import_MHD(Scene &scene, const char *filename);
 SpatialFieldRef import_VTI(Scene &scene, const char *filename);
 SpatialFieldRef import_VTU(Scene &scene, const char *filename);
+SpatialFieldRef import_SILO(Scene &scene, const char *filename);
+SpatialFieldRef import_MAGNETIC(Scene &scene, const char *filename);
+SpatialFieldRef import_AURORA(Scene &scene, const char *filename);
+SpatialFieldRef import_PLANET(Scene &scene, const char *filename);
 SpatialFieldRef import_CLOUDS(Scene &scene, const char *filename);
 
 // Update an existing CLOUDS spatial field with data from a specific time step
@@ -44,9 +51,6 @@ bool update_CLOUDS(Scene &scene,
     SpatialFieldRef field, 
     const char *filepath, 
     size_t timeIndex);
-SpatialFieldRef import_MAGNETIC(Scene &scene, const char *filename);
-SpatialFieldRef import_AURORA(Scene &scene, const char *filename);
-SpatialFieldRef import_PLANET(Scene &scene, const char *filename);
 
 
 VolumeRef import_volume(Scene &scene,
@@ -54,6 +58,11 @@ VolumeRef import_volume(Scene &scene,
     LayerNodeRef location = {},
     ArrayRef colors = {},
     ArrayRef opacities = {});
+
+VolumeRef import_volume(Scene &scene,
+    const char *filename,
+    const core::TransferFunction &transferFunction,
+    LayerNodeRef location = {});
 
 // clang-format on
 

@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -16,15 +16,16 @@ struct Volume : public Object
   Volume(Token subtype = tokens::unknown);
   virtual ~Volume() = default;
 
-  IndexedVectorRef<Volume> self() const;
+  ObjectPoolRef<Volume> self() const;
 
   anari::Object makeANARIObject(anari::Device d) const override;
 };
 
-using VolumeRef = IndexedVectorRef<Volume>;
+using VolumeRef = ObjectPoolRef<Volume>;
 
 namespace tokens::volume {
 
+extern const Token structuredRegular;
 extern const Token transferFunction1D;
 
 } // namespace tokens::volume

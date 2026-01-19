@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -52,6 +52,8 @@ struct Array : public Object
   template <typename T>
   const T *dataAs() const;
 
+  const void *elementAt(size_t i) const;
+
   template <typename T>
   void setData(const T *data, size_t size, size_t startOffset = 0);
   template <typename T>
@@ -59,7 +61,7 @@ struct Array : public Object
   void setData(const void *data, size_t byteOffset = 0);
   size_t setData(std::FILE *stream);
 
-  IndexedVectorRef<Array> self() const;
+  ObjectPoolRef<Array> self() const;
 
   anari::Object makeANARIObject(anari::Device d) const override;
 
@@ -86,7 +88,7 @@ struct Array : public Object
   mutable bool m_mapped{false};
 };
 
-using ArrayRef = IndexedVectorRef<Array>;
+using ArrayRef = ObjectPoolRef<Array>;
 
 // Inlined definitions ////////////////////////////////////////////////////////
 

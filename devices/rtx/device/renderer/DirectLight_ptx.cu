@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -132,7 +132,7 @@ VISRTX_DEVICE vec4 shadeSurface(
       };
 
       const float surface_o =
-        1.f - surfaceAttenuation(ss, shadowRay, RayType::SHADOW);
+          1.f - surfaceAttenuation(ss, shadowRay, RayType::SHADOW);
       const float volume_o = 1.f - volumeAttenuation(ss, shadowRay);
       const float attenuation = surface_o * volume_o;
 
@@ -248,7 +248,7 @@ VISRTX_GLOBAL void __closesthit__shadow()
 
 VISRTX_GLOBAL void __anyhit__shadow()
 {
-  auto &rendererParams = frameData.renderer;
+  auto &rendererParams = frameData.renderer.params;
 
   if (ray::isIntersectingSurfaces()) {
     SurfaceHit hit;
@@ -273,7 +273,7 @@ VISRTX_GLOBAL void __anyhit__shadow()
     rayMarchVolume(ray::screenSample(),
         hit,
         ra.attenuation,
-        rendererParams.inverseVolumeSamplingRate);
+        rendererParams.directLight.inverseVolumeSamplingRateShadows);
     if (ra.attenuation < 0.99f)
       optixIgnoreIntersection();
   }
@@ -406,8 +406,10 @@ VISRTX_GLOBAL void __raygen__()
         color *= opacity;
 
         const auto bg = getBackground(frameData, ss.screen, ray.dir);
-        accumulateValue(color, vec3(bg) * bg.a, opacity);
-        accumulateValue(opacity, bg.w, opacity);
+        const bool premultiplyBg = rendererParams.premultiplyBackground;
+        accumulateValue(
+            color, premultiplyBg ? vec3(bg) * bg.a : vec3(bg), opacity);
+        accumulateValue(opacity, bg.a, opacity);
         accumulateValue(outputColor, color, outputOpacity);
         accumulateValue(outputOpacity, opacity, outputOpacity);
         break;

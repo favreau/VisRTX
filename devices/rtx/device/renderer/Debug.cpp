@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -49,6 +49,8 @@ static DebugMethod methodFromString(const std::string &name)
     return DebugMethod::OBJ_INDEX;
   else if (name == "instIndex")
     return DebugMethod::INST_INDEX;
+  else if (name == "materialId")
+    return DebugMethod::MAT_ID;
   else if (name == "Ng")
     return DebugMethod::NG;
   else if (name == "Ng.abs")

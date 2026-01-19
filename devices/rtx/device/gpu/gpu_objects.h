@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,6 +32,7 @@
 #pragma once
 
 #include "gpu/gpu_math.h"
+#include "gpu/sbt.h"
 
 // optix
 #include <optix.h>
@@ -373,7 +374,7 @@ struct MaterialGPUData
     DeviceObjectIndex samplers[32];
   };
 
-  uint32_t implementationIndex{~0u};
+  uint32_t callableBaseIndex{~0u};
 
   union MaterialData
   {
@@ -396,13 +397,6 @@ struct SurfaceGPUData
 
 // Spatial Fields //
 
-enum class SpatialFieldType
-{
-  STRUCTURED_REGULAR,
-  NANOVDB_REGULAR,
-  UNKNOWN
-};
-
 struct UniformGridData
 {
   ivec3 dims;
@@ -415,27 +409,56 @@ struct StructuredRegularData
 {
   cudaTextureObject_t texObj;
   vec3 origin;
-  vec3 spacing;
+  vec3 invDims;
   vec3 invSpacing;
+  bool cellCentered;
+
+  StructuredRegularData() = default;
 };
 
 struct NVdbRegularData
 {
-  vec3 origin;
-  vec3 voxelSize;
   nanovdb::GridType gridType;
   const void *gridData;
+  bool cellCentered;
+
+  NVdbRegularData() = default;
+};
+
+struct StructuredRectilinearData
+{
+  cudaTextureObject_t texObj;
+  vec3 dims;
+  bool cellCentered;
+  cudaTextureObject_t axisLUT[3];
+  vec3 axisBoundsMin;
+  vec3 axisBoundsMax;
+
+  StructuredRectilinearData() = default;
+};
+
+struct NVdbRectilinearData
+{
+  nanovdb::GridType gridType;
+  const void *gridData;
+  bool cellCentered;
+  cudaTextureObject_t axisLUT[3];
+
+  NVdbRectilinearData() = default;
 };
 
 struct SpatialFieldGPUData
 {
-  SpatialFieldType type{SpatialFieldType::UNKNOWN};
+  SbtCallableEntryPoints samplerCallableIndex{SbtCallableEntryPoints::Invalid};
   union
   {
     StructuredRegularData structuredRegular;
     NVdbRegularData nvdbRegular;
+    StructuredRectilinearData structuredRectilinear;
+    NVdbRectilinearData nvdbRectilinear;
   } data;
   UniformGridData grid;
+  box3 roi;
 };
 
 // Volume //
@@ -508,9 +531,10 @@ struct RectLightGPUData
   vec3 edge1;
   vec3 edge2;
   float intensity;
-  struct {
-    unsigned int front: 1;
-    unsigned int back: 1;
+  struct
+  {
+    unsigned int front : 1;
+    unsigned int back : 1;
   } side;
   float oneOverArea;
 };
@@ -634,6 +658,7 @@ struct DirectLightRendererGPUData
   int aoSamples;
   vec3 aoColor;
   float aoIntensity;
+  float inverseVolumeSamplingRateShadows;
 };
 
 union RendererParametersGPUData
@@ -668,6 +693,7 @@ struct RendererGPUData
   float inverseVolumeSamplingRate;
   float occlusionDistance;
   bool cullTriangleBF;
+  bool premultiplyBackground;
   bool tonemap; // enable internal tonemapping during sample accumulation
 };
 

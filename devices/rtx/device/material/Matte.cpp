@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -58,7 +58,7 @@ MaterialGPUData Matte::gpuData() const
 {
   MaterialGPUData retval;
 
-  retval.implementationIndex = static_cast<unsigned int>(MaterialType::MATTE);
+  retval.callableBaseIndex = static_cast<unsigned int>(MaterialType::MATTE);
 
   populateMaterialParameter(retval.materialData.matte.color,
       m_color,

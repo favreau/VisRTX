@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/io/procedural.hpp"
@@ -67,7 +67,7 @@ void generate_hdri_test_image(Scene &scene, LayerNodeRef location)
   auto [inst, hdri] = scene.insertNewChildObjectNode<Light>(
       location, tokens::light::hdri);
   hdri->setName("hdri_dome");
-  hdri->setParameterObject("radiance"_t, *arr);
+  hdri->setParameterObject("radiance", *arr);
 }
 
 } // namespace tsd

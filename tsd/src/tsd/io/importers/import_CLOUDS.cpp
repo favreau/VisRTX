@@ -86,8 +86,8 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
   field->setName(fileOf(filepath).c_str());
 
   // Set Cloud-specific parameters
-  field->setParameter("planetRadius"_t, header.planetRadius);
-  field->setParameter("atmosphereThickness"_t, header.atmosphereThickness);
+  field->setParameter("planetRadius", header.planetRadius);
+  field->setParameter("atmosphereThickness", header.atmosphereThickness);
 
   // Load NetCDF data
   if (header.netCDFPath.empty()) {
@@ -129,7 +129,7 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
   }
 
   // Set the data as a parameter
-  field->setParameterObject("cloudData"_t, *dataArray);
+  field->setParameterObject("cloudData", *dataArray);
 
   field->setMetadataValue("filepath", filepath);
   field->setMetadataValue("unitDistance", header.unitDistance);
@@ -210,7 +210,7 @@ bool update_CLOUDS(
   }
 
   // Update the spatial field's cloudData parameter
-  field->setParameterObject("cloudData"_t, *dataArray);
+  field->setParameterObject("cloudData", *dataArray);
 
   return true;
 #else

@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -28,6 +28,7 @@ class TransferFunctionEditor : public Window
   void buildUI_selectColorMap();
   void buildUI_drawEditor();
   void buildUI_opacityScale();
+  void buildUI_unitDistance();
   void buildUI_valueRange();
 
   std::vector<tsd::math::float4> getSampledColorsAndOpacities(
@@ -36,21 +37,21 @@ class TransferFunctionEditor : public Window
   void setMap(int which = 0);
   void setObjectPtrsFromSelectedObject();
   void loadDefaultMaps();
-  void loadColormapFrom1dt(
+  void loadColormap(
       const std::string &filepath, const std::string &name);
-  void loadColormapFromParaview(
-      const std::string &filepath, const std::string &name);
+
   void saveColormapTo1dt(const std::string &filepath);
   void saveColormapToParaview(const std::string &filepath);
   void getTransferFunctionFilenameFromDialog(
       std::string &filenameOut, bool save = false);
-  void updateVolume();
+  void updateColormaps();
   void updateTfnPaletteTexture();
   void resizeTfnPaletteTexture(size_t width);
 
   // Data //
 
   tsd::core::Volume *m_volume{nullptr};
+  std::vector<tsd::core::Volume*> m_otherVolumes;
   tsd::core::Array *m_colorMapArray{nullptr};
 
   // all available transfer functions

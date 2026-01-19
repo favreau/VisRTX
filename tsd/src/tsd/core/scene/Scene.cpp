@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/core/scene/Scene.hpp"
@@ -77,6 +77,34 @@ Layer *Scene::defaultLayer()
   if (m_layers.empty())
     addLayer("default");
   return layer(0);
+}
+
+int Scene::mpiRank() const
+{
+  return m_mpi.rank;
+}
+
+int Scene::mpiNumRanks() const
+{
+  return m_mpi.numRanks;
+}
+
+void Scene::setMpiRankInfo(int rank, int numRanks)
+{
+  if (rank < 0 || numRanks <= 0 || rank >= numRanks) {
+    logWarning(
+        "[Scene::setMpiRankInfo()] invalid MPI rank (%d) or number of "
+        "ranks (%d); ignoring",
+        rank,
+        numRanks);
+    return;
+  } else if (m_mpi.numRanks > 1) {
+    logError("[Scene::setMpiRankInfo()] MPI rank info already set; ignoring");
+    return;
+  }
+
+  m_mpi.rank = rank;
+  m_mpi.numRanks = numRanks;
 }
 
 ArrayRef Scene::createArray(
@@ -562,7 +590,7 @@ void Scene::removeUnusedObjects()
       if (!ref)
         return;
       if (auto *obj = ref.data(); obj && obj->totalUseCount() == 0)
-        removeObject(ref.data());
+        removeObject(obj);
     });
   };
 
@@ -650,13 +678,13 @@ void Scene::defragmentObjectStorage()
     layer.traverse(layer.root(), [&](LayerNode &node, int /*level*/) {
       if (!node->isObject())
         return true;
-      auto objType = node->type();
+      auto objType = anari::isArray(node->type()) ? ANARI_ARRAY : node->type();
       if (!defragmentations[objType])
         return true;
 
       size_t newIdx = getUpdatedIndex(objType, node->getObjectIndex());
       if (newIdx != INVALID_INDEX)
-        node->setAsObject(objType, newIdx, this);
+        node->setAsObject(node->type(), newIdx, this);
       else
         toErase.push_back(&node);
 
@@ -671,6 +699,11 @@ void Scene::defragmentObjectStorage()
 
   for (auto *ln : toErase)
     ln->erase_self();
+  if (!toErase.empty()) {
+    tsd::core::logStatus(
+        "    Removed %zu layer nodes referencing deleted objects",
+        toErase.size());
+  }
   toErase.clear();
 
   // Function to update indices to objects on object parameters //
@@ -684,12 +717,14 @@ void Scene::defragmentObjectStorage()
         const auto &v = p.value();
         if (!v.holdsObject())
           continue;
-        auto objType = v.type();
+        auto objType = anari::isArray(v.type()) ? ANARI_ARRAY : v.type();
         if (!defragmentations[objType])
           continue;
 
         auto newIdx = getUpdatedIndex(objType, v.getAsObjectIndex());
-        p.setValue(newIdx != INVALID_INDEX ? Any(objType, newIdx) : Any());
+        Any newValue = newIdx != INVALID_INDEX ? Any(v.type(), newIdx) : Any();
+        p.m_value = newValue; // we don't want refcount changes, essentially
+                              // this is move semantics
       }
     });
   };
@@ -704,6 +739,7 @@ void Scene::defragmentObjectStorage()
   updateParameterReferences(m_db.volume);
   updateParameterReferences(m_db.field);
   updateParameterReferences(m_db.light);
+  updateParameterReferences(m_db.camera);
 
   // Function to update all self-held index values to the new actual index //
 
@@ -725,6 +761,7 @@ void Scene::defragmentObjectStorage()
   updateObjectHeldIndex(m_db.volume);
   updateObjectHeldIndex(m_db.field);
   updateObjectHeldIndex(m_db.light);
+  updateObjectHeldIndex(m_db.camera);
 
   // Signal updates to any delegates //
   if (m_updateDelegate)

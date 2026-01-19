@@ -1,11 +1,10 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "Window.h"
 // tsd_core
-#include "tsd/core/IndexedVector.hpp"
 #include "tsd/core/Logging.hpp"
 // std
 #include <array>

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -197,6 +197,12 @@ VISRTX_DEVICE const VolumeGPUData &volumeData(const FrameGPUData &frameData)
   return frameData.registry.volumes[idx];
 }
 
+VISRTX_DEVICE const SpatialFieldGPUData &fieldData(const FrameGPUData &frameData, const VolumeGPUData &volumeData)
+{
+  // Currently only TF1D volume type is supported, so assume this is what we have
+  return frameData.registry.fields[volumeData.data.tf1d.field];
+}
+
 VISRTX_DEVICE void computeTangentSpace(
     const GeometryGPUData &ggd, uint32_t primID, SurfaceHit &hit)
 {
@@ -213,9 +219,6 @@ VISRTX_DEVICE void computeTangentSpace(
     const vec3 v2 = ggd.tri.vertices[idx.z];
 
     hit.Ng = normalize(cross(v1 - v0, v2 - v0));
-    auto tangentSpace = computeOrthonormalBasis(hit.Ng);
-    hit.tU = tangentSpace[0];
-    hit.tV = tangentSpace[1];
 
     if (!optixIsFrontFaceHit())
       hit.Ng = -hit.Ng;
@@ -254,6 +257,10 @@ VISRTX_DEVICE void computeTangentSpace(
 
       hit.tU = normalize(b.x * t0 + b.y * t1 + b.z * t2);
       hit.tV = handedness * normalize(cross(hit.Ns, hit.tU));
+    } else {
+      auto tangentSpace = computeOrthonormalBasis(hit.Ng);
+      hit.tU = tangentSpace[0];
+      hit.tV = tangentSpace[1];
     }
 
     if (dot(hit.Ng, hit.Ns) < 0.f) {
@@ -276,6 +283,10 @@ VISRTX_DEVICE void computeTangentSpace(
     if (!optixIsFrontFaceHit())
       hit.Ng = -hit.Ng;
     hit.Ns = hit.Ng;
+
+    auto tangentSpace = computeOrthonormalBasis(hit.Ng);
+    hit.tU = tangentSpace[0];
+    hit.tV = tangentSpace[1];
     break;
   }
   case GeometryType::SPHERE:
@@ -285,6 +296,9 @@ VISRTX_DEVICE void computeTangentSpace(
     hit.Ng = hit.Ns = vec3(bit_cast<float>(optixGetAttribute_1()),
         bit_cast<float>(optixGetAttribute_2()),
         bit_cast<float>(optixGetAttribute_3()));
+    auto tangentSpace = computeOrthonormalBasis(hit.Ng);
+    hit.tU = tangentSpace[0];
+    hit.tV = tangentSpace[1];
     break;
   }
   case GeometryType::CURVE: {
@@ -301,6 +315,9 @@ VISRTX_DEVICE void computeTangentSpace(
     auto u = optixGetCurveParameter();
     hit.Ng = hit.Ns =
         curveSurfaceNormal(interpolator, u, vec3(hp.x, hp.y, hp.z));
+    auto tangentSpace = computeOrthonormalBasis(hit.Ng);
+    hit.tU = tangentSpace[0];
+    hit.tV = tangentSpace[1];
     break;
   }
   default:
@@ -379,9 +396,6 @@ VISRTX_DEVICE void populateVolumeHit(VolumeHit &hit)
   hit.foundHit = true;
   hit.volume = &ray::volumeData(fd);
   hit.instance = &ivd;
-
-  hit.lastVolID = ray::objID();
-  hit.lastInstID = ray::instID();
 
   const auto ro = optixGetWorldRayOrigin();
   hit.localRay.org = make_vec3(optixTransformPointFromWorldToObjectSpace(ro));

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "tsd/core/scene/Scene.hpp"
+#include "tsd/core/ColorMapUtil.hpp"
 // std
 #include <cstdio>
 #include <string>
@@ -40,6 +41,9 @@ TransferFunctionData loadTransferFunction(
     const std::string &name, const std::string &basePath = "");
 tsd::core::ArrayRef createColormapArray(
     tsd::core::Scene &scene, const TransferFunctionData &tfData);
+
+// Transfer function import functions
+core::TransferFunction importTransferFunction(const std::string &filepath);
 
 bool calcTangentsForTriangleMesh(const tsd::math::uint3 *indices,
     const tsd::math::float3 *vertexPositions,

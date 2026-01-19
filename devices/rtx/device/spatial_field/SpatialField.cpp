@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,9 @@
 
 #include "SpatialField.h"
 // specific types
+#include "NvdbRectilinearField.h"
 #include "NvdbRegularField.h"
+#include "StructuredRectilinearField.h"
 #include "StructuredRegularField.h"
 #include "UnknownSpatialField.h"
 
@@ -54,8 +56,12 @@ SpatialField *SpatialField::createInstance(
 {
   if (subtype == "structuredRegular")
     return new StructuredRegularField(d);
+  else if (subtype == "structuredRectilinear")
+    return new StructuredRectilinearField(d);
   else if (subtype == "nanovdb")
     return new NvdbRegularField(d);
+  else if (subtype == "nanovdbRectilinear")
+    return new NvdbRectilinearField(d);
   else
     return new UnknownSpatialField(subtype, d);
 }

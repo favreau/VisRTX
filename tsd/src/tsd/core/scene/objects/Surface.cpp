@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/core/scene/objects/Surface.hpp"
@@ -32,10 +32,10 @@ Material *Surface::material() const
   return parameterValueAsObject<Material>(tokens::surface::material);
 }
 
-IndexedVectorRef<Surface> Surface::self() const
+ObjectPoolRef<Surface> Surface::self() const
 {
   return scene() ? scene()->getObject<Surface>(index())
-                 : IndexedVectorRef<Surface>{};
+                 : ObjectPoolRef<Surface>{};
 }
 
 anari::Object Surface::makeANARIObject(anari::Device d) const

@@ -1,4 +1,4 @@
-// Copyright 2025 NVIDIA Corporation
+// Copyright 2025-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "OfflineRenderModal.h"
@@ -24,6 +24,12 @@ void OfflineRenderModal::buildUI()
   m_timer.end();
   ImGui::NewLine();
   ImGui::TextDisabled("elapsed time: %.2fs", m_timer.seconds());
+
+  ImGui::Separator();
+  ImGui::BeginDisabled(m_canceled);
+  if (ImGui::Button("cancel"))
+    m_canceled = true;
+  ImGui::EndDisabled();
 }
 
 void OfflineRenderModal::start()

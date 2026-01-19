@@ -1,5 +1,5 @@
 ﻿/*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -65,6 +65,12 @@
 // materials
 #include "material/shaders/MatteShader.h"
 #include "material/shaders/PhysicallyBasedShader.h"
+
+// spatial field samplers
+#include "spatial_field/NvdbRectilinearSampler.h"
+#include "spatial_field/NvdbRegularSampler.h"
+#include "spatial_field/StructuredRectilinearSampler.h"
+#include "spatial_field/StructuredRegularSampler.h"
 
 // MDL
 #ifdef USE_MDL
@@ -776,6 +782,18 @@ DeviceInitStatus VisRTXDevice::initOptix()
       init_module(&state.materialShaders.physicallyBased,
           PhysicallyBasedShader::ptx(),
           "'physicallyBased' shader"),
+      init_module(&state.fieldSamplers.structuredRegular,
+          StructuredRegularSampler::ptx(),
+          "'structuredRegular' field sampler"),
+      init_module(&state.fieldSamplers.nvdb,
+          NvdbRegularSampler::ptx(),
+          "'nvdb' field sampler"),
+      init_module(&state.fieldSamplers.structuredRectilinear,
+          StructuredRectilinearSampler::ptx(),
+          "'structuredRectilinear' field sampler"),
+      init_module(&state.fieldSamplers.nvdbRectilinear,
+          NvdbRectilinearSampler::ptx(),
+          "'nanovdbRectilinear' field sampler"),
   };
 
   for (auto &f : compileTasks)

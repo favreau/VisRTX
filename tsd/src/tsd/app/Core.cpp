@@ -1,10 +1,11 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #define ANARI_EXTENSION_UTILITY_IMPL
 
 #include "Core.h"
 // tsd_core
+#include "tsd/core/ColorMapUtil.hpp"
 #include "tsd/core/Logging.hpp"
 // tsd_io
 #include "tsd/io/importers.hpp"
@@ -17,7 +18,7 @@
 
 namespace tsd::app {
 
-void anariStatusFunc(const void *_core,
+void anariStatusFunc(const void *_verboseFlag,
     ANARIDevice device,
     ANARIObject source,
     ANARIDataType sourceType,
@@ -26,8 +27,8 @@ void anariStatusFunc(const void *_core,
     const char *message)
 {
   const char *typeStr = anari::toString(sourceType);
-  const auto *core = (const Core *)_core;
-  const bool verbose = core->logging.verbose;
+  const auto *verboseFlag = (const bool *)_verboseFlag;
+  const bool verbose = verboseFlag ? *verboseFlag : false;
 
   if (severity == ANARI_SEVERITY_FATAL_ERROR) {
     fprintf(stderr, "[ANARI][FATAL][%s][%p] %s", typeStr, source, message);
@@ -84,9 +85,22 @@ static std::vector<std::string> parseLibraryList(bool defaultNone)
 
 // Core definitions ////////////////////////////////////////////////////////
 
-Core::Core() : anari(this)
+Core::Core() : anari(&logging.verbose)
 {
   tsd.scene.setUpdateDelegate(&anari.getUpdateDelegate());
+
+  // Initialize default transfer function
+  for (const auto &c : core::colormap::viridis) {
+    importer.transferFunction.colorPoints.push_back(
+        {float(importer.transferFunction.colorPoints.size())
+                / float(core::colormap::viridis.size() - 1),
+            c.x,
+            c.y,
+            c.z});
+  }
+
+  importer.transferFunction.opacityPoints = {{0.0f, 0.0f}, {1.0f, 1.0f}};
+  importer.transferFunction.range = {};
 }
 
 Core::~Core()
@@ -102,7 +116,7 @@ void Core::parseCommandLine(int argc, const char **argv)
     return;
   }
 
-  auto importerType = ImporterType::NONE;
+  auto &importerType = this->commandLine.importerType;
 
   for (int i = 1; i < argc; i++) {
     if (!argv[i])
@@ -156,6 +170,8 @@ void Core::parseCommandLine(int argc, const char **argv)
       importerType = ImporterType::POINTSBIN_MULTIFILE;
     } else if (arg == "-pt")
       importerType = ImporterType::PT;
+    else if (arg == "-silo")
+      importerType = ImporterType::SILO;
     else if (arg == "-smesh")
       importerType = ImporterType::SMESH;
     else if (arg == "-smesh_animation")
@@ -166,10 +182,18 @@ void Core::parseCommandLine(int argc, const char **argv)
       importerType = ImporterType::TRK;
     else if (arg == "-usd")
       importerType = ImporterType::USD;
+    else if (arg == "-usd2")
+      importerType = ImporterType::USD2;
     else if (arg == "-xyzdp")
       importerType = ImporterType::XYZDP;
     else if (arg == "-volume")
       importerType = ImporterType::VOLUME;
+    else if (arg == "-blank")
+      importerType = ImporterType::BLANK;
+    else if (arg == "-xf" || arg == "--transferFunction")
+      importerType = ImporterType::XF;
+    else if (arg == "-camera" || arg == "--camera")
+      this->commandLine.cameraFile = argv[++i];
     else {
       if (importerType != ImporterType::NONE) {
         if (importerType == ImporterType::POINTSBIN_MULTIFILE) {
@@ -211,14 +235,18 @@ void Core::setupSceneFromCommandLine(bool hdriOnly)
     return;
   }
 
-  const bool generateOrb = !commandLine.loadingScene
-      && !commandLine.loadedFromStateFile && commandLine.filenames.size() == 0
-      && commandLine.animationFilenames.size() == 0;
+  const bool haveFiles = commandLine.filenames.size() > 0
+      || commandLine.animationFilenames.size() > 0;
+  const bool blankImport =
+      !haveFiles && commandLine.importerType == ImporterType::BLANK;
+  const bool loadFromState = commandLine.loadedFromStateFile;
+
+  const bool generateOrb = !(blankImport || haveFiles || loadFromState);
 
   if (generateOrb) {
     tsd::core::logStatus("...generating material_orb from embedded data");
     tsd::io::generate_material_orb(tsd.scene);
-  } else if (!commandLine.loadedFromStateFile) {
+  } else if (!loadFromState) {
     importFiles(commandLine.filenames);
     importAnimations(commandLine.animationFilenames);
   }
@@ -274,6 +302,8 @@ void Core::importFile(const ImportFile &f, tsd::core::LayerNodeRef root)
     tsd::io::import_POINTSBIN(tsd.scene, {file.c_str()}, root);
   else if (f.first == ImporterType::PT)
     tsd::io::import_PT(tsd.scene, file.c_str(), root);
+  else if (f.first == ImporterType::SILO)
+    tsd::io::import_SILO(tsd.scene, file.c_str(), root);
   else if (f.first == ImporterType::SMESH)
     tsd::io::import_SMESH(tsd.scene, file.c_str(), root, false);
   else if (f.first == ImporterType::SMESH_ANIMATION)
@@ -284,11 +314,19 @@ void Core::importFile(const ImportFile &f, tsd::core::LayerNodeRef root)
     tsd::io::import_TRK(tsd.scene, file.c_str(), root);
   else if (f.first == ImporterType::USD)
     tsd::io::import_USD(tsd.scene, file.c_str(), root);
-  else if (f.first == ImporterType::XYZDP)
+  else if (f.first == ImporterType::USD2) {
+    tsd::io::import_USD(tsd.scene, file.c_str(), root);
+    tsd::io::import_USD2(tsd.scene, file.c_str(), root);
+  } else if (f.first == ImporterType::XYZDP)
     tsd::io::import_XYZDP(tsd.scene, file.c_str(), root);
   else if (f.first == ImporterType::VOLUME)
-    tsd::io::import_volume(tsd.scene, file.c_str(), root);
-  else {
+    tsd::io::import_volume(
+        tsd.scene, file.c_str(), importer.transferFunction, root);
+  else if (f.first == ImporterType::XF) {
+    importer.transferFunction = tsd::io::importTransferFunction(file);
+  } else if (f.first == ImporterType::BLANK) {
+    // no-op
+  } else {
     tsd::core::logWarning(
         "...skipping unknown file type for '%s'", file.c_str());
   }
@@ -319,7 +357,9 @@ void Core::importAnimations(const std::vector<ImportAnimationFiles> &files,
   }
 }
 
-ANARIDeviceManager::ANARIDeviceManager(Core *core) : m_core(core) {}
+ANARIDeviceManager::ANARIDeviceManager(const bool *verboseFlag)
+    : m_verboseFlag(verboseFlag)
+{}
 
 anari::Device ANARIDeviceManager::loadDevice(const std::string &libraryName,
     const std::vector<DeviceInitParam> &initialDeviceParams)
@@ -334,7 +374,7 @@ anari::Device ANARIDeviceManager::loadDevice(const std::string &libraryName,
   }
 
   auto library =
-      anari::loadLibrary(libraryName.c_str(), anariStatusFunc, m_core);
+      anari::loadLibrary(libraryName.c_str(), anariStatusFunc, m_verboseFlag);
   if (!library)
     return nullptr;
 
@@ -460,34 +500,148 @@ void Core::setOfflineRenderingLibrary(const std::string &libName)
   anari::release(d, d);
 }
 
-void Core::setSelectedObject(tsd::core::Object *o)
+tsd::core::LayerNodeRef Core::getFirstSelected() const
 {
-  tsd.selectedNode = {};
-  tsd.selectedObject = o;
+  return tsd.selectedNodes.empty() ? tsd::core::LayerNodeRef{}
+                                   : tsd.selectedNodes[0];
+}
+
+const std::vector<tsd::core::LayerNodeRef> &Core::getSelectedNodes() const
+{
+  return tsd.selectedNodes;
+}
+
+void Core::setSelected(tsd::core::LayerNodeRef node)
+{
+  setSelected(std::vector<tsd::core::LayerNodeRef>{
+      node.valid() ? node : tsd::core::LayerNodeRef{}});
+}
+
+void Core::setSelected(const std::vector<tsd::core::LayerNodeRef> &nodes)
+{
+  tsd.selectedNodes = nodes;
   anari.getUpdateDelegate().signalObjectFilteringChanged();
 }
 
-void Core::setSelectedNode(tsd::core::LayerNode &n)
+void Core::setSelected(const tsd::core::Object *obj)
 {
-  setSelectedObject(n->getObject());
-  auto *layer = n.container();
-  tsd.selectedNode = layer->at(n.index());
+  if (!obj) {
+    clearSelected();
+    return;
+  }
+
+  // Search all layers for first node referencing this object
+  const auto &layers = tsd.scene.layers();
+  for (auto &&[layerTk, state] : layers) {
+    // Layer::traverse is non-const, so we need to cast away constness here
+    // This needs to be fixed at some point in the future
+    auto layer = const_cast<tsd::core::Layer *>(state.ptr.get());
+    tsd::core::LayerNodeRef foundNode;
+    layer->traverse(layer->root(), [&](auto &node, int level) {
+      if (foundNode.valid())
+        return false;
+      if (level > 0) {
+        auto *nodeObj = node->getObject();
+        if (nodeObj == obj) {
+          foundNode = layer->at(node.index());
+          return false;
+        }
+      }
+      return true;
+    });
+
+    if (foundNode.valid()) {
+      tsd::core::logStatus(
+          "[selection] Selected object %s[%zu] as node %zu on layer %s",
+          obj->name().c_str(),
+          obj->index(),
+          foundNode.index(),
+          layerTk);
+      setSelected(foundNode);
+      return;
+    }
+  }
+
+  tsd::core::logStatus(
+      "[selection] Object not found in any layer, clearing selection");
+  clearSelected();
 }
 
-bool Core::objectIsSelected() const
+void Core::addToSelection(tsd::core::LayerNodeRef node)
 {
-  return tsd.selectedObject != nullptr;
+  if (!node.valid())
+    return;
+
+  for (const auto &selected : tsd.selectedNodes) {
+    if (selected == node)
+      return;
+  }
+
+  tsd.selectedNodes.push_back(node);
+  anari.getUpdateDelegate().signalObjectFilteringChanged();
 }
 
-void Core::clearSelected()
+void Core::removeFromSelection(tsd::core::LayerNodeRef node)
 {
-  if (tsd.selectedObject != nullptr || tsd.selectedNode) {
-    tsd.selectedObject = nullptr;
-    tsd.selectedNode = {};
+  auto it = std::find(tsd.selectedNodes.begin(), tsd.selectedNodes.end(), node);
+  if (it != tsd.selectedNodes.end()) {
+    tsd.selectedNodes.erase(it);
     anari.getUpdateDelegate().signalObjectFilteringChanged();
   }
 }
 
+bool Core::isSelected(tsd::core::LayerNodeRef node) const
+{
+  return std::find(tsd.selectedNodes.begin(), tsd.selectedNodes.end(), node)
+      != tsd.selectedNodes.end();
+}
+
+void Core::clearSelected()
+{
+  if (!tsd.selectedNodes.empty()) {
+    tsd.selectedNodes.clear();
+    anari.getUpdateDelegate().signalObjectFilteringChanged();
+  }
+}
+std::vector<tsd::core::LayerNodeRef> Core::getParentOnlySelectedNodes() const
+{
+  std::vector<tsd::core::LayerNodeRef> parentOnly;
+
+  for (const auto &node : tsd.selectedNodes) {
+    if (!node.valid())
+      continue;
+
+    bool isChildOfSelected = false;
+
+    // Check if any other selected node is an ancestor of this node
+    for (const auto &potentialParent : tsd.selectedNodes) {
+      if (!potentialParent.valid() || potentialParent == node)
+        continue;
+
+      auto current = node;
+      while (current.valid()) {
+        auto parentRef = current->parent();
+        if (!parentRef.valid())
+          break;
+
+        if (parentRef == potentialParent) {
+          isChildOfSelected = true;
+          break;
+        }
+
+        current = parentRef;
+      }
+
+      if (isChildOfSelected)
+        break;
+    }
+
+    if (!isChildOfSelected)
+      parentOnly.push_back(node);
+  }
+
+  return parentOnly;
+}
 void Core::addCurrentViewToCameraPoses(const char *_name)
 {
   auto azel = view.manipulator.azel();
@@ -553,6 +707,94 @@ void Core::updateExistingCameraPoseFromView(CameraPose &p)
   p.upAxis = static_cast<int>(view.manipulator.axis());
 }
 
+bool Core::updateCameraPathAnimation()
+{
+  auto &scene = tsd.scene;
+
+  if (view.poses.size() < 2) {
+    tsd::core::logWarning(
+        "[camera path] Need at least 2 poses to build animation");
+    return false;
+  }
+
+  size_t cameraIndex = view.cameraPathCameraIndex;
+  if (cameraIndex == TSD_INVALID_INDEX)
+    cameraIndex = offline.camera.cameraIndex;
+
+  auto camera = scene.getObject<tsd::core::Camera>(cameraIndex);
+  if (!camera) {
+    tsd::core::logWarning("[camera path] No camera selected for animation");
+    return false;
+  }
+
+  std::vector<tsd::rendering::CameraPose> samples;
+  tsd::rendering::buildCameraPathSamples(
+      view.poses, view.pathSettings, samples);
+
+  if (samples.empty()) {
+    tsd::core::logWarning("[camera path] No samples generated");
+    return false;
+  }
+
+  offline.frame.numFrames = static_cast<int>(samples.size());
+  if (offline.frame.renderSubset) {
+    offline.frame.startFrame =
+        std::clamp(offline.frame.startFrame, 0, offline.frame.numFrames - 1);
+    offline.frame.endFrame =
+        std::clamp(offline.frame.endFrame, 0, offline.frame.numFrames - 1);
+  }
+
+  if (view.cameraPathAnimation)
+    scene.removeAnimation(view.cameraPathAnimation);
+
+  auto *animation = scene.addAnimation("camera_path");
+  view.cameraPathAnimation = animation;
+
+  auto positionArray = scene.createArray(ANARI_FLOAT32_VEC3, samples.size());
+  auto directionArray = scene.createArray(ANARI_FLOAT32_VEC3, samples.size());
+  auto upArray = scene.createArray(ANARI_FLOAT32_VEC3, samples.size());
+
+  positionArray->setName("camera_path_position");
+  directionArray->setName("camera_path_direction");
+  upArray->setName("camera_path_up");
+
+  tsd::rendering::Manipulator tempManipulator;
+  auto *positions = positionArray->mapAs<tsd::math::float3>();
+  auto *directions = directionArray->mapAs<tsd::math::float3>();
+  auto *ups = upArray->mapAs<tsd::math::float3>();
+
+  for (size_t i = 0; i < samples.size(); ++i) {
+    tempManipulator.setConfig(samples[i]);
+    positions[i] = tempManipulator.eye();
+    directions[i] = tempManipulator.dir();
+    ups[i] = tempManipulator.up();
+  }
+
+  const auto firstPosition = positions[0];
+  const auto firstDirection = directions[0];
+  const auto firstUp = ups[0];
+
+  positionArray->unmap();
+  directionArray->unmap();
+  upArray->unmap();
+
+  std::vector<tsd::core::Token> params = {"position", "direction", "up"};
+  std::vector<tsd::core::TimeStepValues> valueArrays = {
+      positionArray, directionArray, upArray};
+  animation->setAsTimeSteps(*camera, params, valueArrays);
+
+  // Seed camera parameters with the first sample for immediate feedback
+  camera->setParameter("position", firstPosition);
+  camera->setParameter("direction", firstDirection);
+  camera->setParameter("up", firstUp);
+
+  tsd::core::logStatus(
+      "[camera path] Built animation with %zu samples for camera '%s'",
+      samples.size(),
+      camera->name().c_str());
+  return true;
+}
+
 void Core::setCameraPose(const CameraPose &pose)
 {
   view.manipulator.setConfig(
@@ -563,6 +805,11 @@ void Core::setCameraPose(const CameraPose &pose)
 void Core::removeAllPoses()
 {
   view.poses.clear();
+  if (view.cameraPathAnimation) {
+    tsd::core::logStatus("[camera path] Clearing camera path animation");
+    tsd.scene.removeAnimation(view.cameraPathAnimation);
+    view.cameraPathAnimation = nullptr;
+  }
 }
 
 void OfflineRenderSequenceConfig::saveSettings(tsd::core::DataNode &root)
@@ -575,6 +822,10 @@ void OfflineRenderSequenceConfig::saveSettings(tsd::core::DataNode &root)
   frameRoot["colorFormat"] = frame.colorFormat;
   frameRoot["samples"] = frame.samples;
   frameRoot["numFrames"] = frame.numFrames;
+  frameRoot["renderSubset"] = frame.renderSubset;
+  frameRoot["startFrame"] = frame.startFrame;
+  frameRoot["endFrame"] = frame.endFrame;
+  frameRoot["frameIncrement"] = frame.frameIncrement;
 
   auto &cameraRoot = root["camera"];
   cameraRoot["apertureRadius"] = camera.apertureRadius;
@@ -592,6 +843,13 @@ void OfflineRenderSequenceConfig::saveSettings(tsd::core::DataNode &root)
   auto &outputRoot = root["output"];
   outputRoot["outputDirectory"] = output.outputDirectory;
   outputRoot["filePrefix"] = output.filePrefix;
+
+  auto &aovRoot = root["aov"];
+  aovRoot["aovType"] = static_cast<int>(aov.aovType);
+  aovRoot["depthMin"] = aov.depthMin;
+  aovRoot["depthMax"] = aov.depthMax;
+  aovRoot["edgeThreshold"] = aov.edgeThreshold;
+  aovRoot["edgeInvert"] = aov.edgeInvert;
 }
 
 void OfflineRenderSequenceConfig::loadSettings(tsd::core::DataNode &root)
@@ -602,6 +860,10 @@ void OfflineRenderSequenceConfig::loadSettings(tsd::core::DataNode &root)
   frameRoot["colorFormat"].getValue(ANARI_DATA_TYPE, &frame.colorFormat);
   frameRoot["samples"].getValue(ANARI_UINT32, &frame.samples);
   frameRoot["numFrames"].getValue(ANARI_INT32, &frame.numFrames);
+  frameRoot["renderSubset"].getValue(ANARI_BOOL, &frame.renderSubset);
+  frameRoot["startFrame"].getValue(ANARI_INT32, &frame.startFrame);
+  frameRoot["endFrame"].getValue(ANARI_INT32, &frame.endFrame);
+  frameRoot["frameIncrement"].getValue(ANARI_INT32, &frame.frameIncrement);
 
   auto &cameraRoot = root["camera"];
   cameraRoot["apertureRadius"].getValue(ANARI_FLOAT32, &camera.apertureRadius);
@@ -624,6 +886,15 @@ void OfflineRenderSequenceConfig::loadSettings(tsd::core::DataNode &root)
   auto &outputRoot = root["output"];
   outputRoot["outputDirectory"].getValue(ANARI_STRING, &output.outputDirectory);
   outputRoot["filePrefix"].getValue(ANARI_STRING, &output.filePrefix);
+
+  auto &aovRoot = root["aov"];
+  int aovTypeInt = static_cast<int>(aov.aovType);
+  aovRoot["aovType"].getValue(ANARI_INT32, &aovTypeInt);
+  aov.aovType = static_cast<tsd::rendering::AOVType>(aovTypeInt);
+  aovRoot["depthMin"].getValue(ANARI_FLOAT32, &aov.depthMin);
+  aovRoot["depthMax"].getValue(ANARI_FLOAT32, &aov.depthMax);
+  aovRoot["edgeThreshold"].getValue(ANARI_FLOAT32, &aov.edgeThreshold);
+  aovRoot["edgeInvert"].getValue(ANARI_BOOL, &aov.edgeInvert);
 }
 
 } // namespace tsd::app

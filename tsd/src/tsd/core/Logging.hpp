@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -32,6 +32,7 @@ using LoggingCallback = std::function<void(LogLevel, std::string)>;
 
 void setLoggingCallback(LoggingCallback cb);
 void setLogToStdout();
+void setLogToStderr();
 void setNoLogging();
 
 } // namespace tsd::core

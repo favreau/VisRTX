@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/io/importers.hpp"
@@ -73,8 +73,8 @@ void import_NBODY(Scene &scene,
 
     auto geom = scene.createObject<Geometry>(tokens::geometry::sphere);
     geom->setName(geomName.c_str());
-    geom->setParameter("radius"_t, nbody.radius);
-    geom->setParameterObject("vertex.position"_t, *vertexPositionArray);
+    geom->setParameter("radius", nbody.radius);
+    geom->setParameterObject("vertex.position", *vertexPositionArray);
 
     auto surface = scene.createSurface(geomName.c_str(), geom, mat);
     scene.insertChildObjectNode(nbody_root, surface);

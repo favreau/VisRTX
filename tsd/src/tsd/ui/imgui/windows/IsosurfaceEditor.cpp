@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "IsosurfaceEditor.h"
@@ -21,7 +21,9 @@ void IsosurfaceEditor::buildUI()
 
   tsd::core::Object *selectedIsosurface = nullptr;
   tsd::core::Object *selectedVolume = nullptr;
-  tsd::core::Object *selectedObject = appCore()->tsd.selectedObject;
+  auto selectedNode = appCore()->getFirstSelected();
+  tsd::core::Object *selectedObject =
+      selectedNode.valid() ? (*selectedNode)->getObject() : nullptr;
 
   if (selectedObject != nullptr) {
     if (selectedObject->type() == ANARI_VOLUME)
@@ -94,7 +96,9 @@ void IsosurfaceEditor::buildUI()
 
 void IsosurfaceEditor::addIsosurfaceGeometryFromSelected()
 {
-  tsd::core::Object *selectedObject = appCore()->tsd.selectedObject;
+  auto selectedNode = appCore()->getFirstSelected();
+  tsd::core::Object *selectedObject =
+      selectedNode.valid() ? (*selectedNode)->getObject() : nullptr;
   auto &scene = appCore()->tsd.scene;
   auto *layer = scene.defaultLayer();
 
@@ -113,7 +117,7 @@ void IsosurfaceEditor::addIsosurfaceGeometryFromSelected()
 
   auto n = layer->insert_last_child(layer->root(), {s});
 
-  appCore()->setSelectedNode(*n);
+  appCore()->setSelected(n);
   scene.signalLayerChange(layer);
 }
 

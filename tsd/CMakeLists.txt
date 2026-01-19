@@ -1,4 +1,4 @@
-## Copyright 2024-2025 NVIDIA Corporation
+## Copyright 2024-2026 NVIDIA Corporation
 ## SPDX-License-Identifier: Apache-2.0
 
 cmake_minimum_required(VERSION 3.21)
@@ -57,6 +57,8 @@ option(TSD_USE_TBB "Use TBB code paths where relevant" ON)
 option(TSD_USE_USD "Use OpenUSD where relevant" OFF)
 option(TSD_USE_TORCH "Use PyTorch for importing neural geometries" OFF)
 option(TSD_USE_VTK "Use VTK for importing VTK file formats" OFF)
+option(TSD_USE_SILO "Use Silo for importing Silo file formats" OFF)
+option(TSD_USE_MPI "Enable MPI support" OFF)
 
 if (APPLE)
   set(TSD_USE_CUDA OFF)

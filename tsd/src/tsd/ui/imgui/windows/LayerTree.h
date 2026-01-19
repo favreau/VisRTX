@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -22,9 +22,28 @@ struct LayerTree : public Window
   void buildUI_layerHeader();
   void buildUI_tree();
   void buildUI_activateObjectSceneMenu();
+  void buildUI_handleSelection();
   void buildUI_objectSceneMenu();
   void buildUI_newLayerSceneMenu();
   void buildUI_setActiveLayersSceneMenus();
+
+  std::vector<tsd::core::LayerNodeRef> computeSelectionRange(
+      tsd::core::Layer &layer,
+      const tsd::core::LayerNodeRef &anchor,
+      const tsd::core::LayerNodeRef &target);
+
+  std::vector<tsd::core::LayerNodeRef> copyNodesTo(
+      tsd::core::LayerNodeRef targetParent,
+      const std::vector<tsd::core::LayerNodeRef>& sourceNodes,
+      bool cutOperation
+  );
+
+  bool isValidDropTarget(
+      tsd::core::Layer& layer,
+      tsd::core::LayerNodeRef targetParent,
+      const tsd::core::LayerNodeRef* sourceNodes,
+      size_t count
+  ) const;
 
   // Data //
 
@@ -36,6 +55,7 @@ struct LayerTree : public Window
   bool m_menuVisible{false};
   std::vector<int> m_needToTreePop;
   int m_layerIdx{0};
+  tsd::core::LayerNodeRef m_anchorNode;
 };
 
 } // namespace tsd::ui::imgui

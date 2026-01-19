@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/io/importers.hpp"
@@ -111,7 +111,7 @@ SpatialFieldRef import_MHD(Scene &scene, const char *filepath)
   fclose(fileHandle);
   voxelArray->unmap();
 
-  field->setParameterObject("data"_t, *voxelArray);
+  field->setParameterObject("data", *voxelArray);
 
   return field;
 }

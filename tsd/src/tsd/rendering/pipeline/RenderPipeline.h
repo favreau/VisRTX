@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -13,7 +13,7 @@
 #include "passes/OutlineRenderPass.h"
 #include "passes/PickPass.h"
 #include "passes/SaveToFilePass.h"
-#include "passes/VisualizeDepthPass.h"
+#include "passes/VisualizeAOVPass.h"
 // std
 #include <memory>
 

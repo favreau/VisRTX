@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/io/procedural.hpp"
@@ -36,8 +36,8 @@ VolumeRef generate_noiseVolume(Scene &scene,
 
   voxelArray->unmap();
 
-  field->setParameter("origin"_t, float3(-1, -1, -1));
-  field->setParameterObject("data"_t, *voxelArray);
+  field->setParameter("origin", float3(-1, -1, -1));
+  field->setParameterObject("data", *voxelArray);
 
   // Setup volume //
 
@@ -50,8 +50,8 @@ VolumeRef generate_noiseVolume(Scene &scene,
     colorArray->setData(makeDefaultColorMap(colorArray->size()).data());
   }
 
-  volume->setParameterObject("color"_t, *colorArray);
-  volume->setParameterObject("value"_t, *field);
+  volume->setParameterObject("color", *colorArray);
+  volume->setParameterObject("value", *field);
 
   return volume;
 }

@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -19,6 +19,8 @@ struct AnariSceneRenderPass : public RenderPass
   void setWorld(anari::World w);
   void setColorFormat(anari::DataType t);
   void setEnableIDs(bool on);
+  void setEnableAlbedo(bool on);
+  void setEnableNormals(bool on);
 
   // default' true', if 'false', then anari::wait() on each pass
   void setRunAsync(bool on);
@@ -40,6 +42,8 @@ struct AnariSceneRenderPass : public RenderPass
   bool m_firstFrame{true};
   bool m_deviceSupportsCUDAFrames{false};
   bool m_enableIDs{false};
+  bool m_enableAlbedo{false};
+  bool m_enableNormals{false};
   bool m_runAsync{true};
 
   anari::Device m_device{nullptr};

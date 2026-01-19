@@ -1,4 +1,4 @@
-// Copyright 2025 NVIDIA Corporation
+// Copyright 2025-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/app/renderAnimationSequence.h"
@@ -9,6 +9,7 @@
 // tsd_rendering
 #include "tsd/rendering/index/RenderIndex.hpp"
 #include "tsd/rendering/pipeline/RenderPipeline.h"
+#include "tsd/rendering/pipeline/passes/VisualizeAOVPass.h"
 // std
 #include <filesystem>
 #include <iomanip>
@@ -75,8 +76,6 @@ static OfflineRenderRig setupRig(tsd::app::Core &core)
   ro.updateAllANARIParameters(d, r);
   anari::commitParameters(d, r);
 
-  rig.numFrames = config.frame.numFrames;
-
   // Create pipeline stages //
 
   rig.pipeline = std::make_unique<tsd::rendering::RenderPipeline>();
@@ -96,6 +95,25 @@ static OfflineRenderRig setupRig(tsd::app::Core &core)
   rig.anariPass->setWorld(rig.renderIndex->world());
   rig.anariPass->setRenderer(r);
   rig.anariPass->setCamera(c);
+
+  // Add AOV visualization pass if enabled
+  if (config.aov.aovType != tsd::rendering::AOVType::NONE) {
+    auto *aovPass =
+        rig.pipeline->emplace_back<tsd::rendering::VisualizeAOVPass>();
+    aovPass->setAOVType(config.aov.aovType);
+    aovPass->setDepthRange(config.aov.depthMin, config.aov.depthMax);
+    aovPass->setEdgeThreshold(config.aov.edgeThreshold);
+    aovPass->setEdgeInvert(config.aov.edgeInvert);
+
+    // Enable necessary frame channels
+    if (config.aov.aovType == tsd::rendering::AOVType::ALBEDO) {
+      rig.anariPass->setEnableAlbedo(true);
+    } else if (config.aov.aovType == tsd::rendering::AOVType::NORMAL) {
+      rig.anariPass->setEnableNormals(true);
+    } else if (config.aov.aovType == tsd::rendering::AOVType::EDGES) {
+      rig.anariPass->setEnableIDs(true);
+    }
+  }
 
   rig.saveToFilePass->setEnabled(true);
   rig.saveToFilePass->setSingleShotMode(false);
@@ -118,6 +136,7 @@ void renderAnimationSequence(Core &core,
     const std::string &filePrefix,
     RenderSequenceCallback preFrameCallback)
 {
+  core.updateCameraPathAnimation();
   auto rp = setupRig(core);
 
   if (rp.pipeline.get() == nullptr) {
@@ -133,9 +152,14 @@ void renderAnimationSequence(Core &core,
   auto d = rp.anariPass->getDevice();
   auto c = rp.anariPass->getCamera();
 
-  for (int frameIndex = 0; frameIndex < rp.numFrames; ++frameIndex) {
+  auto &config = core.offline.frame;
+  auto start = config.renderSubset ? config.startFrame : 0;
+  auto end = config.renderSubset ? config.endFrame : config.numFrames - 1;
+  auto increment = config.frameIncrement;
+
+  for (int frameIndex = start; frameIndex <= end; frameIndex += increment) {
     if (preFrameCallback) {
-      if (!preFrameCallback(frameIndex, rp.numFrames)) {
+      if (!preFrameCallback(frameIndex, config.numFrames)) {
         tsd::core::logStatus(
             "[renderAnimationSequence] Aborting render sequence at frame %d",
             frameIndex);
@@ -145,7 +169,7 @@ void renderAnimationSequence(Core &core,
 
     // Set scene time for this frame //
 
-    float time = static_cast<float>(frameIndex) / (rp.numFrames - 1);
+    float time = static_cast<float>(frameIndex) / (config.numFrames - 1);
     scene.setAnimationTime(time);
 
     // Update camera (in case it is animated) //

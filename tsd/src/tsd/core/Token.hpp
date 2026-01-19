@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -34,9 +34,4 @@ struct Token
 bool operator==(const Token &t1, const Token &t2);
 bool operator!=(const Token &t1, const Token &t2);
 
-namespace literals {
-
-Token operator""_t(const char *, size_t);
-
-} // namespace literals
 } // namespace tsd::core

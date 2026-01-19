@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -16,12 +16,12 @@ struct Camera : public Object
   Camera(Token subtype = tokens::unknown);
   virtual ~Camera() override = default;
 
-  IndexedVectorRef<Camera> self() const;
+  ObjectPoolRef<Camera> self() const;
 
   anari::Object makeANARIObject(anari::Device d) const override;
 };
 
-using CameraRef = IndexedVectorRef<Camera>;
+using CameraRef = ObjectPoolRef<Camera>;
 
 namespace tokens::camera {
 

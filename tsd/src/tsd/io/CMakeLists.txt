@@ -10,10 +10,11 @@ PRIVATE
   importers/detail/HDRImage.cpp
   importers/detail/importer_common.cpp
   importers/detail/netcdf_utils.cpp
-  importers/import_ASSIMP.cpp
-  importers/import_AURORA.cpp
+  importers/detail/usd/MaterialCommon.cpp
+  importers/detail/usd/OmniPbrMaterial.cpp
   importers/import_AGX.cpp
   importers/import_ASSIMP.cpp
+  importers/import_AURORA.cpp
   importers/import_AXYZ.cpp
   importers/import_CLOUDS.cpp
   importers/import_DLAF.cpp
@@ -28,12 +29,14 @@ PRIVATE
   importers/import_NVDB.cpp
   importers/import_OBJ.cpp
   importers/import_USD.cpp
+  importers/import_USD2.cpp
   importers/import_PDB.cpp
   importers/import_PLANET.cpp
   importers/import_PLY.cpp
   importers/import_POINTSBIN.cpp
   importers/import_PT.cpp
   importers/import_RAW.cpp
+  importers/import_SILO.cpp
   importers/import_SMESH.cpp
   importers/import_SWC.cpp
   importers/import_TRK.cpp
@@ -50,6 +53,8 @@ PRIVATE
   procedural/generate_noiseVolume.cpp
   procedural/generate_randomSpheres.cpp
   procedural/generate_rtow.cpp
+  procedural/generate_sphereSetVolume.cpp
+  serialization/export_RegularVolumeToNanoVDB.cpp
   serialization/export_SceneToUSD.cpp
   serialization/serialization_datatree.cpp
 )
@@ -73,6 +78,11 @@ PRIVATE
   $<BUILD_INTERFACE:tsd_ext_tinygltf>
   $<BUILD_INTERFACE:stb_image>
 )
+
+# Always use nanovdb
+find_package(tsd_nanovdb MODULE REQUIRED)
+project_link_libraries(PRIVATE tsd::nanovdb)
+
 
 ## Setup optional dependencies ##
 
@@ -127,6 +137,14 @@ if (TSD_USE_VTK)
   project_compile_definitions(PRIVATE -DTSD_USE_VTK=1)
 else()
   project_compile_definitions(PRIVATE -DTSD_USE_VTK=0)
+endif()
+
+if (TSD_USE_SILO)
+  find_package(tsd_silo MODULE REQUIRED)
+  project_link_libraries(PRIVATE tsd::silo)
+  project_compile_definitions(PRIVATE -DTSD_USE_SILO=1)
+else()
+  project_compile_definitions(PRIVATE -DTSD_USE_SILO=0)
 endif()
 
 if (TSD_USE_NETCDF)

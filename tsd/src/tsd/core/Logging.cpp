@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "Logging.hpp"
@@ -98,6 +98,13 @@ void setLogToStdout()
 {
   setLoggingCallback([](LogLevel level, std::string message) {
     fmt::print(stdout, "{}", message);
+  });
+}
+
+void setLogToStderr()
+{
+  setLoggingCallback([](LogLevel level, std::string message) {
+    fmt::print(stderr, "{}", message);
   });
 }
 

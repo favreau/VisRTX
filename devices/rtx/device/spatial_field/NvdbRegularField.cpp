@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,17 +30,15 @@
  */
 
 #include "NvdbRegularField.h"
+#include "gpu/gpu_decl.h"
+#include "gpu/shadingState.h"
 
-#include "array/Array1D.h"
-#include "utility/DeviceBuffer.h"
-
-#include <anari/frontend/anari_enums.h>
+// anari
+#include <anari/anari_cpp/Traits.h>
+#include "utility/AnariTypeHelpers.h"
 
 // nanovdb
-#include <nanovdb/GridHandle.h>
-#include <nanovdb/HostBuffer.h>
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/math/Math.h>
 
 // glm
 #include <glm/ext/vector_float3.hpp>
@@ -63,6 +61,14 @@ void NvdbRegularField::commitParameters()
 {
   m_filter = getParamString("filter", "linear");
   m_data = getParamObject<Array1D>("data");
+
+  auto dataCentering = getParamString("dataCentering", "cell");
+  m_cellCentered = (dataCentering == "cell");
+
+  // ROI in object space (default: full range)
+  m_roi = getParam<box3>("roi",
+      box3(vec3(std::numeric_limits<float>::lowest()),
+          vec3(std::numeric_limits<float>::max())));
 }
 
 void NvdbRegularField::finalize()
@@ -84,23 +90,25 @@ void NvdbRegularField::finalize()
     return;
   }
 
-  // Data might not be aligned, make sure we get something that works for
-  // nanovdb.
-  auto hostbuffer = nanovdb::HostBuffer::create(m_data->size());
-  std::memcpy(
-      hostbuffer.data(), m_data->data(AddressSpace::HOST), m_data->size());
+  const void *dataPtr = m_data->data(AddressSpace::HOST);
+  const auto *gridData = static_cast<const nanovdb::GridData *>(dataPtr);
 
-  auto gridHandle = nanovdb::GridHandle<>(std::move(hostbuffer));
-  m_gridMetadata = *gridHandle.gridMetaData();
+  if (!gridData->isValid()) {
+    reportMessage(
+        ANARI_SEVERITY_WARNING, "invalid NanoVDB grid data in spatial field");
+    return;
+  }
 
-  m_deviceBuffer.upload(
-      static_cast<const std::byte *>(gridHandle.data()), gridHandle.size());
+  m_gridMetadata = nanovdb::GridMetaData(gridData);
 
-  if (gridHandle.gridCount() != 1) {
+  if (m_gridMetadata->gridCount() != 1) {
     reportMessage(ANARI_SEVERITY_WARNING,
         "VisRTX NanoVDB support's a single grid per file");
     return;
   }
+
+  m_deviceBuffer.upload(
+      static_cast<const std::byte *>(dataPtr), m_data->size());
 
   auto boundsMin = m_gridMetadata->worldBBox().min();
   auto boundsMax = m_gridMetadata->worldBBox().max();
@@ -131,13 +139,38 @@ float NvdbRegularField::stepSize() const
 SpatialFieldGPUData NvdbRegularField::gpuData() const
 {
   SpatialFieldGPUData sf;
-  sf.type = SpatialFieldType::NANOVDB_REGULAR;
-  sf.data.nvdbRegular.voxelSize = m_voxelSize;
-  sf.data.nvdbRegular.origin = m_bounds.lower;
+
+  // Map grid type to callable index
+  auto gridType = m_gridMetadata->gridType();
+  switch (gridType) {
+  case nanovdb::GridType::Fp4:
+    sf.samplerCallableIndex = SbtCallableEntryPoints::SpatialFieldSamplerNvdbFp4;
+    break;
+  case nanovdb::GridType::Fp8:
+    sf.samplerCallableIndex = SbtCallableEntryPoints::SpatialFieldSamplerNvdbFp8;
+    break;
+  case nanovdb::GridType::Fp16:
+    sf.samplerCallableIndex = SbtCallableEntryPoints::SpatialFieldSamplerNvdbFp16;
+    break;
+  case nanovdb::GridType::FpN:
+    sf.samplerCallableIndex = SbtCallableEntryPoints::SpatialFieldSamplerNvdbFpN;
+    break;
+  case nanovdb::GridType::Float:
+    sf.samplerCallableIndex = SbtCallableEntryPoints::SpatialFieldSamplerNvdbFloat;
+    break;
+  default:
+    sf.samplerCallableIndex = SbtCallableEntryPoints::Invalid;
+    break;
+  }
+
   sf.data.nvdbRegular.gridData = m_deviceBuffer.ptr();
-  sf.data.nvdbRegular.gridType = m_gridMetadata->gridType();
+  sf.data.nvdbRegular.gridType = gridType;
+  sf.data.nvdbRegular.cellCentered = m_cellCentered;
 
   sf.grid = m_uniformGrid.gpuData();
+
+  sf.roi.lower = m_roi.lower;
+  sf.roi.upper = m_roi.upper;
 
   return sf;
 }
@@ -151,9 +184,6 @@ void NvdbRegularField::buildGrid()
 {
   auto gridSize = m_gridMetadata->indexBBox().dim();
   m_uniformGrid.init(ivec3(gridSize[0], gridSize[1], gridSize[2]), m_bounds);
-
-  size_t numVoxels =
-      (gridSize[0] - 1) * size_t(gridSize[1] - 1) * (gridSize[2] - 1);
   m_uniformGrid.buildGrid(gpuData());
 }
 

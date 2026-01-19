@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -90,6 +90,7 @@ struct Renderer : public Object
   bool m_tonemap{true}; // enable internal tonemapping during sample accumulation
   int m_sampleLimit{0};
   bool m_cullTriangleBF{false};
+  bool m_premultiplyBackground{false};
   float m_volumeSamplingRate{1.f};
 
   helium::ChangeObserverPtr<Array2D> m_backgroundImage;

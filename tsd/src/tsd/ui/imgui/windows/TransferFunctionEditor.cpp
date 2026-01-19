@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "TransferFunctionEditor.h"
@@ -7,13 +7,15 @@
 #include "tsd/core/Logging.hpp"
 // tsd_app
 #include "tsd/app/Core.h"
+// tsd_io
+#include "tsd/io/importers/detail/importer_common.hpp"
 // tsd_ui_imgui
 #include "tsd/ui/imgui/Application.h"
 #include "tsd/ui/imgui/tsd_ui_imgui.h"
 // std
 #include <algorithm>
 #include <fstream>
-#include <sstream>
+
 
 namespace tsd::ui::imgui {
 
@@ -56,20 +58,29 @@ void TransferFunctionEditor::buildUI()
   if (m_volume && m_nextMap != m_currentMap) {
     m_currentMap = m_nextMap;
     m_tfnColorPoints = &(m_tfnsColorPoints[m_currentMap]);
-    updateVolume();
+    updateColormaps();
     updateTfnPaletteTexture();
   }
 
-  if (m_volume == nullptr) {
+  if (!m_volume) {
     ImGui::Text("{no volume selected}");
     return;
   }
+
+  if (m_otherVolumes.empty()) {
+    ImGui::Text("%s", m_volume->name().c_str());
+  } else {
+    ImGui::Text("%s...", m_volume->name().c_str());
+  }
+  ImGui::Separator();
 
   buildUI_selectColorMap();
   ImGui::Separator();
   buildUI_drawEditor();
   ImGui::Separator();
   buildUI_opacityScale();
+  ImGui::Separator();
+  buildUI_unitDistance();
   ImGui::Separator();
   buildUI_valueRange();
 }
@@ -169,7 +180,7 @@ void TransferFunctionEditor::buildUI_drawEditor()
       if (ImGui::IsMouseDoubleClicked(1) && ImGui::IsItemHovered()) {
         if (i > 0 && i < m_tfnOpacityPoints.size() - 1) {
           m_tfnOpacityPoints.erase(m_tfnOpacityPoints.begin() + i);
-          updateVolume();
+          updateColormaps();
         }
       } else if (ImGui::IsItemActive()) {
         ImVec2 delta = ImGui::GetIO().MouseDelta;
@@ -182,7 +193,7 @@ void TransferFunctionEditor::buildUI_drawEditor()
               m_tfnOpacityPoints[i - 1].x,
               m_tfnOpacityPoints[i + 1].x);
         }
-        updateVolume();
+        updateColormaps();
       } else if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
             "Double right click button to delete point\n"
@@ -205,22 +216,51 @@ void TransferFunctionEditor::buildUI_drawEditor()
     const int idx = find_idx(m_tfnOpacityPoints, x);
     tsd::core::OpacityPoint pt(x, y);
     m_tfnOpacityPoints.insert(m_tfnOpacityPoints.begin() + idx, pt);
-    updateVolume();
+    updateColormaps();
   }
 }
 
 void TransferFunctionEditor::buildUI_opacityScale()
 {
-  tsd::ui::buildUI_parameter(
-      *m_volume, *m_volume->parameter("opacity"), appCore()->tsd.scene);
+  auto *param = m_volume->parameter("opacity");
+  if (!tsd::ui::buildUI_parameter(*m_volume, *param, appCore()->tsd.scene))
+    return;
+
+  // Apply to all other volumes
+  float opacity = param->value().get<float>();
+  for (auto *volume : m_otherVolumes) {
+    volume->setParameter("opacity", opacity);
+  }
+}
+
+void TransferFunctionEditor::buildUI_unitDistance()
+{
+  auto *param = m_volume->parameter("unitDistance");
+  if (!tsd::ui::buildUI_parameter(*m_volume, *param, appCore()->tsd.scene))
+    return;
+
+  // Apply to all other volumes
+  float unitDistance = param->value().get<float>();
+  for (auto *volume : m_otherVolumes) {
+    volume->setParameter("unitDistance", unitDistance);
+  }
 }
 
 void TransferFunctionEditor::buildUI_valueRange()
 {
   ImGui::BeginDisabled(!m_volume);
 
-  tsd::ui::buildUI_parameter(
-      *m_volume, *m_volume->parameter("valueRange"), appCore()->tsd.scene);
+  if (tsd::ui::buildUI_parameter(
+      *m_volume, *m_volume->parameter("valueRange"), appCore()->tsd.scene)) {
+
+    auto range = m_volume->parameterValueAs<tsd::math::box1>("valueRange");
+
+    for (auto *volume : m_otherVolumes) {
+      auto *field =
+          volume->parameterValueAsObject<tsd::core::SpatialField>("value");
+        volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &range);
+      }
+    }
 
   if (ImGui::Button("reset##valueRange") && m_volume) {
     auto *field =
@@ -228,8 +268,12 @@ void TransferFunctionEditor::buildUI_valueRange()
     if (field) {
       auto valueRange = field->computeValueRange();
       m_volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &valueRange);
+      for (auto *volume : m_otherVolumes) {
+        volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &valueRange);
+      }
     }
   }
+
 
   ImGui::SameLine();
   if (ImGui::Button("Load")) {
@@ -256,13 +300,13 @@ void TransferFunctionEditor::buildUI_valueRange()
         && displayName.substr(displayName.size() - 4) == ".1dt") {
       // Remove .1dt extension for display name
       displayName = displayName.substr(0, displayName.size() - 4);
-      loadColormapFrom1dt(m_currentColormapFilename, displayName);
+      loadColormap(m_currentColormapFilename, displayName);
       loaded = true;
     } else if (displayName.size() > 5
         && displayName.substr(displayName.size() - 5) == ".json") {
       // Remove .json extension for display name
       displayName = displayName.substr(0, displayName.size() - 5);
-      loadColormapFromParaview(m_currentColormapFilename, displayName);
+      loadColormap(m_currentColormapFilename, displayName);
       loaded = true;
     }
 
@@ -285,7 +329,7 @@ void TransferFunctionEditor::buildUI_valueRange()
         if (m_volume) {
           m_currentMap = loadedMapIndex;
           m_tfnColorPoints = &(m_tfnsColorPoints[m_currentMap]);
-          updateVolume();
+          updateColormaps();
           updateTfnPaletteTexture();
         }
       }
@@ -342,26 +386,51 @@ void TransferFunctionEditor::setMap(int selection)
 
 void TransferFunctionEditor::setObjectPtrsFromSelectedObject()
 {
-  tsd::core::Volume *selectedVolume = nullptr;
-  tsd::core::Object *selectedObject = appCore()->tsd.selectedObject;
+  const auto &selectedNodes = appCore()->getSelectedNodes();
 
-  if (!selectedVolume) {
-    if (selectedObject && selectedObject->type() == ANARI_VOLUME)
-      selectedVolume = (tsd::core::Volume *)selectedObject;
+  // Collect all volume pointers from selection
+  std::vector<tsd::core::Volume*> allVolumes;
+  for (const auto &node : selectedNodes) {
+    if (!node.valid())
+      continue;
+    auto *obj = (*node)->getObject();
+    if (obj && obj->type() == ANARI_VOLUME) {
+      allVolumes.push_back((tsd::core::Volume *)obj);
+    }
   }
 
-  if (selectedVolume == nullptr) {
+  // Set reference volume (first one) and clear other volumes
+  if (allVolumes.empty()) {
     m_volume = nullptr;
+    m_otherVolumes.clear();
     m_colorMapArray = nullptr;
     return;
   }
 
-  if (m_volume != selectedVolume) {
+  // Set first volume as reference
+  m_volume = allVolumes[0];
+
+  // Collect remaining volumes, sort and remove duplicates
+  m_otherVolumes.clear();
+  if (allVolumes.size() > 1) {
+    m_otherVolumes.assign(allVolumes.begin() + 1, allVolumes.end());
+    std::sort(m_otherVolumes.begin(), m_otherVolumes.end());
+    m_otherVolumes.erase(
+        std::unique(m_otherVolumes.begin(), m_otherVolumes.end()),
+        m_otherVolumes.end());
+    // Remove first volume if it appears in other volumes
+    m_otherVolumes.erase(
+        std::remove(m_otherVolumes.begin(), m_otherVolumes.end(), m_volume),
+        m_otherVolumes.end());
+  }
+
+  auto *firstVolume = m_volume;
+  if (m_colorMapArray == nullptr
+      || m_colorMapArray != firstVolume->parameterValueAsObject<tsd::core::Array>("color")) {
     setMap(0);
 
-    m_volume = selectedVolume;
     m_colorMapArray =
-        m_volume->parameterValueAsObject<tsd::core::Array>("color");
+        firstVolume->parameterValueAsObject<tsd::core::Array>("color");
 
     auto &cm = m_tfnsColorPoints[0];
     cm.resize(m_colorMapArray->size());
@@ -373,7 +442,7 @@ void TransferFunctionEditor::setObjectPtrsFromSelectedObject()
     anari::DataType type = ANARI_UNKNOWN;
     const tsd::math::float2 *opacityPoints = nullptr;
     size_t size = 0;
-    m_volume->getMetadataArray(
+    firstVolume->getMetadataArray(
         "opacityControlPoints", &type, (const void **)&opacityPoints, &size);
     if (type == ANARI_FLOAT32_VEC2 && size > 0) {
       tsd::core::logStatus("[tfn_editor] Receiving opacity control points");
@@ -503,7 +572,7 @@ void TransferFunctionEditor::loadDefaultMaps()
   // Grayscale
   colors.clear();
 
-  colors.emplace_back(0.f, 1.f, 1.f, 1.f);
+  colors.emplace_back(0.f, 0.f, 0.f, 0.f);
   colors.emplace_back(1.f, 1.f, 1.f, 1.f);
 
   m_tfnsColorPoints.push_back(colors);
@@ -511,111 +580,58 @@ void TransferFunctionEditor::loadDefaultMaps()
   m_tfnsNames.push_back("Grayscale");
 };
 
-void TransferFunctionEditor::loadColormapFrom1dt(
+void TransferFunctionEditor::loadColormap(
     const std::string &filepath, const std::string &name)
 {
-  std::ifstream file(filepath);
-  if (!file.is_open()) {
+  // Use the centralized import function
+  auto &scene = appCore()->tsd.scene;
+
+  // Extract control points from the loaded transfer function
+    core::TransferFunction tfn = tsd::io::importTransferFunction(filepath);
+
+  if (tfn.colorPoints.empty() || tfn.opacityPoints.empty()) {
     tsd::core::logError(
-        ("[tfn_editor] Failed to open 1dt file: " + filepath).c_str());
+        ("[tfn_editor] Failed to load transfer function from file: " + filepath).c_str());
     return;
   }
 
-  std::string line;
-  std::vector<tsd::core::ColorPoint> colors;
-  std::vector<tsd::core::OpacityPoint> opacityPoints;
+  // Apply smart opacity reduction algorithm
+  const float minOpacityChange = 0.05f;
+  std::vector<tsd::core::OpacityPoint> smartOpacityPoints;
+  auto opacityPoints = tfn.opacityPoints;
+  auto colors = tfn.colorPoints;
 
-  // Read all lines and try to parse as r g b a values
-  // The 1dt format is simply one color per line without a count header
-  int entryIndex = 0;
-  while (std::getline(file, line)) {
-    // Skip empty lines and comments
-    if (line.empty() || line[0] == '#') {
-      continue;
+  if (opacityPoints.size() > 2) {
+    smartOpacityPoints.push_back(opacityPoints[0]); // Always keep first point
+
+    for (size_t i = 1; i < opacityPoints.size() - 1; ++i) {
+      float prevOpacity = opacityPoints[i - 1].y;
+      float currOpacity = opacityPoints[i].y;
+      float nextOpacity = opacityPoints[i + 1].y;
+
+      // Keep point if it's a local min/max or has significant change
+      bool isLocalMinMax =
+          (currOpacity > prevOpacity && currOpacity > nextOpacity)
+          || (currOpacity < prevOpacity && currOpacity < nextOpacity);
+      bool hasSignificantChange =
+          std::abs(currOpacity - prevOpacity) > minOpacityChange;
+
+      if (isLocalMinMax || hasSignificantChange) {
+        smartOpacityPoints.push_back(opacityPoints[i]);
+      }
     }
 
-    std::istringstream iss(line);
-    float r, g, b, a;
+    smartOpacityPoints.push_back(opacityPoints.back()); // Always keep last point
 
-    if (!(iss >> r >> g >> b >> a)) {
-      tsd::core::logError(("[tfn_editor] Failed to parse color entry at line "
-          + std::to_string(entryIndex + 1))
+    // Only use smart points if we reduced the count significantly
+    if (smartOpacityPoints.size() < opacityPoints.size() * 0.8f) {
+      opacityPoints = smartOpacityPoints;
+      tsd::core::logStatus(
+          ("[tfn_editor] Reduced opacity control points from "
+              + std::to_string(colors.size()) + " to "
+              + std::to_string(opacityPoints.size()) + " points")
               .c_str());
-      continue;
     }
-
-    // Store as ColorPoint: (position, r, g, b)
-    // Calculate normalized position (0.0 to 1.0) based on entry index
-    colors.emplace_back(
-        0.0f, r, g, b); // We'll fix positions after reading all entries
-
-    // Store alpha as OpacityPoint: (position, alpha)
-    opacityPoints.emplace_back(
-        0.0f, a); // We'll fix positions after reading all entries
-
-    entryIndex++;
-  }
-
-  // Smart positioning: detect significant opacity changes to create meaningful
-  // control points
-  if (colors.size() > 1) {
-    // First pass: evenly distribute positions
-    for (size_t i = 0; i < colors.size(); ++i) {
-      float position =
-          static_cast<float>(i) / static_cast<float>(colors.size() - 1);
-      colors[i].x = position;
-      opacityPoints[i].x = position;
-    }
-
-    // Second pass: reduce control points by removing redundant ones
-    // Keep points where opacity changes significantly (>5% change)
-    const float minOpacityChange = 0.05f;
-    std::vector<tsd::core::OpacityPoint> smartOpacityPoints;
-
-    if (!opacityPoints.empty()) {
-      smartOpacityPoints.push_back(opacityPoints[0]); // Always keep first point
-
-      for (size_t i = 1; i < opacityPoints.size() - 1; ++i) {
-        float prevOpacity = opacityPoints[i - 1].y;
-        float currOpacity = opacityPoints[i].y;
-        float nextOpacity = opacityPoints[i + 1].y;
-
-        // Keep point if it's a local min/max or has significant change
-        bool isLocalMinMax =
-            (currOpacity > prevOpacity && currOpacity > nextOpacity)
-            || (currOpacity < prevOpacity && currOpacity < nextOpacity);
-        bool hasSignificantChange =
-            std::abs(currOpacity - prevOpacity) > minOpacityChange;
-
-        if (isLocalMinMax || hasSignificantChange) {
-          smartOpacityPoints.push_back(opacityPoints[i]);
-        }
-      }
-
-      smartOpacityPoints.push_back(
-          opacityPoints.back()); // Always keep last point
-
-      // Only use smart points if we reduced the count significantly
-      if (smartOpacityPoints.size() < opacityPoints.size() * 0.8f) {
-        opacityPoints = smartOpacityPoints;
-        tsd::core::logStatus(
-            ("[tfn_editor] Reduced opacity control points from "
-                + std::to_string(colors.size()) + " to "
-                + std::to_string(opacityPoints.size()) + " points")
-                .c_str());
-      }
-    }
-  } else if (colors.size() == 1) {
-    colors[0].x = 0.5f; // Single color at middle position
-    opacityPoints[0].x = 0.5f;
-  }
-
-  file.close();
-
-  if (colors.empty()) {
-    tsd::core::logError(
-        "[tfn_editor] No valid color entries found in 1dt file");
-    return;
   }
 
   // Check if colormap with this name already exists and replace it
@@ -641,19 +657,17 @@ void TransferFunctionEditor::loadColormapFrom1dt(
     newMapIndex = m_tfnsColorPoints.size() - 1;
   }
 
-  // Update opacity control points with alpha values from the file
-  if (!opacityPoints.empty()) {
-    m_tfnOpacityPoints = opacityPoints;
+  // Update opacity control points
+  m_tfnOpacityPoints = opacityPoints;
 
-    // Set the loaded colormap as active
-    m_currentMap = newMapIndex;
-    m_nextMap = newMapIndex;
-    m_tfnColorPoints = &(m_tfnsColorPoints[newMapIndex]);
+  // Set the loaded colormap as active
+  m_currentMap = newMapIndex;
+  m_nextMap = newMapIndex;
+  m_tfnColorPoints = &(m_tfnsColorPoints[newMapIndex]);
 
-    if (m_volume) {
-      updateVolume();
-      updateTfnPaletteTexture();
-    }
+  if (m_volume) {
+    updateColormaps();
+    updateTfnPaletteTexture();
   }
 
   tsd::core::logStatus(
@@ -662,200 +676,46 @@ void TransferFunctionEditor::loadColormapFrom1dt(
           .c_str());
 }
 
-void TransferFunctionEditor::loadColormapFromParaview(
-    const std::string &filepath, const std::string &name)
-{
-  const size_t colorDepth = 4;
-  std::ifstream file(filepath);
-  if (!file.is_open()) {
-    tsd::core::logError(
-        ("[tfn_editor] Failed to open Paraview JSON file: " + filepath)
-            .c_str());
-    return;
-  }
-
-  // Read entire file content
-  std::stringstream buffer;
-  buffer << file.rdbuf();
-  file.close();
-
-  std::string jsonContent = buffer.str();
-
-  // Basic JSON parsing for Paraview colormap format
-  // Look for "RGBPoints" array
-  size_t rgbPointsPos = jsonContent.find("\"RGBPoints\"");
-  if (rgbPointsPos == std::string::npos) {
-    tsd::core::logError(
-        "[tfn_editor] No RGBPoints found in Paraview JSON file");
-    return;
-  }
-
-  // Also look for "Points" array which might contain alpha values
-  size_t pointsPos = jsonContent.find("\"Points\"");
-  bool hasAlphaPoints = (pointsPos != std::string::npos);
-
-  // Find the opening bracket of the RGBPoints array
-  size_t arrayStart = jsonContent.find("[", rgbPointsPos);
-  if (arrayStart == std::string::npos) {
-    tsd::core::logError(
-        "[tfn_editor] Invalid RGBPoints array format in Paraview JSON file");
-    return;
-  }
-
-  // Find the closing bracket of the RGBPoints array
-  int bracketCount = 0;
-  size_t arrayEnd = arrayStart;
-  for (size_t i = arrayStart; i < jsonContent.length(); ++i) {
-    if (jsonContent[i] == '[')
-      bracketCount++;
-    else if (jsonContent[i] == ']') {
-      bracketCount--;
-      if (bracketCount == 0) {
-        arrayEnd = i;
-        break;
-      }
-    }
-  }
-
-  if (arrayEnd == arrayStart) {
-    tsd::core::logError(
-        "[tfn_editor] Could not find end of RGBPoints array in Paraview JSON file");
-    return;
-  }
-
-  // Extract the array content
-  std::string arrayContent =
-      jsonContent.substr(arrayStart + 1, arrayEnd - arrayStart - 1);
-
-  // Parse the numbers from the array
-  std::vector<float> values;
-  std::stringstream ss(arrayContent);
-  std::string token;
-
-  while (std::getline(ss, token, ',')) {
-    // Remove whitespace and newlines
-    token.erase(0, token.find_first_not_of(" \t\n\r"));
-    token.erase(token.find_last_not_of(" \t\n\r") + 1);
-
-    if (!token.empty()) {
-      try {
-        float val = std::stof(token);
-        values.push_back(val);
-      } catch (const std::exception &e) {
-        // Skip non-numeric tokens
-        continue;
-      }
-    }
-  }
-
-  // RGBPoints should have groups of 4 values: [value, r, g, b, value, r, g, b,
-  // ...]
-  if (values.size() % colorDepth != 0) {
-    tsd::core::logError("[tfn_editor] Invalid RGBPoints format");
-    return;
-  }
-
-  if (values.empty()) {
-    tsd::core::logError(
-        "[tfn_editor] No valid color entries found in Paraview JSON file");
-    return;
-  }
-
-  std::vector<tsd::core::ColorPoint> colors;
-  colors.reserve(values.size() / colorDepth);
-  std::vector<tsd::core::OpacityPoint> opacityPoints;
-  opacityPoints.reserve(values.size() / colorDepth);
-
-  // Find min/max data values for normalization
-  float minVal = values[0];
-  float maxVal = values[0];
-  for (size_t i = 0; i < values.size(); i += colorDepth) {
-    minVal = std::min(minVal, values[i]);
-    maxVal = std::max(maxVal, values[i]);
-  }
-
-  float range = maxVal - minVal;
-  if (range == 0.0f)
-    range = 1.0f; // Avoid division by zero
-
-  // Convert to ColorPoint format
-  const auto dx = 1.0f / (values.size() - colorDepth);
-  for (size_t i = 0; i < values.size(); i += colorDepth) {
-    float dataValue = values[i];
-    float r = values[i + 1];
-    float g = values[i + 2];
-    float b = values[i + 3];
-
-    // Normalize data value to [0, 1] range
-    float normalizedValue = (dataValue - minVal) / range;
-
-    // Store as ColorPoint: (position, r, g, b)
-    colors.emplace_back(normalizedValue, r, g, b);
-
-    // For Paraview files, assume full opacity (alpha = 1.0)
-    opacityPoints.emplace_back(dx * i, normalizedValue);
-  }
-
-  // Check if colormap with this name already exists and replace it
-  int existingIndex = -1;
-  for (size_t i = 0; i < m_tfnsNames.size(); ++i) {
-    if (m_tfnsNames[i] == name) {
-      existingIndex = static_cast<int>(i);
-      break;
-    }
-  }
-
-  int newMapIndex;
-  if (existingIndex >= 0) {
-    // Replace existing colormap
-    m_tfnsColorPoints[existingIndex] = colors;
-    newMapIndex = existingIndex;
-    tsd::core::logStatus(
-        ("[tfn_editor] Replaced existing colormap '" + name + "'").c_str());
-  } else {
-    // Add new colormap
-    m_tfnsColorPoints.push_back(colors);
-    m_tfnsNames.push_back(name);
-    newMapIndex = m_tfnsColorPoints.size() - 1;
-  }
-
-  // Update opacity control points (set to full opacity for Paraview colormaps)
-  if (!opacityPoints.empty()) {
-    m_tfnOpacityPoints = opacityPoints;
-
-    // Set the loaded colormap as active
-    m_currentMap = newMapIndex;
-    m_nextMap = newMapIndex;
-    m_tfnColorPoints = &(m_tfnsColorPoints[newMapIndex]);
-
-    if (m_volume) {
-      updateVolume();
-      updateTfnPaletteTexture();
-    }
-  }
-
-  tsd::core::logStatus(
-      ("[tfn_editor] Successfully loaded Paraview colormap '" + name + "' from "
-          + filepath + " (" + std::to_string(colors.size()) + " colors)")
-          .c_str());
-}
-
-void TransferFunctionEditor::updateVolume()
+void TransferFunctionEditor::updateColormaps()
 {
   if (!m_colorMapArray) {
     tsd::core::logError(
         "[tfn_editor] No color map array, cannot update volume!");
     return;
   }
-  auto co = getSampledColorsAndOpacities(m_colorMapArray->size());
-  auto *colorMap = m_colorMapArray->mapAs<tsd::math::float4>();
-  std::copy(co.begin(), co.end(), colorMap);
-  m_colorMapArray->unmap();
 
-  m_volume->setMetadataArray("opacityControlPoints",
-      ANARI_FLOAT32_VEC2,
-      m_tfnOpacityPoints.data(),
-      m_tfnOpacityPoints.size());
+  // Update reference volume
+  if (m_volume) {
+    auto *colorArray = m_volume->parameterValueAsObject<tsd::core::Array>("color");
+    if (colorArray) {
+      auto co = getSampledColorsAndOpacities(colorArray->size());
+      auto *colorMap = colorArray->mapAs<tsd::math::float4>();
+      std::copy(co.begin(), co.end(), colorMap);
+      colorArray->unmap();
+
+      m_volume->setMetadataArray("opacityControlPoints",
+          ANARI_FLOAT32_VEC2,
+          m_tfnOpacityPoints.data(),
+          m_tfnOpacityPoints.size());
+    }
+  }
+
+  // Update other volumes
+  for (auto *volume : m_otherVolumes) {
+    auto *colorArray = volume->parameterValueAsObject<tsd::core::Array>("color");
+    if (!colorArray)
+      continue;
+
+    auto co = getSampledColorsAndOpacities(colorArray->size());
+    auto *colorMap = colorArray->mapAs<tsd::math::float4>();
+    std::copy(co.begin(), co.end(), colorMap);
+    colorArray->unmap();
+
+    volume->setMetadataArray("opacityControlPoints",
+        ANARI_FLOAT32_VEC2,
+        m_tfnOpacityPoints.data(),
+        m_tfnOpacityPoints.size());
+  }
 }
 
 void TransferFunctionEditor::updateTfnPaletteTexture()
@@ -918,37 +778,8 @@ void TransferFunctionEditor::saveColormapTo1dt(const std::string &filepath)
     return;
   }
 
-  // Write colors with interpolated opacity at control point positions
-  // This preserves the sparse nature of opacity control points
-  for (const auto &opacityPoint : m_tfnOpacityPoints) {
-    float position = opacityPoint.x;
-    float opacity = opacityPoint.y;
-
-    // Get color at this position
-    tsd::math::float3 color(0.f);
-    if (m_currentMap == 0) {
-      // Direct color mapping
-      if (!m_tfnColorPoints->empty()) {
-        // Find closest color point or interpolate
-        if (position <= m_tfnColorPoints->front().x) {
-          auto &cp = m_tfnColorPoints->front();
-          color = tsd::math::float3(cp.y, cp.z, cp.w);
-        } else if (position >= m_tfnColorPoints->back().x) {
-          auto &cp = m_tfnColorPoints->back();
-          color = tsd::math::float3(cp.y, cp.z, cp.w);
-        } else {
-          color =
-              tsd::core::detail::interpolateColor(*m_tfnColorPoints, position);
-        }
-      }
-    } else {
-      // Interpolated color mapping
-      color = tsd::core::detail::interpolateColor(*m_tfnColorPoints, position);
-    }
-
-    file << color.x << " " << color.y << " " << color.z << " " << opacity
-         << std::endl;
-  }
+  for (auto &c : colorsAndOpacities)
+    file << c.x << " " << c.y << " " << c.z << " " << c.w << std::endl;
 
   file.close();
 

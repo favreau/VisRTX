@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/ui/imgui/tsd_ui_imgui.h"
@@ -22,15 +22,16 @@ static void buildUI_array_info_tooltip_text(
     const tsd::core::Scene &scene, size_t idx)
 {
   const auto &a = *scene.getObject<tsd::core::Array>(idx);
-  ImGui::Text("  idx: [%zu]", idx);
+  ImGui::Text(" idx: [%zu]", idx);
+  ImGui::Text("name: '%s'", a.name().c_str());
   const auto t = a.type();
   if (t == ANARI_ARRAY3D)
-    ImGui::Text(" size: %zu x %zu x %zu", a.dim(0), a.dim(1), a.dim(2));
+    ImGui::Text("size: %zu x %zu x %zu", a.dim(0), a.dim(1), a.dim(2));
   else if (t == ANARI_ARRAY2D)
-    ImGui::Text(" size: %zu x %zu", a.dim(0), a.dim(1));
+    ImGui::Text("size: %zu x %zu", a.dim(0), a.dim(1));
   else
-    ImGui::Text(" size: %zu", a.dim(0));
-  ImGui::Text(" type: %s", anari::toString(a.elementType()));
+    ImGui::Text("size: %zu", a.dim(0));
+  ImGui::Text("type: %s", anari::toString(a.elementType()));
 }
 
 static void buildUI_parameter_contextMenu(
@@ -108,7 +109,16 @@ static void buildUI_parameter_contextMenu(
             p->setUsage(tsd::core::ParameterUsageHint::NONE);
             p->setValue(tsd::math::int4(1));
           }
-          ImGui::EndMenu(); // "float"
+          ImGui::EndMenu(); // "int"
+        }
+
+        ImGui::Separator();
+
+        if (ImGui::MenuItem("string")) {
+          p->setUsage(tsd::core::ParameterUsageHint::NONE);
+          p->setValue("");
+          p->setStringSelection(0);
+          p->setStringValues({});
         }
 
         ImGui::EndMenu(); // "uniform"
@@ -123,7 +133,6 @@ static void buildUI_parameter_contextMenu(
 
       if (ImGui::BeginMenu("object")) {
         if (ImGui::BeginMenu("new")) {
-
           if (ImGui::BeginMenu("array")) {
             tsd::core::ArrayRef a;
 
@@ -268,11 +277,12 @@ void buildUI_object(tsd::core::Object &o,
 
   ImGui::PushID(&o);
 
-  if (o.type() == ANARI_SURFACE) {
-    // no-subtype
-    ImGui::Text("[%zu]: '%s'", o.index(), o.name().c_str());
-  } else if (anari::isArray(o.type())) {
-    ImGui::Text("[%zu]: '%s'", o.index(), o.name().c_str());
+  ImGui::Text("[%zu]: ", o.index());
+  ImGui::SameLine();
+  ImGui::InputText("##name", &o.editableName());
+  ImGui::Separator();
+
+  if (anari::isArray(o.type())) {
     const auto &a = *(tsd::core::Array *)&o;
     const auto t = a.type();
     ImGui::Text("%s", anari::toString(t));
@@ -283,12 +293,8 @@ void buildUI_object(tsd::core::Object &o,
     else
       ImGui::Text(" size: %zu", a.dim(0));
     ImGui::Text(" type: %s", anari::toString(a.elementType()));
-  } else {
-    // is-subtyped
-    ImGui::Text("[%zu]: '%s' (subtype: '%s')",
-        o.index(),
-        o.name().c_str(),
-        o.subtype().c_str());
+  } else if (o.type() != ANARI_SURFACE) {
+    ImGui::Text("   subtype: %s", o.subtype().c_str());
   }
 
   ImGui::Text("use counts: %zu | %zu | %zu",
@@ -429,7 +435,7 @@ void buildUI_object(tsd::core::Object &o,
   }
 }
 
-void buildUI_parameter(tsd::core::Object &o,
+bool buildUI_parameter(tsd::core::Object &o,
     tsd::core::Parameter &p,
     tsd::core::Scene &scene,
     bool useTable)
@@ -521,6 +527,76 @@ void buildUI_parameter(tsd::core::Object &o,
     } else
       update |= ImGui::DragFloat2(name, (float *)value);
     break;
+  case ANARI_FLOAT32_BOX2:
+    ImGui::PushID(name);
+    ImGui::SetNextItemOpen(false, ImGuiCond_FirstUseEver);
+    if (ImGui::CollapsingHeader(name)) {
+      if (bounded) {
+        if (pMin && pMax) {
+          update |= ImGui::SliderFloat2("lower",
+              (float *)value,
+              pMin.get<tsd::math::box2>().lower.x,
+              pMax.get<tsd::math::box2>().lower.x);
+          update |= ImGui::SliderFloat2("upper",
+              (float *)value + 2,
+              pMin.get<tsd::math::box2>().upper.x,
+              pMax.get<tsd::math::box2>().upper.x);
+        } else {
+          float minLower = pMin ? pMin.get<tsd::math::box2>().lower.x
+                                : std::numeric_limits<float>::lowest();
+          float maxLower = pMax ? pMax.get<tsd::math::box2>().lower.x
+                                : std::numeric_limits<float>::max();
+          update |= ImGui::DragFloat2(
+              "lower", (float *)value, 1.f, minLower, maxLower);
+          float minUpper = pMin ? pMin.get<tsd::math::box2>().upper.x
+                                : std::numeric_limits<float>::lowest();
+          float maxUpper = pMax ? pMax.get<tsd::math::box2>().upper.x
+                                : std::numeric_limits<float>::max();
+          update |= ImGui::DragFloat2(
+              "upper", (float *)value + 2, 1.f, minUpper, maxUpper);
+        }
+      } else {
+        update |= ImGui::DragFloat2("lower", (float *)value);
+        update |= ImGui::DragFloat2("upper", (float *)value + 2);
+      }
+    }
+    ImGui::PopID();
+    break;
+  case ANARI_FLOAT32_BOX3:
+    ImGui::PushID(name);
+    ImGui::SetNextItemOpen(false, ImGuiCond_FirstUseEver);
+    if (ImGui::CollapsingHeader(name)) {
+      if (bounded) {
+        if (pMin && pMax) {
+          update |= ImGui::SliderFloat3("lower",
+              (float *)value,
+              pMin.get<tsd::math::box3>().lower.x,
+              pMax.get<tsd::math::box3>().lower.x);
+          update |= ImGui::SliderFloat3("upper",
+              (float *)value + 3,
+              pMin.get<tsd::math::box3>().upper.x,
+              pMax.get<tsd::math::box3>().upper.x);
+        } else {
+          float minLower = pMin ? pMin.get<tsd::math::box3>().lower.x
+                                : std::numeric_limits<float>::lowest();
+          float maxLower = pMax ? pMax.get<tsd::math::box3>().lower.x
+                                : std::numeric_limits<float>::max();
+          update |= ImGui::DragFloat3(
+              "lower", (float *)value, 1.f, minLower, maxLower);
+          float minUpper = pMin ? pMin.get<tsd::math::box3>().upper.x
+                                : std::numeric_limits<float>::lowest();
+          float maxUpper = pMax ? pMax.get<tsd::math::box3>().upper.x
+                                : std::numeric_limits<float>::max();
+          update |= ImGui::DragFloat3(
+              "upper", (float *)value + 3, 1.f, minUpper, maxUpper);
+        }
+      } else {
+        update |= ImGui::DragFloat3("lower", (float *)value);
+        update |= ImGui::DragFloat3("upper", (float *)value + 3);
+      }
+    }
+    ImGui::PopID();
+    break;
   case ANARI_FLOAT32_VEC3:
     if (usage & tsd::core::ParameterUsageHint::COLOR)
       update |= ImGui::ColorEdit3(name, (float *)value);
@@ -575,6 +651,28 @@ void buildUI_parameter(tsd::core::Object &o,
     if (isArray) {
       const auto idx = pVal.getAsObjectIndex();
       buildUI_array_info_tooltip_text(scene, idx);
+    } else if (type == ANARI_FLOAT32_MAT4) {
+      auto *value_f = (const float *)value;
+      ImGui::Text("[%.3f %.3f %.3f %.3f]",
+          value_f[0],
+          value_f[4],
+          value_f[8],
+          value_f[12]);
+      ImGui::Text("[%.3f %.3f %.3f %.3f]",
+          value_f[1],
+          value_f[5],
+          value_f[9],
+          value_f[13]);
+      ImGui::Text("[%.3f %.3f %.3f %.3f]",
+          value_f[2],
+          value_f[6],
+          value_f[10],
+          value_f[14]);
+      ImGui::Text("[%.3f %.3f %.3f %.3f]",
+          value_f[3],
+          value_f[7],
+          value_f[11],
+          value_f[15]);
     } else {
       if (p.description().empty())
         ImGui::Text("%s", anari::toString(type));
@@ -601,6 +699,8 @@ void buildUI_parameter(tsd::core::Object &o,
       scene, &o, &p); // NOTE: 'p' can be deleted after this
 
   ImGui::PopID();
+
+  return update;
 }
 
 size_t buildUI_objects_menulist(

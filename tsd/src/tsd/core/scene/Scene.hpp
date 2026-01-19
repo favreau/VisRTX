@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -34,15 +34,15 @@ struct BaseUpdateDelegate;
 
 struct ObjectDatabase
 {
-  IndexedVector<Array> array;
-  IndexedVector<Surface> surface;
-  IndexedVector<Geometry> geometry;
-  IndexedVector<Material> material;
-  IndexedVector<Sampler> sampler;
-  IndexedVector<Volume> volume;
-  IndexedVector<SpatialField> field;
-  IndexedVector<Light> light;
-  IndexedVector<Camera> camera;
+  ObjectPool<Array> array;
+  ObjectPool<Surface> surface;
+  ObjectPool<Geometry> geometry;
+  ObjectPool<Material> material;
+  ObjectPool<Sampler> sampler;
+  ObjectPool<Volume> volume;
+  ObjectPool<SpatialField> field;
+  ObjectPool<Light> light;
+  ObjectPool<Camera> camera;
 
   // Not copyable or moveable //
   ObjectDatabase() = default;
@@ -78,14 +78,18 @@ struct Scene
   MaterialRef defaultMaterial() const;
   Layer *defaultLayer();
 
+  int mpiRank() const;
+  int mpiNumRanks() const;
+  void setMpiRankInfo(int rank, int numRanks);
+
   /////////////////////////////
   // Flat object collections //
   /////////////////////////////
 
   template <typename T>
-  IndexedVectorRef<T> createObject();
+  ObjectPoolRef<T> createObject();
   template <typename T>
-  IndexedVectorRef<T> createObject(Token subtype);
+  ObjectPoolRef<T> createObject(Token subtype);
   ArrayRef createArray(anari::DataType type,
       size_t items0,
       size_t items1 = 0,
@@ -97,7 +101,7 @@ struct Scene
   SurfaceRef createSurface(const char *name, GeometryRef g, MaterialRef m = {});
 
   template <typename T>
-  IndexedVectorRef<T> getObject(size_t i) const;
+  ObjectPoolRef<T> getObject(size_t i) const;
   Object *getObject(const Any &a) const;
   Object *getObject(anari::DataType type, size_t i) const;
   size_t numberOfObjects(anari::DataType type) const;
@@ -143,7 +147,7 @@ struct Scene
       const char *name = "");
   template <typename T>
   LayerNodeRef insertChildObjectNode(
-      LayerNodeRef parent, IndexedVectorRef<T> obj, const char *name = "");
+      LayerNodeRef parent, ObjectPoolRef<T> obj, const char *name = "");
   LayerNodeRef insertChildObjectNode(LayerNodeRef parent,
       anari::DataType type,
       size_t idx,
@@ -151,7 +155,7 @@ struct Scene
 
   // NOTE: convenience to create an object _and_ insert it into the tree
   template <typename T>
-  using AddedObject = std::pair<LayerNodeRef, IndexedVectorRef<T>>;
+  using AddedObject = std::pair<LayerNodeRef, ObjectPoolRef<T>>;
   template <typename T>
   AddedObject<T> insertNewChildObjectNode(
       LayerNodeRef parent, Token subtype, const char *name = "");
@@ -200,10 +204,9 @@ struct Scene
   friend void ::tsd::io::load_Scene(Scene &scene, core::DataNode &root);
 
   template <typename OBJ_T>
-  IndexedVectorRef<OBJ_T> createObjectImpl(
-      IndexedVector<OBJ_T> &iv, Token subtype);
+  ObjectPoolRef<OBJ_T> createObjectImpl(ObjectPool<OBJ_T> &iv, Token subtype);
   template <typename OBJ_T>
-  IndexedVectorRef<OBJ_T> createObjectImpl(IndexedVector<OBJ_T> &iv);
+  ObjectPoolRef<OBJ_T> createObjectImpl(ObjectPool<OBJ_T> &iv);
 
   ArrayRef createArrayImpl(anari::DataType type,
       size_t items0,
@@ -221,6 +224,11 @@ struct Scene
     float time{0.f};
     std::vector<std::unique_ptr<Animation>> objects;
   } m_animations;
+  struct MpiData
+  {
+    int rank{0};
+    int numRanks{1};
+  } m_mpi;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -230,7 +238,7 @@ struct Scene
 // Scene //
 
 template <typename T>
-inline IndexedVectorRef<T> Scene::createObject()
+inline ObjectPoolRef<T> Scene::createObject()
 {
   static_assert(std::is_base_of<Object, T>::value,
       "Scene::createObject<> can only create tsd::Object subclasses");
@@ -246,7 +254,7 @@ inline SurfaceRef Scene::createObject()
 }
 
 template <typename T>
-inline IndexedVectorRef<T> Scene::createObject(Token subtype)
+inline ObjectPoolRef<T> Scene::createObject(Token subtype)
 {
   static_assert(std::is_base_of<Object, T>::value,
       "Scene::createObject<> can only create tsd::Object subclasses");
@@ -298,7 +306,7 @@ inline CameraRef Scene::createObject(Token subtype)
 }
 
 template <typename T>
-inline IndexedVectorRef<T> Scene::getObject(size_t i) const
+inline ObjectPoolRef<T> Scene::getObject(size_t i) const
 {
   static_assert(std::is_base_of<Object, T>::value,
       "Scene::getObject<> can only get tsd::Object subclasses");
@@ -354,8 +362,8 @@ inline CameraRef Scene::getObject(size_t i) const
 }
 
 template <typename OBJ_T>
-inline IndexedVectorRef<OBJ_T> Scene::createObjectImpl(
-    IndexedVector<OBJ_T> &iv, Token subtype)
+inline ObjectPoolRef<OBJ_T> Scene::createObjectImpl(
+    ObjectPool<OBJ_T> &iv, Token subtype)
 {
   auto retval = iv.emplace(subtype);
   retval->m_scene = this;
@@ -368,7 +376,7 @@ inline IndexedVectorRef<OBJ_T> Scene::createObjectImpl(
 }
 
 template <typename OBJ_T>
-inline IndexedVectorRef<OBJ_T> Scene::createObjectImpl(IndexedVector<OBJ_T> &iv)
+inline ObjectPoolRef<OBJ_T> Scene::createObjectImpl(ObjectPool<OBJ_T> &iv)
 {
   auto retval = iv.emplace();
   retval->m_scene = this;
@@ -382,7 +390,7 @@ inline IndexedVectorRef<OBJ_T> Scene::createObjectImpl(IndexedVector<OBJ_T> &iv)
 
 template <typename T>
 inline LayerNodeRef Scene::insertChildObjectNode(
-    LayerNodeRef parent, IndexedVectorRef<T> obj, const char *name)
+    LayerNodeRef parent, ObjectPoolRef<T> obj, const char *name)
 {
   return insertChildObjectNode(parent, obj->type(), obj->index(), name);
 }

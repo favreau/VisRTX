@@ -1,26 +1,33 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 // tsd_core
+#include "tsd/core/ColorMapUtil.hpp"
 #include "tsd/core/scene/Scene.hpp"
 // tsd_rendering
 #include "tsd/rendering/index/RenderIndex.hpp"
+#include "tsd/rendering/pipeline/passes/VisualizeAOVPass.h"
 #include "tsd/rendering/view/Manipulator.hpp"
 // std
 #include <map>
-#include <memory>
 #include <string>
 #include <utility>
 
 #include "tsd/app/TaskQueue.h"
 #include "tsd/app/renderAnimationSequence.h"
+#include "tsd/rendering/view/CameraPath.h"
 
 namespace tsd::ui::imgui {
 struct BlockingTaskModal;
 struct ImportFileDialog;
+struct ExportNanoVDBFileDialog;
 } // namespace tsd::ui::imgui
+
+namespace tsd::core {
+struct Animation;
+}
 
 namespace tsd::app {
 
@@ -46,11 +53,13 @@ enum class ImporterType
   PLY,
   POINTSBIN_MULTIFILE,
   PT,
+  SILO,
   SMESH,
   SMESH_ANIMATION, // time series version
   SWC,
   TRK,
   USD,
+  USD2,
   XYZDP,
   VOLUME,
   PLANET,
@@ -58,6 +67,10 @@ enum class ImporterType
   CLOUDS,
   MAGNETIC,
   TSD,
+  XF, // Special case for transfer function files
+      // Not an actual scene importer, but used to set transfer function from
+      // CLI
+  BLANK, // Must be last import type before 'NONE'
   NONE
 };
 
@@ -80,19 +93,26 @@ struct CommandLineOptions
   ImporterType importerType{ImporterType::NONE};
   std::vector<std::string> libraryList;
   std::string secondaryViewportLibrary;
+  std::string cameraFile;
 };
 
 struct TSDState
 {
+  struct StashedSelection
+  {
+    std::vector<tsd::core::LayerNodeRef> nodes;
+    bool shouldDeleteAfterPaste{false};
+  };
+
   tsd::core::Scene scene;
   bool sceneLoadComplete{false};
-  tsd::core::Object *selectedObject{nullptr};
-  tsd::core::LayerNodeRef selectedNode;
+  std::vector<tsd::core::LayerNodeRef> selectedNodes;
+  StashedSelection stashedSelection;
 };
 
 struct ANARIDeviceManager
 {
-  ANARIDeviceManager(Core *core);
+  ANARIDeviceManager(const bool *verboseFlag = nullptr);
 
   anari::Device loadDevice(const std::string &libName,
       const std::vector<DeviceInitParam> &initialDeviceParams = {});
@@ -112,7 +132,7 @@ struct ANARIDeviceManager
   void loadSettings(tsd::core::DataNode &root);
 
  private:
-  Core *m_core{nullptr};
+  const bool *m_verboseFlag{nullptr};
   struct LiveAnariIndex
   {
     int refCount{0};
@@ -144,6 +164,14 @@ struct CameraState
 {
   std::vector<CameraPose> poses;
   tsd::rendering::Manipulator manipulator;
+  tsd::rendering::CameraPathSettings pathSettings;
+  size_t cameraPathCameraIndex{TSD_INVALID_INDEX};
+  tsd::core::Animation *cameraPathAnimation{nullptr};
+};
+
+struct ImporterState
+{
+  core::TransferFunction transferFunction;
 };
 
 struct OfflineRenderSequenceConfig
@@ -155,6 +183,10 @@ struct OfflineRenderSequenceConfig
     anari::DataType colorFormat{ANARI_UFIXED8_RGBA_SRGB};
     uint32_t samples{128};
     int numFrames{1};
+    bool renderSubset{false}; // use start/end
+    int startFrame{0};
+    int endFrame{0};
+    int frameIncrement{1};
   } frame;
 
   struct CameraSettings
@@ -177,6 +209,15 @@ struct OfflineRenderSequenceConfig
     std::string filePrefix{"frame_"};
   } output;
 
+  struct AOVSettings
+  {
+    tsd::rendering::AOVType aovType{tsd::rendering::AOVType::NONE};
+    float depthMin{0.f};
+    float depthMax{1.f};
+    float edgeThreshold{0.5f};
+    bool edgeInvert{false};
+  } aov;
+
   void saveSettings(tsd::core::DataNode &root);
   void loadSettings(tsd::core::DataNode &root);
 };
@@ -185,6 +226,7 @@ struct Windows
 {
   tsd::ui::imgui::BlockingTaskModal *taskModal{nullptr};
   tsd::ui::imgui::ImportFileDialog *importDialog{nullptr};
+  tsd::ui::imgui::ExportNanoVDBFileDialog *exportNanoVDBDialog{nullptr};
   float fontScale{1.f};
   float uiRounding{9.f};
 };
@@ -201,6 +243,7 @@ struct Core
   ANARIDeviceManager anari;
   LogState logging;
   CameraState view;
+  ImporterState importer;
   OfflineRenderSequenceConfig offline;
   Windows windows;
   Tasking jobs;
@@ -227,10 +270,19 @@ struct Core
 
   // Selection //
 
-  void setSelectedObject(tsd::core::Object *o);
-  void setSelectedNode(tsd::core::LayerNode &n);
-  bool objectIsSelected() const;
+  tsd::core::LayerNodeRef getFirstSelected() const;
+  const std::vector<tsd::core::LayerNodeRef> &getSelectedNodes() const;
+  void setSelected(tsd::core::LayerNodeRef node);
+  void setSelected(const std::vector<tsd::core::LayerNodeRef> &nodes);
+  void setSelected(const tsd::core::Object *obj);
+  void addToSelection(tsd::core::LayerNodeRef node);
+  void removeFromSelection(tsd::core::LayerNodeRef node);
+  bool isSelected(tsd::core::LayerNodeRef node) const;
   void clearSelected();
+
+  // Returns only parent nodes from selection (filters out children of selected
+  // nodes)
+  std::vector<tsd::core::LayerNodeRef> getParentOnlySelectedNodes() const;
 
   // Camera poses //
 
@@ -244,6 +296,7 @@ struct Core
   void updateExistingCameraPoseFromView(CameraPose &p);
   void setCameraPose(const CameraPose &pose);
   void removeAllPoses();
+  bool updateCameraPathAnimation();
 
   // Not copyable or moveable //
   Core(const Core &) = delete;

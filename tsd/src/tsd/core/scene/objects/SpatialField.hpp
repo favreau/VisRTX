@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -18,18 +18,19 @@ struct SpatialField : public Object
   SpatialField(Token subtype = tokens::unknown);
   virtual ~SpatialField() = default;
 
-  IndexedVectorRef<SpatialField> self() const;
+  ObjectPoolRef<SpatialField> self() const;
 
   anari::Object makeANARIObject(anari::Device d) const override;
 
   tsd::math::float2 computeValueRange();
 };
 
-using SpatialFieldRef = IndexedVectorRef<SpatialField>;
+using SpatialFieldRef = ObjectPoolRef<SpatialField>;
 
 namespace tokens::spatial_field {
 
 extern const Token structuredRegular;
+extern const Token structuredRectilinear;
 extern const Token unstructured;
 extern const Token amr;
 extern const Token nanovdb;

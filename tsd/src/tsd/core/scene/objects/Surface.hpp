@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -22,12 +22,12 @@ struct Surface : public Object
 
   Geometry *geometry() const;
   Material *material() const;
-  IndexedVectorRef<Surface> self() const;
+  ObjectPoolRef<Surface> self() const;
 
   anari::Object makeANARIObject(anari::Device d) const override;
 };
 
-using SurfaceRef = IndexedVectorRef<Surface>;
+using SurfaceRef = ObjectPoolRef<Surface>;
 
 namespace tokens::surface {
 

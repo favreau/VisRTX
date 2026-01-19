@@ -1,7 +1,8 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/core/Parameter.hpp"
+#include "tsd/core/Logging.hpp"
 
 namespace tsd::core {
 
@@ -40,6 +41,17 @@ Parameter &Parameter::setValue(const Any &newValue)
 {
   auto oldValue = m_value;
   m_value = newValue;
+  if (m_value.type() == ANARI_STRING && !m_stringValues.empty()) {
+    auto it = std::find(
+        m_stringValues.begin(), m_stringValues.end(), m_value.getString());
+    if (it != m_stringValues.end())
+      m_stringSelection =
+          static_cast<int>(std::distance(m_stringValues.begin(), it));
+    else
+      logWarning("%s is not a valid value for parameter %s",
+          m_value.getCStr(),
+          m_name.c_str());
+  }
   if (m_observer)
     m_observer->parameterChanged(this, oldValue);
   return *this;

@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/core/scene/objects/Material.hpp"
@@ -147,10 +147,10 @@ Material::Material(Token subtype) : Object(ANARI_MATERIAL, subtype)
   }
 }
 
-IndexedVectorRef<Material> Material::self() const
+ObjectPoolRef<Material> Material::self() const
 {
   return scene() ? scene()->getObject<Material>(index())
-                 : IndexedVectorRef<Material>{};
+                 : ObjectPoolRef<Material>{};
 }
 
 anari::Object Material::makeANARIObject(anari::Device d) const

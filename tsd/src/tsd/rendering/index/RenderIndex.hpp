@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -69,7 +69,7 @@ using MultiRenderIndex = tsd::core::MultiUpdateDelegate;
 
 template <typename T>
 inline void setIndexedArrayObjectsAsAnariObjectArray(
-    anari::Device d, anari::Object o, const char *p, const IndexedVector<T> &iv)
+    anari::Device d, anari::Object o, const char *p, const ObjectPool<T> &iv)
 {
   if (iv.empty()) {
     anari::unsetParameter(d, o, p);

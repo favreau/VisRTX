@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/io/procedural.hpp"
@@ -30,12 +30,12 @@ void generate_monkey(Scene &scene, LayerNodeRef location)
       ANARI_UINT32_VEC3, std::size(obj2header::primitive_index) / 3);
   indexArray->setData(std::data(obj2header::primitive_index));
 
-  monkey->setParameterObject("vertex.position"_t, *positionArray);
+  monkey->setParameterObject("vertex.position", *positionArray);
 #if 0 // NOTE: these appear to be wrong
-  monkey->setParameterObject("vertex.normal"_t, *normalArray);
+  monkey->setParameterObject("vertex.normal", *normalArray);
 #endif
-  monkey->setParameterObject("vertex.attribute0"_t, *uvArray);
-  monkey->setParameterObject("primitive.index"_t, *indexArray);
+  monkey->setParameterObject("vertex.attribute0", *uvArray);
+  monkey->setParameterObject("primitive.index", *indexArray);
 
   auto surface = scene.createSurface("monkey", monkey);
   scene.insertChildObjectNode(location, surface);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -78,6 +78,13 @@ VISRTX_DEVICE void handleSurfaceHit()
   case DebugMethod::INST_INDEX:
     rd.outColor = makeRandomColor(ray::instID());
     break;
+  case DebugMethod::MAT_ID: {
+    const auto &ss = ray::screenSample();
+    const auto &fd = *ss.frameData;
+    const auto &sd = ray::surfaceData(fd);
+    rd.outColor = makeRandomColor(sd.material);
+    break;
+  }
   case DebugMethod::RAY_UVW:
     rd.outColor = ray::uvw(rd.geometry->type);
     break;

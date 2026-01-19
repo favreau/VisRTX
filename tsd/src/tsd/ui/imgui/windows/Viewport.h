@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -6,6 +6,7 @@
 #include "Window.h"
 
 #include "tsd/ui/imgui/tsd_ui_imgui.h"
+
 // tsd_core
 #include "tsd/core/scene/Object.hpp"
 #include "tsd/core/scene/UpdateDelegate.hpp"
@@ -14,16 +15,20 @@
 // tsd_rendering
 #include "tsd/rendering/index/RenderIndex.hpp"
 #include "tsd/rendering/pipeline/RenderPipeline.h"
-#include "tsd/rendering/view/Manipulator.hpp"
 #include "tsd/rendering/view/CameraUpdateDelegate.hpp"
+#include "tsd/rendering/view/Manipulator.hpp"
+
+// ImGuizmo
+#include <ImGuizmo.h>
+
 // std
 #include <array>
 #include <functional>
 #include <future>
 #include <limits>
 #include <memory>
-#include <vector>
 #include <string>
+#include <vector>
 
 namespace tsd::ui::imgui {
 
@@ -44,10 +49,12 @@ struct Viewport : public Window
   void setDeviceChangeCb(ViewportDeviceChangeCb cb);
   void setExternalInstances(
       const anari::Instance *instances = nullptr, size_t count = 0);
+  void setCustomFrameParameter(const char *name, const tsd::core::Any &value);
 
   void setDatabaseCamera(tsd::core::CameraRef cam);
   void clearDatabaseCamera();
   void createCameraFromCurrentView();
+  void addCameraObjectFromCurrentView();
 
  private:
   void saveSettings(tsd::core::DataNode &thisWindowRoot) override;
@@ -73,6 +80,8 @@ struct Viewport : public Window
   void ui_handleInput();
   bool ui_picking();
   void ui_overlay();
+  void ui_gizmo();
+  bool canShowGizmo() const;
 
   int windowFlags() const override; // anari_viewer::Window
 
@@ -97,11 +106,20 @@ struct Viewport : public Window
   bool m_showOnlySelected{false};
   int m_frameSamples{0};
 
-  bool m_visualizeDepth{false};
+  tsd::rendering::AOVType m_visualizeAOV{tsd::rendering::AOVType::NONE};
   bool m_showAxes{true};
+  float m_depthVisualMinimum{0.f};
   float m_depthVisualMaximum{1.f};
+  float m_edgeThreshold{0.5f};
+  bool m_edgeInvert{false};
 
   float m_fov{40.f};
+
+  // Gizmo state //
+
+  bool m_enableGizmo{true};
+  ImGuizmo::OPERATION m_gizmoOperation{ImGuizmo::TRANSLATE};
+  ImGuizmo::MODE m_gizmoMode{ImGuizmo::WORLD};
 
   // Picking state //
 
@@ -152,7 +170,7 @@ struct Viewport : public Window
   tsd::rendering::RenderPipeline m_pipeline;
   tsd::rendering::AnariSceneRenderPass *m_anariPass{nullptr};
   tsd::rendering::PickPass *m_pickPass{nullptr};
-  tsd::rendering::VisualizeDepthPass *m_visualizeDepthPass{nullptr};
+  tsd::rendering::VisualizeAOVPass *m_visualizeAOVPass{nullptr};
   tsd::rendering::OutlineRenderPass *m_outlinePass{nullptr};
   tsd::rendering::AnariAxesRenderPass *m_axesPass{nullptr};
   tsd::rendering::CopyToSDLTexturePass *m_outputPass{nullptr};

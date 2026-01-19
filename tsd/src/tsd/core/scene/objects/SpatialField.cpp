@@ -1,11 +1,15 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/core/scene/objects/SpatialField.hpp"
 
 #include "tsd/core/Logging.hpp"
+#include "tsd/core/Parameter.hpp"
+#include "tsd/core/TSDMath.hpp"
 #include "tsd/core/algorithms/computeScalarRange.hpp"
 #include "tsd/core/scene/Scene.hpp"
+// anari
+#include <anari/frontend/anari_enums.h>
 // std
 #include <optional>
 
@@ -25,9 +29,43 @@ SpatialField::SpatialField(Token stype) : Object(ANARI_SPATIAL_FIELD, stype)
         .setValue("linear")
         .setStringValues({"nearest", "linear"})
         .setStringSelection(1);
+    addParameter("dataCentering")
+        .setValue("node")
+        .setStringValues({"node", "cell"})
+        .setStringSelection(0)
+        .setDescription(
+            "whether data values are node-centered or cell-centered");
     addParameter("data")
         .setValue({ANARI_ARRAY3D, INVALID_INDEX})
         .setDescription("vertex-centered voxel data");
+    addParameter("roi")
+        .setDescription("ROI box in object space")
+        .setValue(tsd::math::box3(
+            tsd::math::float3(-math::inf, -math::inf, -math::inf),
+            tsd::math::float3(math::inf, math::inf, math::inf)));
+  } else if (stype == tokens::spatial_field::structuredRectilinear) {
+    addParameter("filter")
+        .setValue("linear")
+        .setStringValues({"nearest", "linear"})
+        .setStringSelection(1);
+    addParameter("dataCentering")
+        .setValue("node")
+        .setStringValues({"node", "cell"})
+        .setStringSelection(0)
+        .setDescription(
+            "whether data values are node-centered or cell-centered");
+    addParameter("data")
+        .setValue({ANARI_ARRAY3D, INVALID_INDEX})
+        .setDescription("vertex-centered voxel data");
+    addParameter("coordsX")
+        .setValue({ANARI_ARRAY1D, INVALID_INDEX})
+        .setDescription("X-axis coordinates");
+    addParameter("coordsY")
+        .setValue({ANARI_ARRAY1D, INVALID_INDEX})
+        .setDescription("Y-axis coordinates");
+    addParameter("coordsZ")
+        .setValue({ANARI_ARRAY1D, INVALID_INDEX})
+        .setDescription("Z-axis coordinates");
   } else if (stype == tokens::spatial_field::amr) {
     addParameter("gridOrigin")
         .setValue(tsd::math::float3(0.f, 0.f, 0.f))
@@ -59,13 +97,24 @@ SpatialField::SpatialField(Token stype) : Object(ANARI_SPATIAL_FIELD, stype)
         .setDescription("array containing serialzed NanoVDB grid");
     addParameter("filter").setValue("linear").setStringValues(
         {"linear", "nearest"});
+    addParameter("dataCentering")
+        .setValue("cell")
+        .setStringValues({"node", "cell"})
+        .setStringSelection(1)
+        .setDescription(
+            "whether data values are node-centered or cell-centered");
+    addParameter("roi")
+        .setDescription("ROI box in object space")
+        .setValue(tsd::math::box3(
+            tsd::math::float3(-math::inf, -math::inf, -math::inf),
+            tsd::math::float3(math::inf, math::inf, math::inf)));
   }
 }
 
-IndexedVectorRef<SpatialField> SpatialField::self() const
+ObjectPoolRef<SpatialField> SpatialField::self() const
 {
   return scene() ? scene()->getObject<SpatialField>(index())
-                 : IndexedVectorRef<SpatialField>{};
+                 : ObjectPoolRef<SpatialField>{};
 }
 
 anari::Object SpatialField::makeANARIObject(anari::Device d) const
@@ -91,6 +140,9 @@ tsd::math::float2 SpatialField::computeValueRange()
   };
 
   if (subtype() == tokens::spatial_field::structuredRegular) {
+    if (auto range = getDataRangeFromParameter(parameter("data")); range)
+      retval = *range;
+  } else if (subtype() == tokens::spatial_field::structuredRectilinear) {
     if (auto range = getDataRangeFromParameter(parameter("data")); range)
       retval = *range;
   } else if (subtype() == tokens::spatial_field::unstructured) {
@@ -119,6 +171,7 @@ tsd::math::float2 SpatialField::computeValueRange()
 namespace tokens::spatial_field {
 
 const Token structuredRegular = "structuredRegular";
+const Token structuredRectilinear = "structuredRectilinear";
 const Token unstructured = "unstructured";
 const Token amr = "amr";
 const Token nanovdb = "nanovdb";

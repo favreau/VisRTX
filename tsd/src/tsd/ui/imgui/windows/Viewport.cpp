@@ -1,8 +1,9 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "Viewport.h"
 // tsd_ui_imgui
+#include "imgui.h"
 #include "tsd/ui/imgui/Application.h"
 #include "tsd/ui/imgui/tsd_ui_imgui.h"
 // tsd_core
@@ -42,8 +43,6 @@ Viewport::Viewport(
 
 Viewport::~Viewport()
 {
-  if (m_initFuture.valid())
-    m_initFuture.get();
   teardownDevice();
 }
 
@@ -78,29 +77,22 @@ void Viewport::buildUI()
 
   ImGui::EndDisabled();
 
-  // Make is so that middle and right-clicks get the window focused.
-  // This enables middle/right-click-drag to work right away even if the window
-  // is not focused same as left-click-drag works without requiring a prior
-  // left-click-focus.
-  if (ImGui::IsWindowHovered()
-      && (ImGui::IsMouseDown(ImGuiMouseButton_Right)
-          || ImGui::IsMouseDown(ImGuiMouseButton_Middle))) {
-    ImGui::SetWindowFocus();
-  }
-
-  bool didPick = ui_picking();
-
+  ui_gizmo();
   ui_handleInput();
+  bool didPick = ui_picking(); // Needs to happen before ui_menubar
   ui_menubar();
 
-  if (m_anariPass && !didPick)
-    m_anariPass->setEnableIDs(appCore()->objectIsSelected());
+  if (m_anariPass && !didPick) {
+    bool needIDs = appCore()->getFirstSelected().valid()
+        || m_visualizeAOV == tsd::rendering::AOVType::EDGES;
+    m_anariPass->setEnableIDs(needIDs);
+  }
 
   if (m_rIdx && (m_rIdx->isFlat() != appCore()->anari.useFlatRenderIndex())) {
     tsd::core::logWarning("instancing setting changed: resetting viewport");
     auto lib = m_libName;
-    setLibrary("", false); // clear old library
-    setLibrary(lib, false);
+    setLibrary(""); // clear old library
+    setLibrary(lib);
   }
 }
 
@@ -250,6 +242,22 @@ void Viewport::setExternalInstances(
     m_rIdx->setExternalInstances(instances, count);
 }
 
+void Viewport::setCustomFrameParameter(
+    const char *name, const tsd::core::Any &value)
+{
+  if (!m_anariPass) {
+    tsd::core::logWarning(
+        "[viewport] cannot set custom frame parameter '%s': no frame yet",
+        name);
+    return;
+  }
+
+  auto d = m_anariPass->getDevice();
+  auto f = m_anariPass->getFrame();
+  anari::setParameter(d, f, name, value.type(), value.data());
+  anari::commitParameters(d, f);
+}
+
 void Viewport::saveSettings(tsd::core::DataNode &root)
 {
   root.reset(); // clear all previous values, if they exist
@@ -262,10 +270,20 @@ void Viewport::saveSettings(tsd::core::DataNode &root)
   root["showOnlySelected"] = m_showOnlySelected;
   root["highlightSelection"] = m_highlightSelection;
   root["showOnlySelected"] = m_showOnlySelected;
+  root["visualizeAOV"] = static_cast<int>(m_visualizeAOV);
+  root["depthVisualMinimum"] = m_depthVisualMinimum;
   root["depthVisualMaximum"] = m_depthVisualMaximum;
+  root["edgeThreshold"] = m_edgeThreshold;
+  root["edgeInvert"] = m_edgeInvert;
   root["fov"] = m_fov;
   root["resolutionScale"] = m_resolutionScale;
   root["showAxes"] = m_showAxes;
+
+  // Gizmo settings //
+
+  root["enableGizmo"] = m_enableGizmo;
+  root["gizmoOperation"] = static_cast<int>(m_gizmoOperation);
+  root["gizmoMode"] = static_cast<int>(m_gizmoMode);
 
   root["anariLibrary"] = m_libName;
 
@@ -308,10 +326,26 @@ void Viewport::loadSettings(tsd::core::DataNode &root)
   root["showOnlySelected"].getValue(ANARI_BOOL, &m_showOnlySelected);
   root["highlightSelection"].getValue(ANARI_BOOL, &m_highlightSelection);
   root["showOnlySelected"].getValue(ANARI_BOOL, &m_showOnlySelected);
+  int aovType = static_cast<int>(m_visualizeAOV);
+  root["visualizeAOV"].getValue(ANARI_INT32, &aovType);
+  m_visualizeAOV = static_cast<tsd::rendering::AOVType>(aovType);
+  root["depthVisualMinimum"].getValue(ANARI_FLOAT32, &m_depthVisualMinimum);
   root["depthVisualMaximum"].getValue(ANARI_FLOAT32, &m_depthVisualMaximum);
+  root["edgeThreshold"].getValue(ANARI_FLOAT32, &m_edgeThreshold);
+  root["edgeInvert"].getValue(ANARI_BOOL, &m_edgeInvert);
   root["fov"].getValue(ANARI_FLOAT32, &m_fov);
   root["resolutionScale"].getValue(ANARI_FLOAT32, &m_resolutionScale);
   root["showAxes"].getValue(ANARI_BOOL, &m_showAxes);
+
+  // Gizmo settings //
+
+  root["enableGizmo"].getValue(ANARI_BOOL, &m_enableGizmo);
+  int gizmoOp = static_cast<int>(m_gizmoOperation);
+  root["gizmoOperation"].getValue(ANARI_INT32, &gizmoOp);
+  m_gizmoOperation = static_cast<ImGuizmo::OPERATION>(gizmoOp);
+  int gizmoMode = static_cast<int>(m_gizmoMode);
+  root["gizmoMode"].getValue(ANARI_INT32, &gizmoMode);
+  m_gizmoMode = static_cast<ImGuizmo::MODE>(gizmoMode);
 
   // Camera //
 
@@ -348,9 +382,7 @@ void Viewport::loadSettings(tsd::core::DataNode &root)
   if (core->commandLine.useDefaultRenderer) {
     std::string libraryName;
     root["anariLibrary"].getValue(ANARI_STRING, &libraryName);
-    setLibrary(libraryName, false);
-  } else {
-    setLibrary("", false);
+    setLibrary(libraryName);
   }
 
   // Renderer settings //
@@ -485,16 +517,19 @@ void Viewport::setupRenderPipeline()
         id &= 0x7FFFFFFF;
       }
 
-      appCore()->setSelectedObject(
-          id == ~0u ? nullptr : appCore()->tsd.scene.getObject(objectType, id));
+      auto *obj = (id == ~0u) ? nullptr
+                              : appCore()->tsd.scene.getObject(objectType, id);
+      appCore()->setSelected(obj);
     }
 
     m_pickPass->setEnabled(false);
   });
 
-  m_visualizeDepthPass =
-      m_pipeline.emplace_back<tsd::rendering::VisualizeDepthPass>();
-  m_visualizeDepthPass->setEnabled(false);
+  m_visualizeAOVPass =
+      m_pipeline.emplace_back<tsd::rendering::VisualizeAOVPass>();
+  m_visualizeAOVPass->setEnabled(false);
+  m_visualizeAOVPass->setEdgeThreshold(m_edgeThreshold);
+  m_visualizeAOVPass->setEdgeInvert(m_edgeInvert);
 
   m_outlinePass = m_pipeline.emplace_back<tsd::rendering::OutlineRenderPass>();
 
@@ -510,6 +545,9 @@ void Viewport::setupRenderPipeline()
 
 void Viewport::teardownDevice()
 {
+  if (m_initFuture.valid())
+    m_initFuture.get();
+
   if (!m_deviceReadyToUse)
     return;
 
@@ -568,9 +606,12 @@ void Viewport::setSelectionVisibilityFilterEnabled(bool enabled)
   if (!enabled)
     m_rIdx->setFilterFunction({});
   else {
-    m_rIdx->setFilterFunction([&](const tsd::core::Object *obj) {
-      return !appCore()->tsd.selectedObject
-          || obj == appCore()->tsd.selectedObject;
+    m_rIdx->setFilterFunction([this](const tsd::core::Object *obj) {
+      auto selectedNode = appCore()->getFirstSelected();
+      if (!selectedNode.valid())
+        return true;
+      auto *selectedObject = (*selectedNode)->getObject();
+      return !selectedObject || obj == selectedObject;
     });
   }
 }
@@ -672,8 +713,9 @@ void Viewport::updateImage()
   anari::getProperty(
       m_device, frame, "numSamples", m_frameSamples, ANARI_NO_WAIT);
 
-  const auto &tsd_ctx = appCore()->tsd;
-  const auto *selectedObject = tsd_ctx.selectedObject;
+  auto selectedNode = appCore()->getFirstSelected();
+  const auto *selectedObject =
+      selectedNode.valid() ? (*selectedNode)->getObject() : nullptr;
   const bool doHighlight = !m_showOnlySelected && m_highlightSelection
       && selectedObject
       && (selectedObject->type() == ANARI_SURFACE
@@ -706,21 +748,8 @@ void Viewport::applyCameraParameters(tsd::core::Camera *cam)
 
   auto d = m_device;
   auto c = m_currentCamera; // ANARI camera
-  // Let's make sure we recompute the camera aspect ratio before
-  // handing off the parameters to the ANARI camera.
-  // Note that we don't want this to be accounted as a user change
-  // as it is only about automatic viewport adaptation.
-  // Not doing so creates an infinite invalidate->restart accumulation
-  // loop.
-  m_cameraDelegate->pushIgnoreChangeScope();
-  if (cam->subtype() == tsd::core::tokens::camera::perspective
-      || cam->subtype() == tsd::core::tokens::camera::orthographic) {
-    // Let's not check for cam->parameter("aspect")
-    // and always recompute an aspect ratio based on viewport size.
-    float aspect = m_viewportSize.x / float(m_viewportSize.y);
-    cam->setParameter("aspect", aspect);
-  }
-  m_cameraDelegate->popIgnoreChangeScope();
+  anari::setParameter(
+      d, m_currentCamera, "aspect", m_viewportSize.x / float(m_viewportSize.y));
   cam->updateAllANARIParameters(d, m_currentCamera);
   anari::commitParameters(d, c);
 }
@@ -807,14 +836,62 @@ void Viewport::createCameraFromCurrentView()
     }
   }
 
-  // Set name
-  std::string name = "ViewCamera_" + std::to_string(cam.index());
+  // Set name based on interpolation algorithm
+  const auto &pathSettings = appCore()->view.pathSettings;
+  std::string interpName;
+  switch (pathSettings.type) {
+  case tsd::rendering::CameraPathInterpolationType::LINEAR:
+    interpName = "Linear";
+    break;
+  case tsd::rendering::CameraPathInterpolationType::SMOOTH:
+    interpName = "Smooth";
+    break;
+  default:
+    interpName = "Unknown";
+    break;
+  }
+
+  std::string name = "Camera_" + interpName + "_" + std::to_string(cam.index());
   cam->setName(name.c_str());
 
   // Auto-select it
   setDatabaseCamera(cam);
 
   tsd::core::logStatus("Created camera '%s' from current view", name.c_str());
+}
+
+void Viewport::addCameraObjectFromCurrentView()
+{
+  createCameraFromCurrentView();
+
+  auto cam = m_selectedCamera;
+  if (!cam) {
+    tsd::core::logWarning("No camera available to add to scene");
+    return;
+  }
+
+  auto &scene = appCore()->tsd.scene;
+  auto selectedNode = appCore()->getFirstSelected();
+  auto *layer =
+      selectedNode.valid() ? selectedNode->container() : scene.defaultLayer();
+  if (!layer) {
+    tsd::core::logWarning("No layer available to add camera object");
+    return;
+  }
+
+  // Always add camera to the root of the layer, not as a child of selection
+  auto cameraNode =
+      scene.insertChildObjectNode(layer->root(), cam, cam->name().c_str());
+  appCore()->setSelected(cameraNode);
+  appCore()->view.cameraPathCameraIndex = cam.index();
+  if (appCore()->offline.camera.cameraIndex == TSD_INVALID_INDEX) {
+    appCore()->offline.camera.cameraIndex = cam.index();
+    tsd::core::logStatus(
+        "Offline render camera set to '%s'", cam->name().c_str());
+  }
+  appCore()->updateCameraPathAnimation();
+
+  tsd::core::logStatus("Added camera '%s' to scene", cam->name().c_str());
 }
 
 void Viewport::echoCameraConfig()
@@ -838,12 +915,12 @@ void Viewport::ui_menubar()
       for (auto &libName : appCore()->commandLine.libraryList) {
         const bool isThisLibrary = m_libName == libName;
         if (ImGui::RadioButton(libName.c_str(), isThisLibrary))
-          setLibrary(libName, false);
+          setLibrary(libName);
       }
       ImGui::Separator();
       if (ImGui::MenuItem("reload device")) {
         auto lib = m_libName; // setLibrary() clears m_libName
-        setLibrary(lib, false);
+        setLibrary(lib);
       }
       ImGui::EndMenu();
     }
@@ -1025,6 +1102,35 @@ void Viewport::ui_menubar()
       ImGui::EndMenu();
     }
 
+    // Gizmo //
+
+    if (ImGui::BeginMenu("Transform Manipulator")) {
+      ImGui::Checkbox("Enable Manipulator", &m_enableGizmo);
+
+      ImGui::Separator();
+      ImGui::Text("Operation:");
+      ImGui::Indent(INDENT_AMOUNT);
+      const auto &gOp = m_gizmoOperation;
+      if (ImGui::RadioButton("(w) Translate", gOp == ImGuizmo::TRANSLATE))
+        m_gizmoOperation = ImGuizmo::TRANSLATE;
+      if (ImGui::RadioButton("(e) Scale", gOp == ImGuizmo::SCALE))
+        m_gizmoOperation = ImGuizmo::SCALE;
+      if (ImGui::RadioButton("(r) Rotate", gOp == ImGuizmo::ROTATE))
+        m_gizmoOperation = ImGuizmo::ROTATE;
+      ImGui::Unindent(INDENT_AMOUNT);
+
+      ImGui::Separator();
+      ImGui::Text("Mode:");
+      ImGui::Indent(INDENT_AMOUNT);
+      if (ImGui::RadioButton("Local", m_gizmoMode == ImGuizmo::LOCAL))
+        m_gizmoMode = ImGuizmo::LOCAL;
+      if (ImGui::RadioButton("World", m_gizmoMode == ImGuizmo::WORLD))
+        m_gizmoMode = ImGuizmo::WORLD;
+      ImGui::Unindent(INDENT_AMOUNT);
+
+      ImGui::EndMenu();
+    }
+
     // Viewport //
 
     if (ImGui::BeginMenu("Viewport")) {
@@ -1071,12 +1177,48 @@ void Viewport::ui_menubar()
 
       ImGui::Separator();
 
-      if (ImGui::Checkbox("visualize depth", &m_visualizeDepth))
-        m_visualizeDepthPass->setEnabled(m_visualizeDepth);
+      const char *aovItems[] = {
+          "default", "depth", "albedo", "normal", "edges"};
+      if (int aov = int(m_visualizeAOV); ImGui::Combo(
+              "visualize AOV", &aov, aovItems, IM_ARRAYSIZE(aovItems))) {
+        if (aov != int(m_visualizeAOV)) {
+          m_visualizeAOV = static_cast<tsd::rendering::AOVType>(aov);
+          m_visualizeAOVPass->setAOVType(m_visualizeAOV);
+          m_anariPass->setEnableAlbedo(
+              m_visualizeAOV == tsd::rendering::AOVType::ALBEDO);
+          m_anariPass->setEnableNormals(
+              m_visualizeAOV == tsd::rendering::AOVType::NORMAL);
+          m_anariPass->setEnableIDs(
+              m_visualizeAOV == tsd::rendering::AOVType::EDGES);
+        }
+      }
 
-      ImGui::BeginDisabled(!m_visualizeDepth);
-      if (ImGui::DragFloat("maximum", &m_depthVisualMaximum, 1.f, 1e-3f, 1e20f))
-        m_visualizeDepthPass->setMaxDepth(m_depthVisualMaximum);
+      ImGui::BeginDisabled(m_visualizeAOV != tsd::rendering::AOVType::DEPTH);
+      bool depthRangeChanged = false;
+      depthRangeChanged |= ImGui::DragFloat("depth minimum",
+          &m_depthVisualMinimum,
+          0.1f,
+          0.f,
+          m_depthVisualMaximum);
+      depthRangeChanged |= ImGui::DragFloat("depth maximum",
+          &m_depthVisualMaximum,
+          0.1f,
+          m_depthVisualMinimum,
+          1e20f);
+      if (depthRangeChanged)
+        m_visualizeAOVPass->setDepthRange(
+            m_depthVisualMinimum, m_depthVisualMaximum);
+      ImGui::EndDisabled();
+
+      ImGui::BeginDisabled(m_visualizeAOV != tsd::rendering::AOVType::EDGES);
+      bool edgeSettingsChanged = false;
+      edgeSettingsChanged |=
+          ImGui::DragFloat("edge threshold", &m_edgeThreshold, 0.01f, 0.f, 1.f);
+      edgeSettingsChanged |= ImGui::Checkbox("invert edges", &m_edgeInvert);
+      if (edgeSettingsChanged) {
+        m_visualizeAOVPass->setEdgeThreshold(m_edgeThreshold);
+        m_visualizeAOVPass->setEdgeInvert(m_edgeInvert);
+      }
       ImGui::EndDisabled();
 
       ImGui::Separator();
@@ -1162,7 +1304,59 @@ void Viewport::ui_menubar()
 
 void Viewport::ui_handleInput()
 {
-  if (!m_deviceReadyToUse || !ImGui::IsWindowFocused())
+  // No device
+  if (!m_deviceReadyToUse)
+    return;
+
+  // Handle gizmo keyboard shortcuts. Handle those before checking for
+  // window focus so they can act globally.
+  // When a new manipulator mode is selected, we default to world mode.
+  // Otherwise, toggle between local and global modes.
+  if (ImGui::IsKeyPressed(ImGuiKey_Q, false)
+      || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+    m_enableGizmo = false;
+  } else if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
+    if (m_enableGizmo && m_gizmoOperation == ImGuizmo::TRANSLATE) {
+      m_gizmoMode =
+          (m_gizmoMode == ImGuizmo::WORLD) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
+    } else {
+      m_enableGizmo = true;
+      m_gizmoOperation = ImGuizmo::TRANSLATE;
+      m_gizmoMode = ImGuizmo::WORLD;
+    }
+  } else if (ImGui::IsKeyPressed(ImGuiKey_E, false)) {
+    if (m_enableGizmo && m_gizmoOperation == ImGuizmo::SCALE) {
+      m_gizmoMode =
+          (m_gizmoMode == ImGuizmo::WORLD) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
+    } else {
+      m_enableGizmo = true;
+      m_gizmoOperation = ImGuizmo::SCALE;
+      m_gizmoMode = ImGuizmo::WORLD;
+    }
+  } else if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
+    if (m_enableGizmo && m_gizmoOperation == ImGuizmo::ROTATE) {
+      m_gizmoMode =
+          (m_gizmoMode == ImGuizmo::WORLD) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
+    } else {
+      m_enableGizmo = true;
+      m_gizmoOperation = ImGuizmo::ROTATE;
+      m_gizmoMode = ImGuizmo::WORLD;
+    }
+  }
+
+  // Enforce global Gizmo state so that it actually stops tracking
+  // interactions when disabled.
+  ImGuizmo::Enable(m_enableGizmo);
+
+  // Block arcball input and picking when ImGuizmo is being used
+  if (ImGuizmo::IsUsing())
+    return;
+
+  // Do not bother with events if the window is not hovered
+  // or no interaction is ongoing.
+  // We'll use that hovering status to check for starting an
+  // event below.
+  if (!ImGui::IsWindowHovered() && !m_manipulating)
     return;
 
   // Block arcball input when a database camera is selected
@@ -1180,12 +1374,13 @@ void Viewport::ui_handleInput()
   const bool orbit = ImGui::IsMouseDown(ImGuiMouseButton_Left);
 
   const bool anyMovement = dolly || pan || orbit;
-
   if (!anyMovement) {
     m_manipulating = false;
     m_previousMouse = tsd::math::float2(-1);
-  } else if (ImGui::IsItemHovered() && !m_manipulating)
+  } else if (ImGui::IsItemHovered() && !m_manipulating) {
     m_manipulating = true;
+    ImGui::SetWindowFocus(); // ensure we keep focus while manipulating
+  }
 
   if (m_mouseRotating && !orbit)
     m_mouseRotating = false;
@@ -1323,6 +1518,121 @@ void Viewport::ui_overlay()
     }
 
     ImGui::End();
+  }
+}
+
+bool Viewport::canShowGizmo() const
+{
+  if (!m_enableGizmo || !m_deviceReadyToUse)
+    return false;
+  if (m_selectedCamera)
+    return false; // No gizmo with database camera
+
+  // Check if we have a selected node with a transform
+  auto selectedNode = appCore()->getFirstSelected();
+  if (selectedNode.valid()) {
+    return (*selectedNode)->isTransform();
+  }
+
+  return false;
+}
+
+void Viewport::ui_gizmo()
+{
+  if (!canShowGizmo())
+    return;
+
+  auto computeWorldTransform = [](tsd::core::LayerNodeRef node) -> math::mat4 {
+    auto world = math::IDENTITY_MAT4;
+    for (; node; node = node->parent())
+      world = mul((*node)->getTransform(), world);
+
+    return world;
+  };
+
+  auto selectedNodeRef = appCore()->getFirstSelected();
+  auto parentNodeRef = selectedNodeRef->parent();
+
+  auto localTransform = (*selectedNodeRef)->getTransform();
+  auto parentWorldTransform = computeWorldTransform(parentNodeRef);
+  auto worldTransform = mul(parentWorldTransform, localTransform);
+
+  ImGuizmo::SetOrthographic(m_currentCamera == m_orthoCamera);
+  ImGuizmo::BeginFrame();
+
+  // Setup ImGuizmo with window and relative viewport information
+  ImVec2 viewportPos = ImGui::GetCursorScreenPos();
+  ImVec2 viewportSize = ImGui::GetContentRegionAvail();
+  ImVec2 imageMin = ImGui::GetItemRectMin();
+  ImVec2 imageMax = ImGui::GetItemRectMax();
+  ImVec2 imageSize(imageMax.x - imageMin.x, imageMax.y - imageMin.y);
+  ImGuizmo::SetRect(imageMin.x, imageMin.y, imageSize.x, imageSize.y);
+
+  // Build view matrix and projection matrices from manipulator
+  // Not sure if we can get those more directly...
+  const auto eye = m_arcball->eye();
+  const auto at = m_arcball->at();
+  const auto up = m_arcball->up();
+  const auto view = linalg::lookat_matrix(eye, at, up);
+
+  const float aspect = m_viewportSize.x / float(m_viewportSize.y);
+  const float fovRadians = math::radians(m_fov);
+  math::mat4 proj;
+
+  // Try and get some legroom for ImGuizmo get precision on depth.
+  // We don't know the extent of scene, so try and estimate a good enough near
+  // plane position based on the distance to the select object
+  const auto selectedObjectPos =
+      math::float3(
+          worldTransform[3][0], worldTransform[3][1], worldTransform[3][2])
+      - eye;
+  const float distanceToSelectedObject =
+      dot(selectedObjectPos, normalize(at - eye));
+
+  float near = std::max(1e-8f, distanceToSelectedObject * 1e-2f);
+  float far = std::max(1e-6f, distanceToSelectedObject * 1e2f);
+
+  if (m_currentCamera == m_perspCamera) {
+    float oneOverTanFov = 1.0f / tan(fovRadians / 2.0f);
+    proj = math::mat4{
+        {oneOverTanFov / aspect, 0.0f, 0.0f, 0.0f},
+        {0.0f, oneOverTanFov, 0.0f, 0.0f},
+        {0.0f, 0.0f, -(far + near) / (far - near), -1.0f},
+        {0.0f, 0.0f, -2.0f * far * near / (far - near), 0.0f},
+    };
+  } else if (m_currentCamera == m_orthoCamera) {
+    // The 0.75 factor is to match updateCameraParametersOrthographic
+    const float height = m_arcball->distance() * 0.75f;
+    const float halfHeight = height * 0.5f;
+    const float halfWidth = halfHeight * aspect;
+    const float left = -halfWidth;
+    const float right = halfWidth;
+    const float bottom = -halfHeight;
+    const float top = halfHeight;
+
+    proj = math::mat4{{2.0f / (right - left), 0.0f, 0.0f, 0.0f},
+        {0.0f, 2.0f / (top - bottom), 0.0f, 0.0f},
+        {0.0f, 0.0f, -2.0f / (far - near), 0.0f},
+        {-(right + left) / (right - left),
+            -(top + bottom) / (top - bottom),
+            -(far + near) / (far - near),
+            1.0f}};
+  } else {
+    // No support for omnidirectional camera, bail out.
+    return;
+  }
+
+  // Draw and manipulate the gizmo
+  ImGuizmo::SetDrawlist();
+  if (ImGuizmo::Manipulate(&view[0].x,
+          &proj[0].x,
+          m_gizmoOperation,
+          m_gizmoMode,
+          &worldTransform[0].x)) {
+    auto invParent = linalg::inverse(parentWorldTransform);
+    localTransform = mul(invParent, worldTransform);
+    (*selectedNodeRef)->setAsTransform(localTransform);
+    appCore()->tsd.scene.signalLayerChange(selectedNodeRef->container());
   }
 }
 

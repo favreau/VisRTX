@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/core/scene/Object.hpp"
@@ -177,6 +177,11 @@ void Object::decUseCount(UseKind kind)
 }
 
 const std::string &Object::name() const
+{
+  return m_name;
+}
+
+std::string &Object::editableName()
 {
   return m_name;
 }

@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -180,9 +180,15 @@ set(SOURCES
   sampler/UnknownSampler.cpp
 
   spatial_field/SpatialField.cpp
+  spatial_field/NvdbRectilinearField.cpp
   spatial_field/NvdbRegularField.cpp
+  spatial_field/StructuredRectilinearField.cpp
   spatial_field/StructuredRegularField.cpp
   spatial_field/UnknownSpatialField.cpp
+  spatial_field/NvdbRectilinearSampler.cpp
+  spatial_field/NvdbRegularSampler.cpp
+  spatial_field/StructuredRectilinearSampler.cpp
+  spatial_field/StructuredRegularSampler.cpp
   spatial_field/space_skipping/UniformGrid.cu
 
   surface/Surface.cpp
@@ -360,6 +366,10 @@ GenerateEmbeddedPTX(renderer Test)
 GenerateEmbeddedPTX(geometry Intersectors)
 GenerateEmbeddedPTX(material/shaders MatteShader ENTRIES __direct__callable__evalSurfaceMaterial)
 GenerateEmbeddedPTX(material/shaders PhysicallyBasedShader ENTRIES __direct__callable__evalSurfaceMaterial)
+GenerateEmbeddedPTX(spatial_field NvdbRegularSampler)
+GenerateEmbeddedPTX(spatial_field NvdbRectilinearSampler)
+GenerateEmbeddedPTX(spatial_field StructuredRegularSampler)
+GenerateEmbeddedPTX(spatial_field StructuredRectilinearSampler)
 if(VISRTX_ENABLE_MDL_SUPPORT)
   GenerateEmbeddedPTX(material/shaders MDLShader ENTRIES __direct__callable__evalSurfaceMaterial)
   GenerateEmbeddedPTX(material/shaders MDLTexture)

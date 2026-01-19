@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -145,6 +145,8 @@ constexpr int ATTRIBUTE_VALUES = 4;
   }
 
 VISRTX_ANARI_TYPEFOR_SPECIALIZATION(visrtx::box1, ANARI_FLOAT32_BOX1);
+VISRTX_ANARI_TYPEFOR_SPECIALIZATION(visrtx::box2, ANARI_FLOAT32_BOX2);
+VISRTX_ANARI_TYPEFOR_SPECIALIZATION(visrtx::box3, ANARI_FLOAT32_BOX3);
 
 namespace visrtx {
 
@@ -192,6 +194,14 @@ struct DeviceGlobalState : public helium::BaseGlobalDeviceState
     OptixModule matte{nullptr};
     OptixModule physicallyBased{nullptr};
   } materialShaders;
+
+  struct SpatialFieldModules
+  {
+    OptixModule structuredRegular{nullptr};
+    OptixModule nvdb{nullptr};
+    OptixModule structuredRectilinear{nullptr};
+    OptixModule nvdbRectilinear{nullptr};
+  } fieldSamplers;
 
   struct ObjectUpdates
   {

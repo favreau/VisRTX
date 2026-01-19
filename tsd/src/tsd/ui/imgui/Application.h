@@ -1,12 +1,13 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "modals/AppSettingsDialog.h"
 #include "modals/BlockingTaskModal.h"
-#include "modals/OfflineRenderModal.h"
+#include "modals/ExportNanoVDBFileDialog.h"
 #include "modals/ImportFileDialog.h"
+#include "modals/OfflineRenderModal.h"
 // tsd_app
 #include "tsd/app/Core.h"
 // anari_viewer
@@ -26,11 +27,15 @@ class Application : public anari_viewer::Application
 
   void getFilenameFromDialog(std::string &filenameOut, bool save = false);
 
-  // Things from anari_viewer::Application to override //
-
-  virtual anari_viewer::WindowArray setupWindows() override;
-  virtual void uiFrameStart() override;
-  virtual void teardown() override;
+  template <typename T>
+  T *findWindowOfType()
+  {
+    for (auto *w : m_windows) {
+      if (auto *typed = dynamic_cast<T *>(w))
+        return typed;
+    }
+    return nullptr;
+  }
 
   // Not movable or copyable //
   Application(const Application &) = delete;
@@ -40,15 +45,32 @@ class Application : public anari_viewer::Application
   /////////////////////////////
 
  protected:
+  // Things from anari_viewer::Application to override //
+
+  virtual anari_viewer::WindowArray setupWindows() override;
+  virtual void uiFrameStart() override;
+  virtual void teardown() override;
+
+  // Internal API //
+
+  virtual void uiMainMenuBar();
+
+  void doSave(const std::string &name = "");
+
   void saveApplicationState(const char *filename = "state.tsd");
   void loadApplicationState(const char *filename = "state.tsd");
 
   void loadStateForNextFrame();
 
   void setupUsdDevice();
-  bool usdDeviceSetup() const;
+  bool usdDeviceIsSetup() const;
   void syncUsdScene();
   void teardownUsdDevice();
+
+  void setupTsdDevice();
+  bool tsdDeviceIsSetup() const;
+  void syncTsdScene();
+  void teardownTsdDevice();
 
   void setWindowArray(const anari_viewer::WindowArray &wa);
   virtual const char *getDefaultLayout() const = 0;
@@ -60,6 +82,7 @@ class Application : public anari_viewer::Application
   std::unique_ptr<BlockingTaskModal> m_taskModal;
   std::unique_ptr<OfflineRenderModal> m_offlineRenderModal;
   std::unique_ptr<ImportFileDialog> m_fileDialog;
+  std::unique_ptr<ExportNanoVDBFileDialog> m_exportNanoVDBFileDialog;
 
   tsd::core::DataTree m_settings;
 
@@ -81,7 +104,14 @@ class Application : public anari_viewer::Application
     anari::Device device{nullptr};
     anari::Frame frame{nullptr};
     tsd::rendering::RenderIndex *renderIndex{nullptr};
-  } m_usd;
+  } m_usdDevice;
+
+  struct TsdDeviceState
+  {
+    anari::Device device{nullptr};
+    anari::Frame frame{nullptr};
+    tsd::rendering::RenderIndex *renderIndex{nullptr};
+  } m_tsdDevice;
 };
 
 } // namespace tsd::ui::imgui

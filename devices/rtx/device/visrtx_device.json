@@ -49,7 +49,11 @@
       "nv_frame_buffers_cuda",
       $<$<BOOL:VISRTX_ENABLE_MDL_SUPPORT>:"visrtx_material_mdl",>
       $<$<BOOL:VISRTX_ENABLE_NEURAL>:"visrtx_geometry_neural",>
-      "visrtx_triangle_back_face_culling"
+      "visrtx_triangle_back_face_culling",
+      "visrtx_spatial_field_data_centering",
+      "visrtx_spatial_field_region_of_interest",
+      "visrtx_spatial_field_structured_rectilinear",
+      "visrtx_spatial_field_nanovdb_rectilinear"
     ]
   },
   "objects": [
@@ -78,6 +82,13 @@
           "tags": [],
           "default": true,
           "description": "enable internal tonemapping during sample accumulation"
+        },
+        {
+          "name": "premultiplyBackground",
+          "types": ["ANARI_BOOL"],
+          "tags": [],
+          "default": false,
+          "description": "pre-multiply alpha channel with background color"
         },
         {
           "name": "cullTriangleBackfaces",
@@ -141,7 +152,16 @@
           "default": 0.125,
           "minimum": 0.001,
           "maximum": 10.0,
-          "description": "sampling rate of volumes when ray marching"
+          "description": "sampling rate of volumes when ray marching primary visibility"
+        },
+        {
+          "name": "volumeSamplingRateShadows",
+          "types": ["ANARI_FLOAT32"],
+          "tags": [],
+          "default": 0.0125,
+          "minimum": 0.0001,
+          "maximum": 10.0,
+          "description": "sampling rate of volumes when ray marching shadows"
         }
       ]
     },
@@ -170,6 +190,13 @@
           "tags": [],
           "default": true,
           "description": "enable internal tonemapping during sample accumulation"
+        },
+        {
+          "name": "premultiplyBackground",
+          "types": ["ANARI_BOOL"],
+          "tags": [],
+          "default": false,
+          "description": "pre-multiply alpha channel with background color"
         },
         {
           "name": "cullTriangleBackfaces",
@@ -289,6 +316,13 @@
           "description": "enable internal tonemapping during sample accumulation"
         },
         {
+          "name": "premultiplyBackground",
+          "types": ["ANARI_BOOL"],
+          "tags": [],
+          "default": false,
+          "description": "pre-multiply alpha channel with background color"
+        },
+        {
           "name": "volumeSamplingRate",
           "types": ["ANARI_FLOAT32"],
           "tags": [],
@@ -315,6 +349,7 @@
             "primIndex",
             "objIndex",
             "instIndex",
+            "materialId",
             "Ng",
             "Ng.abs",
             "Ns",

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -91,12 +91,25 @@ void Frame::commitParameters()
   m_instIDType = getParam<ANARIDataType>("channel.instanceId", ANARI_UNKNOWN);
   m_albedoType = getParam<ANARIDataType>("channel.albedo", ANARI_UNKNOWN);
   m_normalType = getParam<ANARIDataType>("channel.normal", ANARI_UNKNOWN);
+  m_manualAccumulationRestart = getParam("accumulationVersion",
+                                    ANARI_UINT64,
+                                    &m_applicationAccumulationVersion);
 }
 
 void Frame::finalize()
 {
   if (!isValid())
     return;
+
+  if (!m_manualAccumulationRestart || m_applicationAccumulationVersion == 0) {
+    m_applicationAccumulationVersion = 0;
+    m_lastRenderedAccumulationVersion = 0;
+    m_manualAccumulationRestart = false;
+  } else {
+    reportMessage(ANARI_SEVERITY_DEBUG,
+        "Frame using manual accumulation restart with version %zu",
+        m_applicationAccumulationVersion);
+  }
 
   auto &hd = data();
 
@@ -113,8 +126,8 @@ void Frame::finalize()
   const bool channelPrimID = m_primIDType == ANARI_UINT32;
   const bool channelObjID = m_objIDType == ANARI_UINT32;
   const bool channelInstID = m_instIDType == ANARI_UINT32;
-  const bool channelAlbedo = m_albedoType == ANARI_FLOAT32;
-  const bool channelNormal = m_normalType == ANARI_FLOAT32;
+  const bool channelAlbedo = m_albedoType == ANARI_FLOAT32_VEC3;
+  const bool channelNormal = m_normalType == ANARI_FLOAT32_VEC3;
 
   const bool channelDepth = m_depthType == ANARI_FLOAT32 || channelPrimID
       || channelObjID || channelInstID;
@@ -323,8 +336,8 @@ void *Frame::map(std::string_view channel,
   const bool channelPrimID = m_primIDType == ANARI_UINT32;
   const bool channelObjID = m_objIDType == ANARI_UINT32;
   const bool channelInstID = m_instIDType == ANARI_UINT32;
-  const bool channelAlbedo = m_albedoType == ANARI_FLOAT32;
-  const bool channelNormal = m_normalType == ANARI_FLOAT32;
+  const bool channelAlbedo = m_albedoType == ANARI_FLOAT32_VEC3;
+  const bool channelNormal = m_normalType == ANARI_FLOAT32_VEC3;
 
   if (channel == "channel.colorCUDA") {
     type = m_colorType;
@@ -577,13 +590,20 @@ void Frame::checkAccumulationReset()
     return;
 
   auto &state = *deviceState();
-  if (m_lastCommitFlushOccured < state.commitBuffer.lastObjectFinalization()) {
-    m_lastCommitFlushOccured = state.commitBuffer.lastObjectFinalization();
+  if (m_manualAccumulationRestart
+      && m_lastRenderedAccumulationVersion < m_applicationAccumulationVersion) {
+    m_lastRenderedAccumulationVersion = m_applicationAccumulationVersion;
     m_nextFrameReset = true;
-  }
-  if (m_lastUploadFlushOccured < state.uploadBuffer.lastUpload()) {
-    m_lastUploadFlushOccured = state.uploadBuffer.lastUpload();
-    m_nextFrameReset = true;
+  } else if (!m_manualAccumulationRestart) { // automatic accumulation restart
+    if (m_lastCommitFlushOccured
+        < state.commitBuffer.lastObjectFinalization()) {
+      m_lastCommitFlushOccured = state.commitBuffer.lastObjectFinalization();
+      m_nextFrameReset = true;
+    }
+    if (m_lastUploadFlushOccured < state.uploadBuffer.lastUpload()) {
+      m_lastUploadFlushOccured = state.uploadBuffer.lastUpload();
+      m_nextFrameReset = true;
+    }
   }
 }
 
@@ -599,8 +619,8 @@ void Frame::newFrame()
     const bool channelPrimID = m_primIDType == ANARI_UINT32;
     const bool channelObjID = m_objIDType == ANARI_UINT32;
     const bool channelInstID = m_instIDType == ANARI_UINT32;
-    const bool channelAlbedo = m_albedoType == ANARI_FLOAT32;
-    const bool channelNormal = m_normalType == ANARI_FLOAT32;
+    const bool channelAlbedo = m_albedoType == ANARI_FLOAT32_VEC3;
+    const bool channelNormal = m_normalType == ANARI_FLOAT32_VEC3;
 
     const bool channelDepth = m_depthType == ANARI_FLOAT32 || channelPrimID
         || channelObjID || channelInstID;

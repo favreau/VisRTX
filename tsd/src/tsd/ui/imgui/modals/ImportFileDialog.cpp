@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ImportFileDialog.h"
@@ -36,14 +36,18 @@ void ImportFileDialog::buildUI()
       "OBJ",
       "PDB",
       "PLY",
+      "POINTSBIN_MULTIFILE",
       "PT (neural)",
+      "SILO",
       "SMESH",
       "SMESH_ANIMATION",
       "SWC",
       "TRK",
       "USD",
+      "USD2",
       "XYZDP",
       "VOLUME",
+      "TSD",
   };
 
   ImGui::Combo(
@@ -92,8 +96,8 @@ void ImportFileDialog::buildUI()
       auto *core = appCore();
       auto &scene = core->tsd.scene;
       auto *layer = core->tsd.scene.defaultLayer();
-      auto importRoot = core->tsd.selectedNode;
-      if (!importRoot)
+      auto importRoot = core->getFirstSelected();
+      if (!importRoot.valid())
         importRoot = layer->root();
       app::ImportFile file{
           static_cast<app::ImporterType>(m_selectedFileType), m_filename};

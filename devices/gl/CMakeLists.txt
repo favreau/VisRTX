@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -123,6 +123,7 @@ PUBLIC
 target_link_libraries(${PROJECT_NAME} PUBLIC
   anari::anari_headers
   anari::anari_backend
+  anari::anari ## required because the device uses the C API internally
   Threads::Threads
 )
 

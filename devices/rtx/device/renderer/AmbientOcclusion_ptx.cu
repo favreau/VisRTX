@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -198,8 +198,10 @@ VISRTX_GLOBAL void __raygen__()
         color *= opacity;
 
         const auto bg = getBackground(frameData, ss.screen, ray.dir);
-        accumulateValue(color, vec3(bg) * bg.a, opacity);
-        accumulateValue(opacity, bg.w, opacity);
+        const bool premultiplyBg = rendererParams.premultiplyBackground;
+        accumulateValue(
+            color, premultiplyBg ? vec3(bg) * bg.a : vec3(bg), opacity);
+        accumulateValue(opacity, bg.a, opacity);
         accumulateValue(outputColor, color, outputOpacity);
         accumulateValue(outputOpacity, opacity, outputOpacity);
         break;

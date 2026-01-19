@@ -1,12 +1,16 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "LayerTree.h"
+
+// tsd_core
+#include "tsd/core/scene/objects/Volume.hpp"
 // tsd_io
 #include "tsd/io/procedural.hpp"
 // tsd_app
 #include "tsd/app/Core.h"
 // tsd_ui_imgui
+#include "tsd/ui/imgui/modals/ExportNanoVDBFileDialog.h"
 #include "tsd/ui/imgui/modals/ImportFileDialog.h"
 #include "tsd/ui/imgui/tsd_ui_imgui.h"
 
@@ -35,6 +39,7 @@ void LayerTree::buildUI()
   buildUI_layerHeader();
   ImGui::Separator();
   buildUI_tree();
+  buildUI_handleSelection();
   buildUI_activateObjectSceneMenu();
   buildUI_objectSceneMenu();
   buildUI_newLayerSceneMenu();
@@ -102,6 +107,48 @@ void LayerTree::buildUI_layerHeader()
   ImGui::EndDisabled();
 }
 
+std::vector<tsd::core::LayerNodeRef> LayerTree::computeSelectionRange(
+    tsd::core::Layer &layer,
+    const tsd::core::LayerNodeRef &anchor,
+    const tsd::core::LayerNodeRef &target)
+{
+  std::vector<tsd::core::LayerNodeRef> range;
+
+  if (!anchor.valid() || !target.valid()) {
+    return range;
+  }
+
+  bool foundFirst = false;
+  bool foundSecond = false;
+
+  layer.traverse(layer.root(), [&](auto &node, int level) {
+    auto nodeRef = layer.at(node.index());
+
+    // Check if this is either the anchor or target
+    if (nodeRef == anchor || nodeRef == target) {
+      if (!foundFirst) {
+        foundFirst = true;
+        range.push_back(nodeRef);
+      } else {
+        foundSecond = true;
+        range.push_back(nodeRef);
+        return false;
+      }
+    } else if (foundFirst && !foundSecond) {
+      // We're between the two boundaries
+      range.push_back(nodeRef);
+    }
+
+    return true;
+  });
+
+  if (!foundFirst || !foundSecond) {
+    return std::vector<tsd::core::LayerNodeRef>();
+  }
+
+  return range;
+}
+
 void LayerTree::buildUI_tree()
 {
   auto &scene = appCore()->tsd.scene;
@@ -125,6 +172,10 @@ void LayerTree::buildUI_tree()
     // to track if children are also disabled:
     const void *firstDisabledNode = nullptr;
 
+    // Track dropped nodes to defer processing until after tree is built
+    tsd::core::LayerNodeRef dragAndDropTarget = {};
+    std::vector<tsd::core::LayerNodeRef> droppedNodes;
+
     m_needToTreePop.clear();
     m_needToTreePop.resize(layer.capacity(), false);
     auto onNodeEntryBuildUI = [&](auto &node, int level) {
@@ -147,12 +198,32 @@ void LayerTree::buildUI_tree()
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.3f, 0.3f, 1.f));
       }
 
-      const bool selected = (obj && appCore()->tsd.selectedObject == obj)
-          || (appCore()->tsd.selectedNode
-              && node == *appCore()->tsd.selectedNode);
-      if (selected) {
+      auto selectedNodeRef = appCore()->getFirstSelected();
+      auto currentNodeRef = layer.at(node.index());
+
+      // Check if this node is in the selection set
+      const bool isSelectedNode = appCore()->isSelected(currentNodeRef);
+
+      // Check if any selected node's object matches this node's object
+      bool sameObject = false;
+      if (obj) {
+        const auto &selectedNodes = appCore()->getSelectedNodes();
+        for (const auto &selected : selectedNodes) {
+          if (selected.valid() && (*selected)->getObject() == obj) {
+            sameObject = true;
+            break;
+          }
+        }
+      }
+
+      const bool strongHighlight = isSelectedNode;
+      const bool lightHighlight = !isSelectedNode && sameObject;
+
+      if (strongHighlight) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.f, 1.f));
         node_flags |= ImGuiTreeNodeFlags_Selected;
+      } else if (lightHighlight) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.f, 0.75f));
       }
 
       const char *nameText = "<unhandled UI node type>";
@@ -218,10 +289,123 @@ void LayerTree::buildUI_tree()
           ImGui::SetTooltip("transform: ANARI_FLOAT32_MAT4");
       }
 
-      if (ImGui::IsItemClicked() && m_menuNode == TSD_INVALID_INDEX)
-        appCore()->setSelectedNode(node);
+      if (ImGui::IsItemClicked() && m_menuNode == TSD_INVALID_INDEX) {
+        auto clickedNode = layer.at(node.index());
 
-      if (selected)
+        ImGuiIO &io = ImGui::GetIO();
+        bool ctrlPressed = io.KeyCtrl;
+        bool shiftPressed = io.KeyShift;
+        bool isAlreadySelected = appCore()->isSelected(clickedNode);
+
+        if (ctrlPressed) {
+          // Toggle selection
+          if (appCore()->isSelected(clickedNode)) {
+            appCore()->removeFromSelection(clickedNode);
+          } else {
+            appCore()->addToSelection(clickedNode);
+          }
+          m_anchorNode = clickedNode;
+        } else if (shiftPressed) {
+          // Range selection
+          if (m_anchorNode.valid()) {
+            auto rangeNodes =
+                computeSelectionRange(layer, m_anchorNode, clickedNode);
+            if (!rangeNodes.empty()) {
+              appCore()->setSelected(rangeNodes);
+            }
+          } else {
+            appCore()->addToSelection(clickedNode);
+            m_anchorNode = clickedNode;
+          }
+        } else if (!isAlreadySelected) {
+          // Normal click on unselected item: replace selection immediately
+          appCore()->setSelected(clickedNode);
+          // Update anchor to the clicked node
+          m_anchorNode = clickedNode;
+        }
+        // If clicking on already selected item without modifiers, defer
+        // selection change to allow drag and drop. Selection will be updated on
+        // mouse release if no drag occurred.
+      }
+
+      // Drag and drop source
+      if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+        // Get parent-only nodes from the selection
+        auto draggedNodes = appCore()->getParentOnlySelectedNodes();
+
+        // ImGui owns the payload memory
+        ImGui::SetDragDropPayload("LAYER_TREE_NODE",
+            data(draggedNodes),
+            sizeof(tsd::core::LayerNodeRef) * size(draggedNodes));
+
+        // Display drag tooltip - Ctrl key switches between move and copy
+        ImGuiIO &io = ImGui::GetIO();
+        const char *operation = io.KeyCtrl ? "copy:" : "move:";
+        if (size(draggedNodes) == 1) {
+          auto name = (*draggedNodes[0])->name();
+          if (name.empty() && (*draggedNodes[0])->isObject()) {
+            auto obj = (*draggedNodes[0])->getObject();
+            if (obj)
+              name = obj->name();
+          }
+          ImGui::Text("%s %s", operation, name.c_str());
+        } else {
+          ImGui::Text("%s %zu nodes", operation, size(draggedNodes));
+        }
+
+        ImGui::EndDragDropSource();
+      } else {
+        // Handle deferred selection: if mouse is released on a selected item
+        // without dragging
+        if (ImGui::IsItemHovered()
+            && ImGui::IsMouseReleased(ImGuiMouseButton_Left)
+            && m_menuNode == TSD_INVALID_INDEX) {
+          auto clickedNode = layer.at(node.index());
+          ImGuiIO &io = ImGui::GetIO();
+          bool isAlreadySelected = appCore()->isSelected(clickedNode);
+
+          // Only update selection if clicking on already-selected item without
+          // modifiers
+          if (isAlreadySelected && !io.KeyCtrl && !io.KeyShift) {
+            appCore()->setSelected(clickedNode);
+            m_anchorNode = clickedNode;
+          }
+        }
+      }
+
+      // Drag and drop target
+      if (ImGui::BeginDragDropTarget()) {
+        // Peek at the payload to validate before accepting
+        if (const ImGuiPayload *payload = ImGui::GetDragDropPayload()) {
+          if (payload->IsDataType("LAYER_TREE_NODE")) {
+            auto potentialTarget = layer.at(node.index());
+            if (!potentialTarget.valid())
+              potentialTarget = layer.root();
+
+            auto *nodes = (tsd::core::LayerNodeRef *)payload->Data;
+            size_t count = payload->DataSize / sizeof(tsd::core::LayerNodeRef);
+
+            if (isValidDropTarget(layer, potentialTarget, nodes, count)) {
+              // Accept the drop
+              if (ImGui::AcceptDragDropPayload("LAYER_TREE_NODE")) {
+                dragAndDropTarget = potentialTarget;
+                droppedNodes.assign(nodes, nodes + count);
+                // Actual drop handling is deferred until after tree traversal
+              }
+            } else {
+              // Show visual feedback for invalid drop
+              if (ImGui::AcceptDragDropPayload(
+                      "LAYER_TREE_NODE", ImGuiDragDropFlags_AcceptPeekOnly)) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_NotAllowed);
+              }
+            }
+          }
+        }
+
+        ImGui::EndDragDropTarget();
+      }
+
+      if (strongHighlight || lightHighlight)
         ImGui::PopStyleColor(1);
 
       return open;
@@ -239,21 +423,155 @@ void LayerTree::buildUI_tree()
     };
 
     layer.traverse(layer.root(), onNodeEntryBuildUI, onNodeExitTreePop);
-
     ImGui::EndTable();
+
+    // Drag and drop target on the panel itself. Will drop under the root node.
+    if (ImGui::BeginDragDropTarget()) {
+      if (const ImGuiPayload *payload =
+              ImGui::AcceptDragDropPayload("LAYER_TREE_NODE")) {
+        dragAndDropTarget = layer.root();
+
+        auto *nodes = (tsd::core::LayerNodeRef *)payload->Data;
+        size_t count = payload->DataSize / sizeof(tsd::core::LayerNodeRef);
+        droppedNodes.assign(nodes, nodes + count);
+
+        // Actual drop handling is deferred until after tree traversal
+      }
+      ImGui::EndDragDropTarget();
+    }
+
+    // Deferred handling of the drop event
+    if (dragAndDropTarget.valid() && !droppedNodes.empty()) {
+      ImGuiIO &io = ImGui::GetIO();
+      copyNodesTo(dragAndDropTarget, droppedNodes, !io.KeyCtrl);
+
+      appCore()->tsd.scene.signalLayerChange(&layer);
+    }
   }
 }
 
 void LayerTree::buildUI_activateObjectSceneMenu()
 {
   if (!m_activeLayerMenuTriggered && ImGui::IsWindowHovered()) {
+    ImGuiIO &io = ImGui::GetIO();
+
+    // Check for Escape key to clear selection
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+      appCore()->clearSelected();
+    }
+
+    // Check for Delete key to delete selected nodes
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
+      auto &scene = appCore()->tsd.scene;
+      auto parentOnlyNodes = appCore()->getParentOnlySelectedNodes();
+
+      if (!parentOnlyNodes.empty()) {
+        for (const auto &node : parentOnlyNodes) {
+          if (node.valid()) {
+            scene.removeInstancedObject(node);
+          }
+        }
+        appCore()->clearSelected();
+      }
+    }
+
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
       m_menuVisible = true;
       m_menuNode = m_hoveredNode;
       ImGui::OpenPopup("LayerTree_contextMenu_object");
     } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)
         && m_hoveredNode == TSD_INVALID_INDEX) {
-      appCore()->clearSelected();
+      ImGuiIO &io = ImGui::GetIO();
+      // Only clear selection on left click if no modifiers are pressed
+      if (!io.KeyCtrl && !io.KeyShift) {
+        appCore()->clearSelected();
+      }
+    }
+  }
+}
+
+void LayerTree::buildUI_handleSelection()
+{
+  ImGuiIO &io = ImGui::GetIO();
+
+  // Check for Ctrl+X to cut selected nodes
+  if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_X, false)) {
+    auto parentOnlyNodes = appCore()->getParentOnlySelectedNodes();
+    if (!parentOnlyNodes.empty()) {
+      appCore()->tsd.stashedSelection.nodes = parentOnlyNodes;
+      appCore()->tsd.stashedSelection.shouldDeleteAfterPaste = true;
+    }
+  }
+
+  // Check for Ctrl+C to copy selected nodes
+  if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false)) {
+    auto parentOnlyNodes = appCore()->getParentOnlySelectedNodes();
+    if (!parentOnlyNodes.empty()) {
+      appCore()->tsd.stashedSelection.nodes = parentOnlyNodes;
+      appCore()->tsd.stashedSelection.shouldDeleteAfterPaste = false;
+    }
+  }
+
+  // Check for Ctrl+V to paste stashed nodes
+  if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) {
+    auto &scene = appCore()->tsd.scene;
+    auto &stashed = appCore()->tsd.stashedSelection;
+    auto selectedNodes = appCore()->getSelectedNodes();
+
+    if (!stashed.nodes.empty() && scene.numberOfLayers() > 0
+        && selectedNodes.size() <= 1) {
+      auto &layer = *scene.layer(m_layerIdx);
+
+      // Get target parent (use first selected node, or root if nothing
+      // selected)
+      auto targetParent = layer.root();
+      if (!selectedNodes.empty() && selectedNodes[0].valid()) {
+        targetParent = selectedNodes[0];
+      }
+
+      // Validate the paste operation
+      if (isValidDropTarget(layer,
+              targetParent,
+              stashed.nodes.data(),
+              stashed.nodes.size())) {
+        auto newNodes = copyNodesTo(
+            targetParent, stashed.nodes, stashed.shouldDeleteAfterPaste);
+
+        // If cut operation, delete originals after successful copy
+        if (stashed.shouldDeleteAfterPaste) {
+          stashed.nodes.clear();
+          stashed.shouldDeleteAfterPaste = false;
+        }
+
+        // Select the newly pasted nodes
+        if (!newNodes.empty()) {
+          appCore()->setSelected(newNodes);
+        }
+
+        scene.signalLayerChange(&layer);
+      }
+    }
+  }
+
+  // Check for Ctrl+A to select all nodes in the current layer
+  if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) {
+    auto &scene = appCore()->tsd.scene;
+    if (scene.numberOfLayers() > 0) {
+      auto &layer = *scene.layer(m_layerIdx);
+      std::vector<tsd::core::LayerNodeRef> allNodes;
+
+      // Traverse the layer and collect all nodes (except root)
+      layer.traverse(layer.root(), [&](auto &node, int level) {
+        if (level > 0) { // Skip root node (level 0)
+          allNodes.push_back(layer.at(node.index()));
+        }
+        return true;
+      });
+
+      // Select all collected nodes
+      if (!allNodes.empty()) {
+        appCore()->setSelected(allNodes);
+      }
     }
   }
 }
@@ -439,6 +757,11 @@ void LayerTree::buildUI_objectSceneMenu()
           clearSelectedNode = true;
         }
 
+        if (ImGui::MenuItem("sphere set volume")) {
+          tsd::io::generate_sphereSetVolume(scene, menuNode);
+          clearSelectedNode = true;
+        }
+
         ImGui::EndMenu();
       }
 
@@ -446,10 +769,35 @@ void LayerTree::buildUI_objectSceneMenu()
     }
 
     if (nodeSelected) {
+      if ((*menuNode)->isObject()
+          && (*menuNode)->getObject()->subtype()
+              == core::tokens::volume::transferFunction1D) {
+        auto tf1D = (*menuNode)->getObject();
+        auto spatialFieldObject = tf1D->parameterValueAsObject("value");
+        if (spatialFieldObject
+            && spatialFieldObject->subtype()
+                == core::tokens::volume::structuredRegular) {
+          ImGui::Separator();
+          if (ImGui::MenuItem("export to NanoVDB")) {
+            appCore()->windows.exportNanoVDBDialog->show();
+          }
+        }
+      }
       ImGui::Separator();
 
       if (ImGui::MenuItem("delete selected")) {
-        if (m_menuNode != TSD_INVALID_INDEX) {
+        auto parentOnlyNodes = appCore()->getParentOnlySelectedNodes();
+
+        if (!parentOnlyNodes.empty()) {
+          for (const auto &node : parentOnlyNodes) {
+            if (node.valid()) {
+              scene.removeInstancedObject(node);
+            }
+          }
+          m_menuNode = TSD_INVALID_INDEX;
+          appCore()->clearSelected();
+        } else if (m_menuNode != TSD_INVALID_INDEX) {
+          // Fallback: delete the menu node if nothing is selected
           scene.removeInstancedObject(layer.at(m_menuNode));
           m_menuNode = TSD_INVALID_INDEX;
           appCore()->clearSelected();
@@ -535,6 +883,65 @@ void LayerTree::buildUI_setActiveLayersSceneMenus()
   } else {
     m_activeLayerMenuTriggered = false;
   }
+}
+
+std::vector<tsd::core::LayerNodeRef> LayerTree::copyNodesTo(
+    tsd::core::LayerNodeRef targetParent,
+    const std::vector<tsd::core::LayerNodeRef> &sourceNodes,
+    bool cutOperation)
+{
+  // Validate source nodes filter stashed nodes
+  std::vector<tsd::core::LayerNodeRef> validNodes;
+  for (const auto &node : sourceNodes) {
+    if (node.valid()) {
+      validNodes.push_back(node);
+    }
+  }
+
+  if (validNodes.empty())
+    return {};
+
+  auto layer = targetParent->container();
+  auto &scene = appCore()->tsd.scene;
+
+  // Copy all valid stashed nodes to target parent
+  std::vector<tsd::core::LayerNodeRef> newNodes;
+  for (const auto &node : validNodes) {
+    auto newNode = layer->copy_subtree(node, targetParent);
+    if (newNode.valid()) {
+      newNodes.push_back(newNode);
+    }
+  }
+
+  if (cutOperation) {
+    for (const auto &node : validNodes) {
+      if (node.valid()) {
+        scene.removeInstancedObject(node);
+      }
+    }
+  }
+
+  return newNodes;
+}
+
+bool LayerTree::isValidDropTarget(tsd::core::Layer &layer,
+    tsd::core::LayerNodeRef targetParent,
+    const tsd::core::LayerNodeRef *sourceNodes,
+    size_t count) const
+{
+  if (!targetParent.valid())
+    return false;
+
+  // Check if targetParent is a descendant of any source node
+  for (size_t i = 0; i < count; i++) {
+    if (!sourceNodes[i].valid())
+      continue;
+
+    if (layer.isAncestorOf(sourceNodes[i], targetParent))
+      return false;
+  }
+
+  return true;
 }
 
 } // namespace tsd::ui::imgui

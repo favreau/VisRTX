@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -17,7 +17,7 @@ void buildUI_object(tsd::core::Object &o,
     tsd::core::Scene &scene,
     bool useTableForParameters = false,
     int level = 0);
-void buildUI_parameter(tsd::core::Object &o,
+bool buildUI_parameter(tsd::core::Object &o,
     tsd::core::Parameter &p,
     tsd::core::Scene &scene,
     bool asTable = false);

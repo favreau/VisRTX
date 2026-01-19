@@ -1,11 +1,11 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "tsd/core/DataTree.hpp"
 #include "tsd/core/FlatMap.hpp"
-#include "tsd/core/IndexedVector.hpp"
+#include "tsd/core/ObjectPool.hpp"
 #include "tsd/core/Parameter.hpp"
 #include "tsd/core/TSDMath.hpp"
 #include "tsd/core/Token.hpp"
@@ -18,7 +18,6 @@
 
 namespace tsd::core {
 
-using namespace literals;
 struct Scene;
 struct AnariObjectCache;
 
@@ -72,6 +71,7 @@ struct Object : public ParameterObserver
   //// Metadata ////
 
   const std::string &name() const;
+  std::string &editableName();
   void setName(const char *n);
 
   Any getMetadataValue(const std::string &name) const;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,6 +30,7 @@
  */
 
 #include "Renderer.h"
+// helium
 #include <helium/utility/TimeStamp.h>
 
 // specific renderers
@@ -161,11 +162,12 @@ void Renderer::commitParameters()
   m_occlusionDistance = getParam<float>("ambientOcclusionDistance", 1e20f);
   m_checkerboard = getParam<bool>("checkerboarding", false);
   m_denoise = getParam<bool>("denoise", false);
-  m_tonemap = getParam<bool>("tonemap", true); // enable internal tonemapping during sample accumulation
+  m_tonemap = getParam<bool>("tonemap", true);
   m_sampleLimit = getParam<int>("sampleLimit", 128);
   m_cullTriangleBF = getParam<bool>("cullTriangleBackfaces", false);
   m_volumeSamplingRate =
       std::clamp(getParam<float>("volumeSamplingRate", 0.125f), 1e-3f, 10.f);
+  m_premultiplyBackground = getParam<bool>("premultiplyBackground", false);
   if (m_checkerboard)
     m_spp = 1;
 }
@@ -206,6 +208,7 @@ void Renderer::populateFrameData(FrameGPUData &fd) const
   fd.renderer.inverseVolumeSamplingRate = 1.f / m_volumeSamplingRate;
   fd.renderer.numIterations = std::max(m_spp, 1);
   fd.renderer.maxRayDepth = m_maxRayDepth;
+  fd.renderer.premultiplyBackground = m_premultiplyBackground;
 }
 
 OptixPipeline Renderer::pipeline()
@@ -213,9 +216,10 @@ OptixPipeline Renderer::pipeline()
 #ifndef USE_MDL
   if (!m_pipeline)
 #else
-  if (!m_pipeline ||
-      (deviceState()->mdl && (deviceState()->mdl->materialRegistry.getLastUpdateTime()
-          > m_lastMDLMaterialLibraryUpdateCheck)))
+  if (!m_pipeline
+      || (deviceState()->mdl
+          && (deviceState()->mdl->materialRegistry.getLastUpdateTime()
+              > m_lastMDLMaterialLibraryUpdateCheck)))
 #endif
     initOptixPipeline();
 
@@ -227,9 +231,10 @@ const OptixShaderBindingTable *Renderer::sbt()
 #ifndef USE_MDL
   if (!m_pipeline)
 #else
-  if (!m_pipeline ||
-      (deviceState()->mdl && (deviceState()->mdl->materialRegistry.getLastUpdateTime()
-          > m_lastMDLMaterialLibraryUpdateCheck)))
+  if (!m_pipeline
+      || (deviceState()->mdl
+          && (deviceState()->mdl->materialRegistry.getLastUpdateTime()
+              > m_lastMDLMaterialLibraryUpdateCheck)))
 #endif
 
     initOptixPipeline();
@@ -431,134 +436,242 @@ void Renderer::initOptixPipeline()
     }
   }
 
-  // Materials
+  // Callables
   {
+    // Reserve space for fixed shaders + samplers before MDL
+    constexpr auto FIXED_CALLABLES_COUNT = int(SbtCallableEntryPoints::Last);
+    std::vector<OptixProgramGroupDesc> callableDescs(FIXED_CALLABLES_COUNT);
+
+    // Fixed material shaders: Matte, PhysicallyBased
+    constexpr auto SBT_CALLABLE_MATTE_OFFSET =
+        int(SbtCallableEntryPoints::Matte);
+    constexpr auto SBT_CALLABLE_PHYSICALLYBASED_OFFSET =
+        int(SbtCallableEntryPoints::PBR);
+
+    OptixProgramGroupDesc callableDesc = {};
+    callableDesc.kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
+    callableDesc.callables.moduleDC = deviceState()->materialShaders.matte;
+
     // Matte
-    constexpr auto SBT_CALLABLE_MATTE_OFFSET = 0;
-    constexpr auto SBT_CALLABLE_PHYSICALLYBASED_OFFSET = int(SurfaceShaderEntryPoints::Count);
-    std::vector<OptixProgramGroupDesc> callableDescs(
-        2 * int(SurfaceShaderEntryPoints::Count));
+    callableDesc.callables.entryFunctionNameDC = "__direct_callable__init";
     callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::Initialize)]
-        .kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
-    callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::Initialize)]
-        .callables.moduleDC = deviceState()->materialShaders.matte;
-    callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::Initialize)]
-        .callables.entryFunctionNameDC = "__direct_callable__init";
+        + int(SurfaceShaderEntryPoints::Initialize)] = callableDesc;
 
+    callableDesc.callables.entryFunctionNameDC = "__direct_callable__nextRay";
     callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateNextRay)]
-        .kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
-    callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateNextRay)]
-        .callables.moduleDC = deviceState()->materialShaders.matte;
-    callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateNextRay)]
-        .callables.entryFunctionNameDC = "__direct_callable__nextRay";
+        + int(SurfaceShaderEntryPoints::EvaluateNextRay)] = callableDesc;
 
+    callableDesc.callables.entryFunctionNameDC =
+        "__direct_callable__evaluateTint";
     callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateTint)]
-        .kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
-    callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateTint)]
-        .callables.moduleDC = deviceState()->materialShaders.matte;
-    callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateTint)]
-        .callables.entryFunctionNameDC = "__direct_callable__evaluateTint";
+        + int(SurfaceShaderEntryPoints::EvaluateTint)] = callableDesc;
 
+    callableDesc.callables.entryFunctionNameDC =
+        "__direct_callable__evaluateOpacity";
     callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateOpacity)]
-        .kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
-    callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateOpacity)]
-        .callables.moduleDC = deviceState()->materialShaders.matte;
-    callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateOpacity)]
-        .callables.entryFunctionNameDC = "__direct_callable__evaluateOpacity";
-    
-    callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateEmission)]
-        .kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
-    callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateEmission)]
-        .callables.moduleDC = deviceState()->materialShaders.matte;
-    callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateEmission)]
-        .callables.entryFunctionNameDC = "__direct_callable__evaluateEmission";
+        + int(SurfaceShaderEntryPoints::EvaluateOpacity)] = callableDesc;
 
+    callableDesc.callables.entryFunctionNameDC =
+        "__direct_callable__evaluateEmission";
     callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::Shade)]
-        .kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
+        + int(SurfaceShaderEntryPoints::EvaluateEmission)] = callableDesc;
+
+    callableDesc.callables.entryFunctionNameDC =
+        "__direct_callable__shadeSurface";
     callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::Shade)]
-        .callables.moduleDC = deviceState()->materialShaders.matte;
-    callableDescs[SBT_CALLABLE_MATTE_OFFSET
-        + int(SurfaceShaderEntryPoints::Shade)]
-        .callables.entryFunctionNameDC = "__direct_callable__shadeSurface";
+        + int(SurfaceShaderEntryPoints::Shade)] = callableDesc;
 
-    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::Initialize)]
-        .kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
-    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::Initialize)]
-        .callables.moduleDC = deviceState()->materialShaders.physicallyBased;
-    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::Initialize)]
-        .callables.entryFunctionNameDC = "__direct_callable__init";
+    // Physically Based
+    callableDesc.callables.moduleDC =
+        deviceState()->materialShaders.physicallyBased;
 
+    callableDesc.callables.entryFunctionNameDC = "__direct_callable__init";
     callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateNextRay)]
-        .kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
-    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateNextRay)]
-        .callables.moduleDC = deviceState()->materialShaders.physicallyBased;
-    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateNextRay)]
-        .callables.entryFunctionNameDC = "__direct_callable__nextRay";
+        + int(SurfaceShaderEntryPoints::Initialize)] = callableDesc;
 
+    callableDesc.callables.entryFunctionNameDC = "__direct_callable__nextRay";
     callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateTint)]
-        .kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
-    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateTint)]
-        .callables.moduleDC = deviceState()->materialShaders.physicallyBased;
-    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateTint)]
-        .callables.entryFunctionNameDC = "__direct_callable__evaluateTint";
+        + int(SurfaceShaderEntryPoints::EvaluateNextRay)] = callableDesc;
 
+    callableDesc.callables.entryFunctionNameDC =
+        "__direct_callable__evaluateTint";
     callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateOpacity)]
-        .kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
-    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateOpacity)]
-        .callables.moduleDC = deviceState()->materialShaders.physicallyBased;
-    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateOpacity)]
-        .callables.entryFunctionNameDC = "__direct_callable__evaluateOpacity";
+        + int(SurfaceShaderEntryPoints::EvaluateTint)] = callableDesc;
 
+    callableDesc.callables.entryFunctionNameDC =
+        "__direct_callable__evaluateOpacity";
     callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateEmission)]
-        .kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
-    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateEmission)]
-        .callables.moduleDC = deviceState()->materialShaders.physicallyBased;
-    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::EvaluateEmission)]
-        .callables.entryFunctionNameDC = "__direct_callable__evaluateEmission";
+        + int(SurfaceShaderEntryPoints::EvaluateOpacity)] = callableDesc;
 
+    callableDesc.callables.entryFunctionNameDC =
+        "__direct_callable__evaluateEmission";
     callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::Shade)]
-        .kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
-    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::Shade)]
-        .callables.moduleDC = deviceState()->materialShaders.physicallyBased;
-    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
-        + int(SurfaceShaderEntryPoints::Shade)]
-        .callables.entryFunctionNameDC = "__direct_callable__shadeSurface";
+        + int(SurfaceShaderEntryPoints::EvaluateEmission)] = callableDesc;
 
-    // MDLs
+    callableDesc.callables.entryFunctionNameDC =
+        "__direct_callable__shadeSurface";
+    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
+        + int(SurfaceShaderEntryPoints::Shade)] = callableDesc;
+
+    // Spatial Field Samplers
+    OptixProgramGroupDesc samplerDesc = {};
+    samplerDesc.kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
+
+    // Structured Regular sampler
+    constexpr auto SBT_CALLABLE_SPATIAL_FIELD_REGULAR_OFFSET =
+        int(SbtCallableEntryPoints::SpatialFieldSamplerRegular);
+    samplerDesc.callables.moduleDC = state.fieldSamplers.structuredRegular;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__initStructuredRegularSampler";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_REGULAR_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Init)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleStructuredRegular";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_REGULAR_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+
+    // NanoVDB samplers
+    samplerDesc.callables.moduleDC = state.fieldSamplers.nvdb;
+
+    constexpr auto SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP4_OFFSET =
+        int(SbtCallableEntryPoints::SpatialFieldSamplerNvdbFp4);
+    constexpr auto SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP8_OFFSET =
+        int(SbtCallableEntryPoints::SpatialFieldSamplerNvdbFp8);
+    constexpr auto SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP16_OFFSET =
+        int(SbtCallableEntryPoints::SpatialFieldSamplerNvdbFp16);
+    constexpr auto SBT_CALLABLE_SPATIAL_FIELD_NVDB_FPN_OFFSET =
+        int(SbtCallableEntryPoints::SpatialFieldSamplerNvdbFpN);
+    constexpr auto SBT_CALLABLE_SPATIAL_FIELD_NVDB_FLOAT_OFFSET =
+        int(SbtCallableEntryPoints::SpatialFieldSamplerNvdbFloat);
+
+    // Fp4
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__initNvdbSamplerFp4";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP4_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Init)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleNvdbFp4";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP4_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+
+    // Fp8
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__initNvdbSamplerFp8";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP8_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Init)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleNvdbFp8";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP8_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+
+    // Fp16
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__initNvdbSamplerFp16";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP16_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Init)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleNvdbFp16";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP16_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+
+    // FpN
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__initNvdbSamplerFpN";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FPN_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Init)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleNvdbFpN";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FPN_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+
+    // Float
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__initNvdbSamplerFloat";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FLOAT_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Init)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleNvdbFloat";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FLOAT_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+
+    // StructuredRectilinear sampler
+    samplerDesc.callables.moduleDC = state.fieldSamplers.structuredRectilinear;
+    constexpr auto SBT_CALLABLE_SPATIAL_FIELD_RECTILINEAR_OFFSET =
+        int(SbtCallableEntryPoints::SpatialFieldSamplerRectilinear);
+
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__initStructuredRectilinearSampler";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_RECTILINEAR_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Init)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleStructuredRectilinear";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_RECTILINEAR_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+
+    // NanoVDB rectilinear samplers
+    samplerDesc.callables.moduleDC = state.fieldSamplers.nvdbRectilinear;
+
+    constexpr auto SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP4_OFFSET =
+        int(SbtCallableEntryPoints::SpatialFieldSamplerNvdbRectilinearFp4);
+    constexpr auto SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP8_OFFSET =
+        int(SbtCallableEntryPoints::SpatialFieldSamplerNvdbRectilinearFp8);
+    constexpr auto SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP16_OFFSET =
+        int(SbtCallableEntryPoints::SpatialFieldSamplerNvdbRectilinearFp16);
+    constexpr auto SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FPN_OFFSET =
+        int(SbtCallableEntryPoints::SpatialFieldSamplerNvdbRectilinearFpN);
+    constexpr auto SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FLOAT_OFFSET =
+        int(SbtCallableEntryPoints::SpatialFieldSamplerNvdbRectilinearFloat);
+
+    // Fp4
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__initNvdbRectilinearSamplerFp4";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP4_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Init)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleNvdbRectilinearFp4";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP4_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+
+    // Fp8
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__initNvdbRectilinearSamplerFp8";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP8_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Init)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleNvdbRectilinearFp8";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP8_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+
+    // Fp16
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__initNvdbRectilinearSamplerFp16";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP16_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Init)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleNvdbRectilinearFp16";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP16_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+
+    // FpN
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__initNvdbRectilinearSamplerFpN";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FPN_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Init)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleNvdbRectilinearFpN";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FPN_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+
+    // Float
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__initNvdbRectilinearSamplerFloat";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FLOAT_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Init)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleNvdbRectilinearFloat";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FLOAT_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+
 #ifdef USE_MDL
     if (state.mdl) {
       for (const auto &ptxBlob : state.mdl->materialRegistry.getPtxBlobs()) {
@@ -598,6 +711,7 @@ void Renderer::initOptixPipeline()
         OptixProgramGroupDesc callableDesc = {};
         callableDesc.kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
         callableDesc.callables.moduleDC = module;
+        auto mdlBaseOffset = callableDescs.size();
 
         callableDesc.callables.entryFunctionNameDC = "__direct_callable__init";
         callableDescs.push_back(callableDesc);
@@ -629,6 +743,7 @@ void Renderer::initOptixPipeline()
 #endif // defined(USE_MDL)
 
     //
+    // Create all program groups (fixed material shaders + samplers + MDL)
     m_materialPGs.resize(size(callableDescs));
     OptixProgramGroupOptions callableOptions = {};
     sizeof_log = sizeof(log);
@@ -640,9 +755,7 @@ void Renderer::initOptixPipeline()
         &sizeof_log,
         data(m_materialPGs)));
     if (sizeof_log > 1) {
-      reportMessage(
-
-          ANARI_SEVERITY_DEBUG, "PG Callables Log:\n%s", log);
+      reportMessage(ANARI_SEVERITY_DEBUG, "PG Callables Log:\n%s", log);
     }
   }
 
@@ -738,7 +851,6 @@ void Renderer::initOptixPipeline()
     for (auto &mpg : m_materialPGs) {
       MaterialRecord rec;
       OPTIX_CHECK(optixSbtRecordPackHeader(mpg, &rec));
-
       materialRecords.push_back(rec);
     }
 

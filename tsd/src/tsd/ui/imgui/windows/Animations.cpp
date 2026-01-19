@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "Animations.h"
@@ -24,8 +24,16 @@ void Animations::buildUI()
     scene.incrementAnimationTime();
 
   buildUI_animationControls();
-  for (size_t i = 0; i < scene.numberOfAnimations(); i++)
-    buildUI_editAnimation(scene.animation(i));
+
+  tsd::core::Animation *toDelete = nullptr;
+  for (size_t i = 0; i < scene.numberOfAnimations(); i++) {
+    auto *animation = scene.animation(i);
+    buildUI_editAnimation(animation);
+    if (ImGui::Button("delete"))
+      toDelete = animation;
+  }
+  if (toDelete != nullptr)
+    scene.removeAnimation(toDelete);
 }
 
 void Animations::buildUI_animationControls()

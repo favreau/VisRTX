@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/core/ColorMapUtil.hpp"
@@ -81,9 +81,9 @@ void import_DLAF(Scene &scene,
 
     auto geom = scene.createObject<Geometry>(tokens::geometry::sphere);
     geom->setName(geomName.c_str());
-    geom->setParameter("radius"_t, dlaf.radius);
-    geom->setParameterObject("vertex.position"_t, *vertexPositionArray);
-    geom->setParameterObject("primitive.attribute0"_t, *attributeArray);
+    geom->setParameter("radius", dlaf.radius);
+    geom->setParameterObject("vertex.position", *vertexPositionArray);
+    geom->setParameterObject("primitive.attribute0", *attributeArray);
 
     auto surface = scene.createSurface(geomName.c_str(), geom, mat);
 

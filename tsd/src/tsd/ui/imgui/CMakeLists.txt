@@ -1,4 +1,4 @@
-## Copyright 2024-2025 NVIDIA Corporation
+## Copyright 2024-2026 NVIDIA Corporation
 ## SPDX-License-Identifier: Apache-2.0
 
 project(tsd_ui_imgui)
@@ -10,6 +10,7 @@ project_add_library(OBJECT)
 project_sources(PRIVATE
   modals/AppSettingsDialog.cpp
   modals/BlockingTaskModal.cpp
+  modals/ExportNanoVDBFileDialog.cpp
   modals/OfflineRenderModal.cpp
   modals/ImportFileDialog.cpp
   modals/Modal.cpp
@@ -34,6 +35,7 @@ PUBLIC
   tsd_core
   tsd_io
   tsd_rendering
+  tsd_ext_imguizmo
   tsd_ext_tinyexr
   stb_image
 PRIVATE

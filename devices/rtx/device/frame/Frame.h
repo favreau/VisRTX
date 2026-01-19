@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -95,6 +95,10 @@ struct Frame : public helium::BaseFrame, public DeviceObject<FrameGPUData>
   bool m_denoise{false};
   bool m_nextFrameReset{true};
   bool m_frameMappedOnce{false}; // NOTE(jda) - for instrumented events
+
+  bool m_manualAccumulationRestart{false};
+  uint64_t m_lastRenderedAccumulationVersion{0};
+  uint64_t m_applicationAccumulationVersion{0};
 
   anari::DataType m_colorType{ANARI_UNKNOWN};
   anari::DataType m_depthType{ANARI_UNKNOWN};

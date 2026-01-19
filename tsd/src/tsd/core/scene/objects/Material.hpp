@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -16,12 +16,12 @@ struct Material : public Object
   Material(Token subtype = tokens::unknown);
   virtual ~Material() = default;
 
-  IndexedVectorRef<Material> self() const;
+  ObjectPoolRef<Material> self() const;
 
   anari::Object makeANARIObject(anari::Device d) const override;
 };
 
-using MaterialRef = IndexedVectorRef<Material>;
+using MaterialRef = ObjectPoolRef<Material>;
 
 namespace tokens::material {
 

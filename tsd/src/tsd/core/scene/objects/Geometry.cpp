@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/core/scene/objects/Geometry.hpp"
@@ -8,10 +8,10 @@ namespace tsd::core {
 
 Geometry::Geometry(Token stype) : Object(ANARI_GEOMETRY, stype) {}
 
-IndexedVectorRef<Geometry> Geometry::self() const
+ObjectPoolRef<Geometry> Geometry::self() const
 {
   return scene() ? scene()->getObject<Geometry>(index())
-                 : IndexedVectorRef<Geometry>{};
+                 : ObjectPoolRef<Geometry>{};
 }
 
 anari::Object Geometry::makeANARIObject(anari::Device d) const

@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -20,6 +20,7 @@ void generate_monkey(Scene &scene, LayerNodeRef location = {});
 VolumeRef generate_noiseVolume(Scene &scene, LayerNodeRef location = {}, ArrayRef colors = {}, ArrayRef opacities = {});
 void generate_randomSpheres(Scene &scene, LayerNodeRef location = {}, bool useDefaultMaterial = false);
 void generate_rtow(Scene &scene, LayerNodeRef location = {});
+void generate_sphereSetVolume(Scene &scene, LayerNodeRef location = {});
 
 // clang-format on
 

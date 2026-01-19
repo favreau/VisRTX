@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -15,6 +15,8 @@ struct RenderBuffers
   uint32_t *color{nullptr};
   float *depth{nullptr};
   uint32_t *objectId{nullptr};
+  tsd::math::float3 *albedo{nullptr};
+  tsd::math::float3 *normal{nullptr};
   detail::ComputeStream stream{};
 };
 

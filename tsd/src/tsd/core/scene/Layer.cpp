@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/core/scene/Layer.hpp"
@@ -7,9 +7,10 @@
 
 namespace tsd::core {
 
-LayerNodeData::LayerNodeData(const char *n) : m_name(n)
+LayerNodeData::LayerNodeData(const char *n)
 {
   setEmpty();
+  m_name = n;
 }
 
 LayerNodeData::LayerNodeData(Object *o, const char *n) : LayerNodeData(n)

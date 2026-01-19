@@ -1,4 +1,4 @@
-## Copyright 2024-2025 NVIDIA Corporation
+## Copyright 2024-2026 NVIDIA Corporation
 ## SPDX-License-Identifier: Apache-2.0
 
 project(obj2header)
@@ -19,3 +19,7 @@ project_link_libraries(
   tsd_ext_tinyexr_impl
   stb_image
 )
+
+project(tsdVolumeToNanoVDB)
+project_add_executable(tsdVolumeToNanoVDB.cpp)
+project_link_libraries(tsd_core tsd_io)

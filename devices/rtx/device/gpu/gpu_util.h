@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2019-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -284,7 +284,7 @@ VISRTX_DEVICE vec3 sampleHDRI(const LightGPUData &ld, const vec3 &rayDir)
   const float u = thetaPhi.y * inv2Pi;
   const float v = thetaPhi.x * invPi;
 
-  return sampleHDRI(ld, vec2(u, v));
+  return sampleHDRI(ld, vec2(u, v)) * ld.hdri.scale;
 }
 
 VISRTX_DEVICE vec4 getBackgroundImage(

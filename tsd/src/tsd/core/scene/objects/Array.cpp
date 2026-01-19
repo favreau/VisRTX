@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 #ifndef TSD_USE_CUDA
@@ -102,6 +102,16 @@ const void *Array::data() const
   return m_data;
 }
 
+const void *Array::elementAt(size_t i) const
+{
+  if (i >= size()) {
+    logWarning("Array::elementAt() - index out of bounds");
+    return nullptr;
+  }
+  auto *bytes = static_cast<const uint8_t *>(m_data);
+  return bytes + i * elementSize();
+}
+
 void Array::unmap()
 {
   m_mapped = false;
@@ -125,10 +135,9 @@ size_t Array::setData(std::FILE *stream)
   return r;
 }
 
-IndexedVectorRef<Array> Array::self() const
+ObjectPoolRef<Array> Array::self() const
 {
-  return scene() ? scene()->getObject<Array>(index())
-                 : IndexedVectorRef<Array>{};
+  return scene() ? scene()->getObject<Array>(index()) : ObjectPoolRef<Array>{};
 }
 
 anari::Object Array::makeANARIObject(anari::Device d) const
