@@ -47,6 +47,10 @@ void ImportFileDialog::buildUI()
       "USD2",
       "XYZDP",
       "VOLUME",
+      "PLANET",
+      "AURORA",
+      "CLOUDS",
+      "MAGNETIC",
       "TSD",
   };
 

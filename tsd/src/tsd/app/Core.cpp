@@ -188,6 +188,14 @@ void Core::parseCommandLine(int argc, const char **argv)
       importerType = ImporterType::XYZDP;
     else if (arg == "-volume")
       importerType = ImporterType::VOLUME;
+    else if (arg == "-planet")
+      importerType = ImporterType::PLANET;
+    else if (arg == "-aurora")
+      importerType = ImporterType::AURORA;
+    else if (arg == "-clouds")
+      importerType = ImporterType::CLOUDS;
+    else if (arg == "-magnetic")
+      importerType = ImporterType::MAGNETIC;
     else if (arg == "-blank")
       importerType = ImporterType::BLANK;
     else if (arg == "-xf" || arg == "--transferFunction")
@@ -322,6 +330,14 @@ void Core::importFile(const ImportFile &f, tsd::core::LayerNodeRef root)
   else if (f.first == ImporterType::VOLUME)
     tsd::io::import_volume(
         tsd.scene, file.c_str(), importer.transferFunction, root);
+  else if (f.first == ImporterType::PLANET)
+    tsd::io::import_PLANET(tsd.scene, file.c_str());
+  else if (f.first == ImporterType::AURORA)
+    tsd::io::import_AURORA(tsd.scene, file.c_str());
+  else if (f.first == ImporterType::CLOUDS)
+    tsd::io::import_CLOUDS(tsd.scene, file.c_str());
+  else if (f.first == ImporterType::MAGNETIC)
+    tsd::io::import_MAGNETIC(tsd.scene, file.c_str());
   else if (f.first == ImporterType::XF) {
     importer.transferFunction = tsd::io::importTransferFunction(file);
   } else if (f.first == ImporterType::BLANK) {
