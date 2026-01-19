@@ -1,4 +1,4 @@
-// Copyright 2024-2025 NVIDIA Corporation
+// Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
 // tsd_core
@@ -205,8 +205,11 @@ void Application::uiMainMenuBar()
 
     ImGui::Separator();
 
-    if (ImGui::MenuItem("Export as USD..."))
-      io::export_SceneToUSD(m_core.tsd.scene, "scene.usda");
+    if (ImGui::MenuItem("Export as USD...")) {
+      io::export_SceneToUSD(m_core.tsd.scene,
+          "scene.usda",
+          m_core.view.pathSettings.framesPerSecond);
+    }
 
     ImGui::Separator();
 
