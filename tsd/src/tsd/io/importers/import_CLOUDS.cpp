@@ -7,9 +7,11 @@
 #include "tsd/io/importers/detail/importer_common.hpp"
 #include "tsd/io/importers/detail/netcdf_utils.h"
 // std
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <string>
@@ -246,6 +248,31 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
 
   // Set the data as a parameter
   field->setParameterObject("cloudData", *dataArray);
+
+  // Compute data range for automatic colormap scaling
+  const float *data = static_cast<const float *>(dataArray->data());
+  size_t totalElements =
+      dataArray->dim(0) * dataArray->dim(1) * dataArray->dim(2);
+
+  float minVal = std::numeric_limits<float>::max();
+  float maxVal = std::numeric_limits<float>::lowest();
+
+  for (size_t i = 0; i < totalElements; ++i) {
+    float val = data[i];
+    if (std::isfinite(val)) { // Skip NaN and Inf values
+      minVal = std::min(minVal, val);
+      maxVal = std::max(maxVal, val);
+    }
+  }
+
+  // Store value range in metadata for volume creation
+  if (std::isfinite(minVal) && std::isfinite(maxVal) && minVal < maxVal) {
+    field->setMetadataValue("valueRange", tsd::math::float2{minVal, maxVal});
+    logInfo("[import_CLOUDS] Data value range: [%.6f, %.6f]", minVal, maxVal);
+  } else {
+    logWarning(
+        "[import_CLOUDS] Could not determine valid value range, using default [0, 1]");
+  }
 
   // Debug: Export first layer as PNG (if enabled in .clouds file)
   if (header.debugExportPNG) {

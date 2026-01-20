@@ -95,8 +95,21 @@ VolumeRef import_volume(Scene &scene,
   }
 
   float2 valueRange{0.f, 1.f};
-  if (field)
-    valueRange = field->computeValueRange();
+  if (field) {
+    // Check if field has pre-computed value range in metadata
+    auto valueRangeParam = field->getMetadataValue("valueRange");
+    if (valueRangeParam.valid()) {
+      valueRange = valueRangeParam.get<tsd::math::float2>();
+      logInfo("[import_volume] Using value range from metadata: [%.6f, %.6f]",
+          valueRange.x,
+          valueRange.y);
+    } else {
+      valueRange = field->computeValueRange();
+      logInfo("[import_volume] Computed value range: [%.6f, %.6f]",
+          valueRange.x,
+          valueRange.y);
+    }
+  }
 
   auto tx = scene.insertChildTransformNode(
       location ? location : scene.defaultLayer()->root());
