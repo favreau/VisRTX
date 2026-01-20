@@ -90,7 +90,8 @@ bool loadImageData(Scene &scene,
 {
   // Load image using stb_image
   int width, height, channels;
-  stbi_set_flip_vertically_on_load(1);
+  // Don't flip equirectangular textures - they should match NetCDF coordinate convention
+  stbi_set_flip_vertically_on_load(0);
   unsigned char *imageData =
       stbi_load(filePath.c_str(), &width, &height, &channels, 0);
 
