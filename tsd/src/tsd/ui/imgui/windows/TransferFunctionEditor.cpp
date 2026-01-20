@@ -16,7 +16,6 @@
 #include <algorithm>
 #include <fstream>
 
-
 namespace tsd::ui::imgui {
 
 // Helper functions ///////////////////////////////////////////////////////////
@@ -250,17 +249,17 @@ void TransferFunctionEditor::buildUI_valueRange()
 {
   ImGui::BeginDisabled(!m_volume);
 
-  if (tsd::ui::buildUI_parameter(
-      *m_volume, *m_volume->parameter("valueRange"), appCore()->tsd.scene)) {
-
+  if (tsd::ui::buildUI_parameter(*m_volume,
+          *m_volume->parameter("valueRange"),
+          appCore()->tsd.scene)) {
     auto range = m_volume->parameterValueAs<tsd::math::box1>("valueRange");
 
     for (auto *volume : m_otherVolumes) {
       auto *field =
           volume->parameterValueAsObject<tsd::core::SpatialField>("value");
-        volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &range);
-      }
+      volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &range);
     }
+  }
 
   if (ImGui::Button("reset##valueRange") && m_volume) {
     auto *field =
@@ -273,7 +272,6 @@ void TransferFunctionEditor::buildUI_valueRange()
       }
     }
   }
-
 
   ImGui::SameLine();
   if (ImGui::Button("Load")) {
@@ -389,7 +387,7 @@ void TransferFunctionEditor::setObjectPtrsFromSelectedObject()
   const auto &selectedNodes = appCore()->getSelectedNodes();
 
   // Collect all volume pointers from selection
-  std::vector<tsd::core::Volume*> allVolumes;
+  std::vector<tsd::core::Volume *> allVolumes;
   for (const auto &node : selectedNodes) {
     if (!node.valid())
       continue;
@@ -426,7 +424,8 @@ void TransferFunctionEditor::setObjectPtrsFromSelectedObject()
 
   auto *firstVolume = m_volume;
   if (m_colorMapArray == nullptr
-      || m_colorMapArray != firstVolume->parameterValueAsObject<tsd::core::Array>("color")) {
+      || m_colorMapArray
+          != firstVolume->parameterValueAsObject<tsd::core::Array>("color")) {
     setMap(0);
 
     m_colorMapArray =
@@ -587,11 +586,12 @@ void TransferFunctionEditor::loadColormap(
   auto &scene = appCore()->tsd.scene;
 
   // Extract control points from the loaded transfer function
-    core::TransferFunction tfn = tsd::io::importTransferFunction(filepath);
+  core::TransferFunction tfn = tsd::io::importTransferFunction(filepath);
 
   if (tfn.colorPoints.empty() || tfn.opacityPoints.empty()) {
     tsd::core::logError(
-        ("[tfn_editor] Failed to load transfer function from file: " + filepath).c_str());
+        ("[tfn_editor] Failed to load transfer function from file: " + filepath)
+            .c_str());
     return;
   }
 
@@ -621,15 +621,15 @@ void TransferFunctionEditor::loadColormap(
       }
     }
 
-    smartOpacityPoints.push_back(opacityPoints.back()); // Always keep last point
+    smartOpacityPoints.push_back(
+        opacityPoints.back()); // Always keep last point
 
     // Only use smart points if we reduced the count significantly
     if (smartOpacityPoints.size() < opacityPoints.size() * 0.8f) {
       opacityPoints = smartOpacityPoints;
-      tsd::core::logStatus(
-          ("[tfn_editor] Reduced opacity control points from "
-              + std::to_string(colors.size()) + " to "
-              + std::to_string(opacityPoints.size()) + " points")
+      tsd::core::logStatus(("[tfn_editor] Reduced opacity control points from "
+          + std::to_string(colors.size()) + " to "
+          + std::to_string(opacityPoints.size()) + " points")
               .c_str());
     }
   }
@@ -686,7 +686,8 @@ void TransferFunctionEditor::updateColormaps()
 
   // Update reference volume
   if (m_volume) {
-    auto *colorArray = m_volume->parameterValueAsObject<tsd::core::Array>("color");
+    auto *colorArray =
+        m_volume->parameterValueAsObject<tsd::core::Array>("color");
     if (colorArray) {
       auto co = getSampledColorsAndOpacities(colorArray->size());
       auto *colorMap = colorArray->mapAs<tsd::math::float4>();
@@ -702,7 +703,8 @@ void TransferFunctionEditor::updateColormaps()
 
   // Update other volumes
   for (auto *volume : m_otherVolumes) {
-    auto *colorArray = volume->parameterValueAsObject<tsd::core::Array>("color");
+    auto *colorArray =
+        volume->parameterValueAsObject<tsd::core::Array>("color");
     if (!colorArray)
       continue;
 
@@ -836,38 +838,40 @@ void TransferFunctionEditor::saveColormapToParaview(const std::string &filepath)
   file << "\t\t\"RGBPoints\" : \n";
   file << "\t\t[\n";
 
-  // Save colors and alpha values at opacity control point positions
+  // Save RGB values at each opacity control point position
   for (size_t i = 0; i < m_tfnOpacityPoints.size(); ++i) {
-    const auto &opacityPoint = m_tfnOpacityPoints[i];
-    float position = opacityPoint.x;
-    float opacity = opacityPoint.y;
+    float position = m_tfnOpacityPoints[i].x;
 
-    // Get color at this opacity control point position
+    // Sample color at this position from the current colormap
     tsd::math::float3 color(0.f);
-    if (m_currentMap == 0) {
-      // Direct color mapping
-      if (!m_tfnColorPoints->empty()) {
-        // Find closest color point or interpolate
-        if (position <= m_tfnColorPoints->front().x) {
-          auto &cp = m_tfnColorPoints->front();
-          color = tsd::math::float3(cp.y, cp.z, cp.w);
-        } else if (position >= m_tfnColorPoints->back().x) {
-          auto &cp = m_tfnColorPoints->back();
-          color = tsd::math::float3(cp.y, cp.z, cp.w);
-        } else {
-          color =
-              tsd::core::detail::interpolateColor(*m_tfnColorPoints, position);
-        }
-      }
-    } else {
-      // Interpolated color mapping
+    if (m_tfnColorPoints && !m_tfnColorPoints->empty()) {
       color = tsd::core::detail::interpolateColor(*m_tfnColorPoints, position);
     }
 
-    file << "\t\t\t" << opacity << ",\n";
+    // Write: position, R, G, B
+    file << "\t\t\t" << position << ",\n";
     file << "\t\t\t" << color.x << ",\n";
     file << "\t\t\t" << color.y << ",\n";
-    file << "\t\t\t" << color.z << ",\n";
+    file << "\t\t\t" << color.z;
+
+    if (i < m_tfnOpacityPoints.size() - 1) {
+      file << ",";
+    }
+    file << "\n";
+  }
+
+  file << "\t\t],\n";
+  file << "\t\t\"Points\" : \n";
+  file << "\t\t[\n";
+
+  // Save opacity (alpha) values at each control point position
+  for (size_t i = 0; i < m_tfnOpacityPoints.size(); ++i) {
+    float position = m_tfnOpacityPoints[i].x;
+    float opacity = m_tfnOpacityPoints[i].y;
+
+    // Write: position, alpha
+    file << "\t\t\t" << position << ",\n";
+    file << "\t\t\t" << opacity;
 
     if (i < m_tfnOpacityPoints.size() - 1) {
       file << ",";

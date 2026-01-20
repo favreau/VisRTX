@@ -400,186 +400,166 @@ void CameraPoses::renderInterpolatedPath()
       outputDirectory.c_str(),
       filePrefix.c_str());
 
-  // Run rendering synchronously (blocks UI but avoids thread issues with
-  // Barney/OptiX)
-  // Setup render pipeline
-  tsd::core::logStatus("[CameraPoses] Setting up render pipeline...");
+  // Capture settings by value
+  const std::string capturedOutputDirectory = outputDirectory;
+  const std::string capturedFilePrefix = filePrefix;
+  const bool updateViewport = m_updateViewport;
+  std::vector<tsd::rendering::CameraPose> samplesCopy = samples;
 
-  auto &config = core->offline;
-  tsd::core::logStatus("[CameraPoses] Loading ANARI device '%s'...",
-      config.renderer.libraryName.c_str());
+  // Calculate total frames for capture
+  const int capturedTotalFrames = m_totalFrames;
 
-  auto d = core->anari.loadDevice(config.renderer.libraryName.c_str());
-  if (!d) {
-    tsd::core::logError("[CameraPoses] Failed to load ANARI device");
-    m_isRendering = false;
-    return;
-  }
-  tsd::core::logStatus("[CameraPoses] Device loaded successfully");
+  // Launch rendering in background
+  m_renderFuture = std::async(std::launch::async,
+      [this,
+          core,
+          samplesCopy,
+          capturedOutputDirectory,
+          capturedFilePrefix,
+          updateViewport,
+          capturedTotalFrames]() {
+        // Setup render pipeline
+        auto &config = core->offline;
+        auto d = core->anari.loadDevice(config.renderer.libraryName.c_str());
+        if (!d) {
+          tsd::core::logError("[CameraPoses] Failed to load ANARI device");
+          return;
+        }
 
-  auto &scene = core->tsd.scene;
-  tsd::core::logStatus("[CameraPoses] Acquiring render index...");
+        auto &scene = core->tsd.scene;
+        auto *renderIndex = core->anari.acquireRenderIndex(scene, d);
+        if (!renderIndex) {
+          tsd::core::logError("[CameraPoses] Failed to acquire render index");
+          anari::release(d, d);
+          return;
+        }
 
-  auto *renderIndex = core->anari.acquireRenderIndex(scene, d);
-  if (!renderIndex) {
-    tsd::core::logError("[CameraPoses] Failed to acquire render index");
-    anari::release(d, d);
-    m_isRendering = false;
-    return;
-  }
-  tsd::core::logStatus("[CameraPoses] Render index acquired");
+        // Create renderer
+        if (config.renderer.rendererObjects.empty()
+            || config.renderer.activeRenderer < 0
+            || config.renderer.activeRenderer
+                >= static_cast<int>(config.renderer.rendererObjects.size())) {
+          tsd::core::logError("[CameraPoses] No renderer configured");
+          anari::release(d, d);
+          return;
+        }
 
-  // Create renderer
-  if (config.renderer.rendererObjects.empty()
-      || config.renderer.activeRenderer < 0
-      || config.renderer.activeRenderer
-          >= static_cast<int>(config.renderer.rendererObjects.size())) {
-    tsd::core::logError("[CameraPoses] No renderer configured");
-    core->anari.releaseRenderIndex(d);
-    anari::release(d, d);
-    m_isRendering = false;
-    return;
-  }
+        // Log renderer details at creation time
+        tsd::core::logStatus(
+            "[CameraPoses] Creating renderer in background thread:");
+        tsd::core::logStatus(
+            "  activeRenderer index: %d", config.renderer.activeRenderer);
+        tsd::core::logStatus("  rendererObjects.size(): %zu",
+            config.renderer.rendererObjects.size());
 
-  auto &ro = config.renderer.rendererObjects[config.renderer.activeRenderer];
+        auto &ro =
+            config.renderer.rendererObjects[config.renderer.activeRenderer];
 
-  tsd::core::logStatus(
-      "[CameraPoses] Creating renderer '%s'...", ro.subtype().c_str());
+        tsd::core::logStatus("  Renderer subtype: '%s'", ro.subtype().c_str());
+        tsd::core::logStatus("  Renderer name: '%s'", ro.name().c_str());
 
-  auto r = anari::newObject<anari::Renderer>(d, ro.subtype().c_str());
-  ro.updateAllANARIParameters(d, r);
-  anari::commitParameters(d, r);
-  tsd::core::logStatus("[CameraPoses] Renderer created");
+        auto r = anari::newObject<anari::Renderer>(d, ro.subtype().c_str());
+        tsd::core::logStatus("  Created ANARI renderer object");
 
-  // Create camera
-  tsd::core::logStatus("[CameraPoses] Creating camera...");
-  auto c = anari::newObject<anari::Camera>(d, "perspective");
-  anari::setParameter(d,
-      c,
-      "aspect",
-      static_cast<float>(config.frame.width) / config.frame.height);
-  anari::setParameter(d, c, "fovy", anari::radians(40.f));
-  anari::commitParameters(d, c);
-  tsd::core::logStatus("[CameraPoses] Camera created");
+        ro.updateAllANARIParameters(d, r);
+        tsd::core::logStatus("  Updated renderer parameters");
 
-  // Create render pipeline
-  tsd::core::logStatus("[CameraPoses] Creating render pipeline (%dx%d)...",
-      config.frame.width,
-      config.frame.height);
+        anari::commitParameters(d, r);
+        tsd::core::logStatus("  Committed renderer parameters");
 
-  auto pipeline = std::make_unique<tsd::rendering::RenderPipeline>(
-      config.frame.width, config.frame.height);
+        // Create camera
+        auto c = anari::newObject<anari::Camera>(d, "perspective");
+        anari::setParameter(d,
+            c,
+            "aspect",
+            static_cast<float>(config.frame.width) / config.frame.height);
+        anari::setParameter(d, c, "fovy", anari::radians(40.f));
+        anari::commitParameters(d, c);
 
-  auto *anariPass =
-      pipeline->emplace_back<tsd::rendering::AnariSceneRenderPass>(d);
-  anariPass->setRunAsync(false);
-  anariPass->setWorld(renderIndex->world());
-  anariPass->setRenderer(r);
-  anariPass->setCamera(c);
+        // Create render pipeline
+        auto pipeline = std::make_unique<tsd::rendering::RenderPipeline>(
+            config.frame.width, config.frame.height);
 
-  // Add AOV visualization pass if enabled
-  if (config.aov.aovType != tsd::rendering::AOVType::NONE) {
-    tsd::core::logStatus("[CameraPoses] Adding AOV visualization pass");
-    auto *aovPass = pipeline->emplace_back<tsd::rendering::VisualizeAOVPass>();
-    aovPass->setAOVType(config.aov.aovType);
-    aovPass->setDepthRange(config.aov.depthMin, config.aov.depthMax);
-    aovPass->setEdgeThreshold(config.aov.edgeThreshold);
-    aovPass->setEdgeInvert(config.aov.edgeInvert);
+        auto *anariPass =
+            pipeline->emplace_back<tsd::rendering::AnariSceneRenderPass>(d);
+        anariPass->setRunAsync(false);
+        anariPass->setWorld(renderIndex->world());
+        anariPass->setRenderer(r);
+        anariPass->setCamera(c);
 
-    // Enable necessary frame channels
-    if (config.aov.aovType == tsd::rendering::AOVType::ALBEDO) {
-      anariPass->setEnableAlbedo(true);
-    } else if (config.aov.aovType == tsd::rendering::AOVType::NORMAL) {
-      anariPass->setEnableNormals(true);
-    } else if (config.aov.aovType == tsd::rendering::AOVType::EDGES) {
-      anariPass->setEnableIDs(true);
-    }
-  }
+        // Add AOV visualization pass if enabled
+        if (config.aov.aovType != tsd::rendering::AOVType::NONE) {
+          auto *aovPass =
+              pipeline->emplace_back<tsd::rendering::VisualizeAOVPass>();
+          aovPass->setAOVType(config.aov.aovType);
+          aovPass->setDepthRange(config.aov.depthMin, config.aov.depthMax);
+          aovPass->setEdgeThreshold(config.aov.edgeThreshold);
+          aovPass->setEdgeInvert(config.aov.edgeInvert);
 
-  auto *savePass = pipeline->emplace_back<tsd::rendering::SaveToFilePass>();
-  savePass->setSingleShotMode(false);
+          // Enable necessary frame channels
+          if (config.aov.aovType == tsd::rendering::AOVType::ALBEDO) {
+            anariPass->setEnableAlbedo(true);
+          } else if (config.aov.aovType == tsd::rendering::AOVType::NORMAL) {
+            anariPass->setEnableNormals(true);
+          } else if (config.aov.aovType == tsd::rendering::AOVType::EDGES) {
+            anariPass->setEnableIDs(true);
+          }
+        }
 
-  tsd::core::logStatus("[CameraPoses] Pipeline setup complete");
-  tsd::core::logStatus(
-      "[CameraPoses] Starting rendering loop: %d frames, %d samples per frame",
-      m_totalFrames,
-      config.frame.samples);
+        auto *savePass =
+            pipeline->emplace_back<tsd::rendering::SaveToFilePass>();
+        savePass->setSingleShotMode(false);
 
-  // Render interpolated frames
-  int frameIndex = 0;
-  tsd::rendering::Manipulator manipulator;
+        // Render interpolated frames
+        int frameIndex = 0;
+        tsd::rendering::Manipulator manipulator;
 
-  for (const auto &pose : samples) {
-    if (m_cancelRequested) {
-      tsd::core::logInfo("[CameraPoses] Rendering cancelled at frame %d/%d",
-          frameIndex,
-          m_totalFrames);
-      break;
-    }
+        for (const auto &pose : samplesCopy) {
+          if (m_cancelRequested) {
+            tsd::core::logInfo(
+                "[CameraPoses] Rendering cancelled at frame %d/%d",
+                frameIndex,
+                capturedTotalFrames);
+            break;
+          }
 
-    tsd::core::logStatus("[CameraPoses] Rendering frame %d/%d...",
-        frameIndex + 1,
-        m_totalFrames);
+          m_currentFrame = frameIndex;
+          manipulator.setConfig(pose);
+          tsd::rendering::updateCameraParametersPerspective(d, c, manipulator);
+          anari::commitParameters(d, c);
 
-    m_currentFrame = frameIndex;
+          // Update viewport camera if requested
+          if (updateViewport) {
+            std::lock_guard<std::mutex> lock(m_poseMutex);
+            m_currentPose = pose;
+            m_hasNewPose.store(true);
+          }
 
-    // Update scene animation time for this frame (normalized 0.0 to 1.0)
-    float normalizedTime = m_totalFrames > 1
-        ? static_cast<float>(frameIndex) / static_cast<float>(m_totalFrames - 1)
-        : 0.0f;
-    scene.setAnimationTime(normalizedTime);
-    tsd::core::logStatus(
-        "[CameraPoses]   Animation time: %.3f", normalizedTime);
+          // Setup output filename with prefix
+          std::ostringstream ss;
+          if (!capturedFilePrefix.empty()) {
+            ss << capturedFilePrefix << "_";
+          }
+          ss << std::setfill('0') << std::setw(4) << frameIndex << ".png";
+          std::filesystem::path filename =
+              std::filesystem::path(capturedOutputDirectory) / ss.str();
+          savePass->setFilename(filename.string());
 
-    // Call custom animation callback if registered (e.g., for planet data)
-    if (core->animationTimeChangedCallback) {
-      tsd::core::logStatus("[CameraPoses]   Calling animation callback");
-      core->animationTimeChangedCallback();
-    }
+          for (int sampleIdx = 0; sampleIdx < config.frame.samples;
+              ++sampleIdx) {
+            savePass->setEnabled(sampleIdx == config.frame.samples - 1);
+            pipeline->render();
+          }
+          frameIndex++;
+        }
 
-    // Signal layer change to trigger render index updates
-    scene.signalLayerChange(scene.defaultLayer());
-
-    manipulator.setConfig(pose);
-    tsd::rendering::updateCameraParametersPerspective(d, c, manipulator);
-    anari::commitParameters(d, c);
-
-    // Setup output filename with prefix
-    std::ostringstream ss;
-    if (!filePrefix.empty()) {
-      ss << filePrefix << "_";
-    }
-    ss << std::setfill('0') << std::setw(4) << frameIndex << ".png";
-    std::filesystem::path filename =
-        std::filesystem::path(outputDirectory) / ss.str();
-    savePass->setFilename(filename.string());
-
-    tsd::core::logStatus(
-        "[CameraPoses]   Output: %s", filename.string().c_str());
-
-    for (int sampleIdx = 0; sampleIdx < config.frame.samples; ++sampleIdx) {
-      savePass->setEnabled(sampleIdx == config.frame.samples - 1);
-      tsd::core::logStatus("[CameraPoses]   Sample %d/%d...",
-          sampleIdx + 1,
-          config.frame.samples);
-      pipeline->render();
-    }
-
-    tsd::core::logStatus("[CameraPoses]   Frame %d complete", frameIndex + 1);
-    frameIndex++;
-  }
-
-  // Cleanup
-  tsd::core::logStatus("[CameraPoses] Cleaning up render resources...");
-  pipeline.reset();
-  core->anari.releaseRenderIndex(d);
-  anari::release(d, c);
-  anari::release(d, r);
-  anari::release(d, d);
-
-  m_isRendering = false;
-  tsd::core::logStatus(
-      "[CameraPoses] Rendering complete - %d frames rendered", frameIndex);
+        // Cleanup
+        pipeline.reset();
+        core->anari.releaseRenderIndex(d);
+        anari::release(d, c);
+        anari::release(d, r);
+        anari::release(d, d);
+      });
 }
 
 } // namespace tsd::ui::imgui
