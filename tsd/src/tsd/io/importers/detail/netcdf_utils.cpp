@@ -287,7 +287,13 @@ ArrayRef loadNetCDFVariable(Scene &scene,
     ArrayRef array;
     nc_type dataType = var.getType().getId();
 
-    if (dataType == NC_FLOAT) {
+    if (dataType == NC_FLOAT || dataType == NC_DOUBLE) {
+      // Handle both float and double precision data
+      const bool isDouble = (dataType == NC_DOUBLE);
+      logInfo("[netcdf_utils] Variable '%s' data type: %s",
+          variableName.c_str(),
+          isDouble ? "NC_DOUBLE (will convert to float)" : "NC_FLOAT");
+
       if (isUnstructured) {
         // Read longitude and latitude coordinates (in radians)
         netCDF::NcVar clonVar = file.getVar("clon");
@@ -316,12 +322,23 @@ ArrayRef loadNetCDFVariable(Scene &scene,
         }
 
         // Read cloud data for all height levels at specific time
-        vector<float> cloudData(numCells * numLevels);
         vector<size_t> start = {
             timeIndex, 0, 0}; // specific time, height=0, cell=0
         vector<size_t> count = {
             1, numLevels, numCells}; // 1 time, all heights, all cells
-        var.getVar(start, count, cloudData.data());
+
+        vector<float> cloudData(numCells * numLevels);
+        if (isDouble) {
+          // Read as double and convert to float
+          vector<double> cloudDataDouble(numCells * numLevels);
+          var.getVar(start, count, cloudDataDouble.data());
+          for (size_t i = 0; i < cloudDataDouble.size(); ++i) {
+            cloudData[i] = static_cast<float>(cloudDataDouble[i]);
+          }
+        } else {
+          // Read directly as float
+          var.getVar(start, count, cloudData.data());
+        }
 
         // Convert coordinates from radians to degrees
         vector<float> lonDeg(numCells), latDeg(numCells);
@@ -400,12 +417,24 @@ ArrayRef loadNetCDFVariable(Scene &scene,
         vector<float> data(totalDataSize);
 
         try {
-          if (hasTime && numTimes > 1) {
-            // Multi-dimensional array with time - use hyperslab
-            var.getVar(start, count, data.data());
+          if (isDouble) {
+            // Read as double and convert to float
+            vector<double> dataDouble(totalDataSize);
+            if (hasTime && numTimes > 1) {
+              var.getVar(start, count, dataDouble.data());
+            } else {
+              var.getVar(dataDouble.data());
+            }
+            for (size_t i = 0; i < dataDouble.size(); ++i) {
+              data[i] = static_cast<float>(dataDouble[i]);
+            }
           } else {
-            // No time dimension or single time step
-            var.getVar(data.data());
+            // Read directly as float
+            if (hasTime && numTimes > 1) {
+              var.getVar(start, count, data.data());
+            } else {
+              var.getVar(data.data());
+            }
           }
         } catch (const netCDF::exceptions::NcException &e) {
           logError("[netcdf_utils] NetCDF read error: %s", e.what());
