@@ -66,8 +66,9 @@ class Application : public TSDApplication
 
     if (core->commandLine.secondaryViewportLibrary.empty())
       viewport2->hide();
-    tfeditor->hide();
+    // tfeditor is visible by default
     isoeditor->hide();
+    // Note: planetcontrols is visible and dockable by default
 
     // Populate scene //
 
@@ -191,6 +192,12 @@ Pos=0,26
 Size=547,575
 Collapsed=0
 DockId=0x00000008,1
+
+[Window][Planet Controls]
+Pos=0,26
+Size=547,575
+Collapsed=0
+DockId=0x00000008,3
 
 [Window][##]
 Pos=792,507
