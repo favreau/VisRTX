@@ -11,6 +11,7 @@
 #include "tsd/rendering/pipeline/passes/VisualizeAOVPass.h"
 #include "tsd/rendering/view/Manipulator.hpp"
 // std
+#include <functional>
 #include <map>
 #include <string>
 #include <utility>
@@ -247,6 +248,9 @@ struct Core
   OfflineRenderSequenceConfig offline;
   Windows windows;
   Tasking jobs;
+
+  // Custom animation callback (e.g., for planet data updates)
+  std::function<void()> animationTimeChangedCallback;
 
   /////////////////////////////////////////////////////////////////////////////
   /////////////////////////////////////////////////////////////////////////////

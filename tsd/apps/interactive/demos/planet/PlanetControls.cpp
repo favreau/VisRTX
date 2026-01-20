@@ -93,6 +93,20 @@ void PlanetControls::updateTimeStepFromAnimation()
   }
 }
 
+void PlanetControls::setupAnimations()
+{
+  auto *core = appCore();
+
+  // Register callback with Core for animation time changes
+  core->animationTimeChangedCallback = [this]() {
+    // Force update by resetting last time
+    m_lastAnimationTime = -1.f;
+    updateTimeStepFromAnimation();
+  };
+
+  tsd::core::logInfo("[planet_demo] Registered planet data animation callback");
+}
+
 void PlanetControls::importPlanetData()
 {
   auto *core = appCore();
@@ -182,6 +196,9 @@ void PlanetControls::importPlanetData()
       tsd::core::logInfo(
           "[earth_demo] Directional light already exists in scene");
     }
+
+    // Setup animation callback
+    setupAnimations();
 
     tsd::core::logInfo("[planet_demo] Planet data initialization complete");
   } catch (const std::exception &e) {

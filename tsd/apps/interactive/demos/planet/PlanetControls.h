@@ -25,6 +25,9 @@ struct PlanetControls : public tsd::ui::imgui::Window
   // Call this once after scene data is loaded
   void importPlanetData();
 
+  // Setup animation for clouds and aurora
+  void setupAnimations();
+
  private:
   void updateTimeStepFromAnimation();
 
