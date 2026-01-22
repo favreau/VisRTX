@@ -138,14 +138,28 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
       lonVar = file.getVar("clon");
 
     if (!latVar.isNull() && !lonVar.isNull()) {
+      // Handle both 1D and 2D coordinate arrays
+      int latDimCount = latVar.getDimCount();
+      int lonDimCount = lonVar.getDimCount();
+
       size_t latSize = latVar.getDim(0).getSize();
       size_t lonSize = lonVar.getDim(0).getSize();
 
+      // For 2D coordinate arrays, we need the total size
+      if (latDimCount == 2) {
+        latSize = latVar.getDim(0).getSize() * latVar.getDim(1).getSize();
+      }
+      if (lonDimCount == 2) {
+        lonSize = lonVar.getDim(0).getSize() * lonVar.getDim(1).getSize();
+      }
+
       logInfo(
-          "[import_CLOUDS] Reading lat var '%s' (size=%zu), lon var '%s' (size=%zu)",
+          "[import_CLOUDS] Reading lat var '%s' (%dD, size=%zu), lon var '%s' (%dD, size=%zu)",
           latVar.getName().c_str(),
+          latDimCount,
           latSize,
           lonVar.getName().c_str(),
+          lonDimCount,
           lonSize);
 
       std::vector<double> latData(latSize), lonData(lonSize);
@@ -278,16 +292,20 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
   if (header.debugExportPNG) {
     size_t width = dataArray->dim(0);
     size_t height = dataArray->dim(1);
-    size_t depth = dataArray->dim(2);
+    size_t depth = dataArray->dim(2); // Will be 0 for 2D arrays
 
-    if (width > 0 && height > 0 && depth > 0) {
+    // Handle both 2D and 3D arrays
+    if (depth == 0)
+      depth = 1;
+
+    if (width > 0 && height > 0) {
       logInfo("[import_CLOUDS] Array dimensions: %zux%zux%zu",
           width,
           height,
           depth);
 
-      // Export middle layer
-      size_t layerIdx = depth / 2;
+      // For 2D arrays, export the single layer; for 3D, export middle layer
+      size_t layerIdx = (depth > 1) ? (depth / 2) : 0;
       const float *data = static_cast<const float *>(dataArray->data());
 
       // Convert to 8-bit grayscale
@@ -295,15 +313,16 @@ SpatialFieldRef import_CLOUDS(Scene &scene, const char *filepath)
       float minVal = 1e10f, maxVal = -1e10f;
 
       // Find min/max for normalization
+      size_t offset = layerIdx * width * height;
       for (size_t i = 0; i < width * height; ++i) {
-        float val = data[layerIdx * width * height + i];
+        float val = data[offset + i];
         minVal = std::min(minVal, val);
         maxVal = std::max(maxVal, val);
       }
 
       // Normalize and convert
       for (size_t i = 0; i < width * height; ++i) {
-        float val = data[layerIdx * width * height + i];
+        float val = data[offset + i];
         float normalized =
             (maxVal > minVal) ? (val - minVal) / (maxVal - minVal) : 0.0f;
         imgData[i] = static_cast<uint8_t>(normalized * 255.0f);

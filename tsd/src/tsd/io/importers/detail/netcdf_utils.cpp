@@ -443,17 +443,25 @@ ArrayRef loadNetCDFVariable(Scene &scene,
 
         // Create ANARI array using NetCDF file dimension order to match data
         // layout
+        // NOTE: Always create 3D arrays for cloud data (depth=1 if 2D source)
         if (spatialDims.size() == 3) {
           // 3D array: use file order
           array = scene.createArray(
               ANARI_FLOAT32, spatialDims[2], spatialDims[1], spatialDims[0]);
         } else if (spatialDims.size() == 2) {
-          // 2D array: reverse for (lon,lat) order
-          array =
-              scene.createArray(ANARI_FLOAT32, spatialDims[1], spatialDims[0]);
+          // 2D array: expand to 3D with depth=1 for (lon,lat) order
+          // This ensures compatibility with 3D volumetric rendering
+          array = scene.createArray(
+              ANARI_FLOAT32, spatialDims[1], spatialDims[0], 1);
+          logInfo(
+              "[netcdf_utils] Expanded 2D array (%zux%zu) to 3D with depth=1",
+              spatialDims[1],
+              spatialDims[0]);
         } else if (spatialDims.size() == 1) {
-          // 1D array
-          array = scene.createArray(ANARI_FLOAT32, spatialDims[0]);
+          // 1D array: expand to 3D with height=1, depth=1
+          array = scene.createArray(ANARI_FLOAT32, spatialDims[0], 1, 1);
+          logInfo(
+              "[netcdf_utils] Expanded 1D array (%zu) to 3D", spatialDims[0]);
         } else {
           logError(
               "[netcdf_utils] No valid spatial dimensions found: %zu spatial dims",
