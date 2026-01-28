@@ -49,7 +49,7 @@ struct RenderIndex : public BaseUpdateDelegate
   void signalObjectRemoved(const Object *o) override;
   void signalRemoveAllObjects() override;
   void signalInvalidateCachedObjects() override;
-  void signalAnimationTimeChanged(float time) override;
+  void signalAnimationTimeChanged(float time) override {}  // No-op for RenderIndex
 
  protected:
   virtual void updateWorld() = 0;

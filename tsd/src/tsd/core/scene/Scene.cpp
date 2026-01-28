@@ -107,44 +107,6 @@ void Scene::setMpiRankInfo(int rank, int numRanks)
   m_mpi.numRanks = numRanks;
 }
 
-Object *Scene::createObject(anari::DataType type, Token subtype)
-{
-  Object *obj = nullptr;
-
-  switch (type) {
-  case ANARI_SURFACE:
-    obj = createObjectImpl(m_db.surface).data();
-    break;
-  case ANARI_GEOMETRY:
-    obj = createObjectImpl(m_db.geometry, subtype).data();
-    break;
-  case ANARI_MATERIAL:
-    obj = createObjectImpl(m_db.material, subtype).data();
-    break;
-  case ANARI_SAMPLER:
-    obj = createObjectImpl(m_db.sampler, subtype).data();
-    break;
-  case ANARI_VOLUME:
-    obj = createObjectImpl(m_db.volume, subtype).data();
-    break;
-  case ANARI_SPATIAL_FIELD:
-    obj = createObjectImpl(m_db.field, subtype).data();
-    break;
-  case ANARI_LIGHT:
-    obj = createObjectImpl(m_db.light, subtype).data();
-    break;
-  case ANARI_CAMERA:
-    obj = createObjectImpl(m_db.camera, subtype).data();
-    break;
-  default:
-    logError("[Scene::createObject(type, subtype)] unsupported object type %s",
-        anari::toString(type));
-    break;
-  }
-
-  return obj;
-}
-
 ArrayRef Scene::createArray(
     anari::DataType type, size_t items0, size_t items1, size_t items2)
 {
@@ -155,13 +117,6 @@ ArrayRef Scene::createArrayCUDA(
     anari::DataType type, size_t items0, size_t items1, size_t items2)
 {
   return createArrayImpl(type, items0, items1, items2, Array::MemoryKind::CUDA);
-}
-
-ArrayRef Scene::createArrayProxy(
-    anari::DataType type, size_t items0, size_t items1, size_t items2)
-{
-  return createArrayImpl(
-      type, items0, items1, items2, Array::MemoryKind::PROXY);
 }
 
 SurfaceRef Scene::createSurface(const char *name, GeometryRef g, MaterialRef m)
@@ -400,15 +355,6 @@ Layer *Scene::addLayer(Token name)
   return ls.ptr.get();
 }
 
-Token Scene::getLayerName(const Layer *layer) const
-{
-  for (size_t i = 0; i < m_layers.size(); i++) {
-    if (m_layers.at_index(i).second.ptr.get() == layer)
-      return m_layers.at_index(i).first;
-  }
-  return {};
-}
-
 bool Scene::layerIsActive(Token name) const
 {
   auto *ls = m_layers.at(name);
@@ -485,16 +431,6 @@ void Scene::removeLayer(const Layer *layer)
       return;
     }
   }
-}
-
-void Scene::removeAllLayers()
-{
-  for (auto itr = m_layers.begin(); itr != m_layers.end(); itr++) {
-    if (m_updateDelegate)
-      m_updateDelegate->signalLayerRemoved(itr->second.ptr.get());
-  }
-
-  m_layers.clear();
 }
 
 LayerNodeRef Scene::insertChildNode(LayerNodeRef parent, const char *name)
@@ -840,6 +776,16 @@ void Scene::cleanupScene()
 {
   removeUnusedObjects();
   defragmentObjectStorage();
+}
+
+void Scene::removeAllLayers()
+{
+  for (auto itr = m_layers.begin(); itr != m_layers.end(); itr++) {
+    if (m_updateDelegate)
+      m_updateDelegate->signalLayerRemoved(itr->second.ptr.get());
+  }
+
+  m_layers.clear();
 }
 
 ArrayRef Scene::createArrayImpl(anari::DataType type,
