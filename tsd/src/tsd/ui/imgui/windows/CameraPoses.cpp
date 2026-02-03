@@ -513,6 +513,9 @@ void CameraPoses::renderInterpolatedPath()
         // Render interpolated frames
         int frameIndex = 0;
         tsd::rendering::Manipulator manipulator;
+        
+        // Store original scene animation time to restore later
+        float originalTime = scene.getAnimationTime();
 
         for (const auto &pose : samplesCopy) {
           if (m_cancelRequested) {
@@ -524,6 +527,14 @@ void CameraPoses::renderInterpolatedPath()
           }
 
           m_currentFrame = frameIndex;
+          
+          // Update scene animation time for animated fields (clouds, aurora)
+          // Map frameIndex to 0.0-1.0 range over the entire animation
+          float time = capturedTotalFrames > 1 
+              ? static_cast<float>(frameIndex) / (capturedTotalFrames - 1)
+              : 0.0f;
+          scene.setAnimationTime(time);
+          
           manipulator.setConfig(pose);
           tsd::rendering::updateCameraParametersPerspective(d, c, manipulator);
           anari::commitParameters(d, c);
@@ -554,6 +565,7 @@ void CameraPoses::renderInterpolatedPath()
         }
 
         // Cleanup
+        scene.setAnimationTime(originalTime); // Restore original animation time
         pipeline.reset();
         core->anari.releaseRenderIndex(d);
         anari::release(d, c);
