@@ -190,6 +190,8 @@ set(SOURCES
   spatial_field/StructuredRectilinearSampler.cpp
   spatial_field/StructuredRegularSampler.cpp
   spatial_field/space_skipping/UniformGrid.cu
+  spatial_field/CustomFieldSampler.cpp
+  spatial_field/RegisterCustomFields.cpp
 
   surface/Surface.cpp
 
@@ -370,6 +372,7 @@ GenerateEmbeddedPTX(spatial_field NvdbRegularSampler)
 GenerateEmbeddedPTX(spatial_field NvdbRectilinearSampler)
 GenerateEmbeddedPTX(spatial_field StructuredRegularSampler)
 GenerateEmbeddedPTX(spatial_field StructuredRectilinearSampler)
+GenerateEmbeddedPTX(spatial_field CustomFieldSampler)
 if(VISRTX_ENABLE_MDL_SUPPORT)
   GenerateEmbeddedPTX(material/shaders MDLShader ENTRIES __direct__callable__evalSurfaceMaterial)
   GenerateEmbeddedPTX(material/shaders MDLTexture)

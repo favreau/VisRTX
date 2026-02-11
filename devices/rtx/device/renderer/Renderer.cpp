@@ -714,6 +714,22 @@ void Renderer::initOptixPipeline()
     callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FLOAT_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
 
+    // Custom field sampler (from devices/visrtx)
+    // A single callable pair handles all custom field subtypes via type
+    // dispatch
+    samplerDesc.callables.moduleDC = state.fieldSamplers.customField;
+
+    constexpr auto SBT_CALLABLE_CUSTOM_OFFSET =
+        int(SbtCallableEntryPoints::SpatialFieldSamplerCustom);
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__initCustomSampler";
+    callableDescs[SBT_CALLABLE_CUSTOM_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Init)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleCustom";
+    callableDescs[SBT_CALLABLE_CUSTOM_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+
 #ifdef USE_MDL
     if (state.mdl) {
       for (const auto &ptxBlob : state.mdl->materialRegistry.getPtxBlobs()) {

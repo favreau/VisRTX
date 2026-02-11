@@ -27,6 +27,13 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-add_subdirectory(fmtlib)
-add_subdirectory(nonstd)
-add_subdirectory(stb_image)
+# Guard against duplicate targets when building alongside TSD
+if(NOT TARGET fmt)
+  add_subdirectory(fmtlib)
+endif()
+if(NOT TARGET nonstd)
+  add_subdirectory(nonstd)
+endif()
+if(NOT TARGET stb_image)
+  add_subdirectory(stb_image)
+endif()

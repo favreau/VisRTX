@@ -86,8 +86,11 @@ enum class SbtCallableEntryPoints : uint32_t
   SpatialFieldSamplerNvdbRectilinearFloat =
       SpatialFieldSamplerNvdbRectilinearFpN
       + int(SpatialFieldSamplerEntryPoints::Count),
-  Last = SpatialFieldSamplerNvdbRectilinearFloat
+  // Generic custom field sampler - dispatches to specific types at runtime
+  // based on CustomFieldType in the field data
+  SpatialFieldSamplerCustom = SpatialFieldSamplerNvdbRectilinearFloat
       + int(SpatialFieldSamplerEntryPoints::Count),
+  Last = SpatialFieldSamplerCustom + int(SpatialFieldSamplerEntryPoints::Count),
 };
 
 } // namespace visrtx

@@ -48,6 +48,18 @@ struct Image3D : public Sampler
 
   int numChannels() const override;
 
+  // Public accessors for texture object and size (used by custom fields)
+  cudaTextureObject_t textureObject() const
+  {
+    return m_texture;
+  }
+  uvec3 imageSize() const;
+
+  Array3D *image() const
+  {
+    return m_image.get();
+  }
+
  private:
   SamplerGPUData gpuData() const override;
 

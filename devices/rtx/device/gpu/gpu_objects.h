@@ -456,6 +456,18 @@ struct NVdbRectilinearData
   NVdbRectilinearData() = default;
 };
 
+struct CustomFieldData
+{
+  CustomFieldData() = default;
+  uint32_t subType;
+
+  // Generic storage for field-specific data
+  // External projects can use this to store
+  // their custom field parameters and reinterpret_cast as needed
+  // Aligned to 8 bytes to support cudaTextureObject_t and other 64-bit types
+  alignas(8) uint8_t fieldData[256];
+};
+
 struct SpatialFieldGPUData
 {
   SbtCallableEntryPoints samplerCallableIndex{SbtCallableEntryPoints::Invalid};
@@ -465,6 +477,7 @@ struct SpatialFieldGPUData
     NVdbRegularData nvdbRegular;
     StructuredRectilinearData structuredRectilinear;
     NVdbRectilinearData nvdbRectilinear;
+    CustomFieldData custom;
   } data;
   UniformGridData grid;
   box3 roi;
