@@ -36,8 +36,8 @@ struct CameraPoses : public Window
   float m_turntableDistance{1.f};
 
   bool m_updateViewport{true}; // Update viewport during rendering
-  bool m_isRendering{false};
-  bool m_cancelRequested{false};
+  std::atomic<bool> m_isRendering{false};
+  std::atomic<bool> m_cancelRequested{false};
   std::future<void> m_renderFuture;
   tsd::core::Timer m_renderTimer;
   int m_currentFrame{0};

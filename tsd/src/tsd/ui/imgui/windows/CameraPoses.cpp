@@ -236,16 +236,40 @@ void CameraPoses::buildUI_interpolationControls()
 
   ImGui::Separator();
 
+  // Determine rendering mode from selected offline device
+  const auto &offlineLib = appCore()->offline.renderer.libraryName;
+  const bool isSyncBackend =
+      (offlineLib.find("barney") != std::string::npos);
+
   // Renderer configuration notice
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
   ImGui::TextWrapped(
       "Note: Rendering uses Offline Render Settings. "
-      "To change output folder, file prefix, and renderer: File / App Settings / Offline Render Settings");
+      "To change output folder, file prefix, and renderer: "
+      "File / App Settings / Offline Render Settings");
   ImGui::PopStyleColor();
+
+  // Show rendering mode based on the selected device
+  if (!offlineLib.empty()) {
+    if (isSyncBackend) {
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.3f, 1.0f));
+      ImGui::TextWrapped(
+          "Device '%s': synchronous rendering (UI will be blocked, "
+          "press ESC to cancel)",
+          offlineLib.c_str());
+      ImGui::PopStyleColor();
+    } else {
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.9f, 0.4f, 1.0f));
+      ImGui::TextWrapped(
+          "Device '%s': asynchronous rendering",
+          offlineLib.c_str());
+      ImGui::PopStyleColor();
+    }
+  }
 
   // Render or Cancel button
   if (!m_isRendering) {
-    ImGui::BeginDisabled(!hasPoses); // Only disable render button if no poses
+    ImGui::BeginDisabled(!hasPoses);
     if (ImGui::Button("Render")) {
       m_cancelRequested = false;
       renderInterpolatedPath();
@@ -265,31 +289,27 @@ void CameraPoses::buildUI_interpolationControls()
           pathSettings.framesPerSecond);
     }
   } else {
-    // Cancel button is always enabled during rendering
     if (ImGui::Button("Cancel")) {
       m_cancelRequested = true;
       tsd::core::logStatus("[CameraPoses] Cancellation requested...");
     }
     if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Cancel the current rendering");
+      ImGui::SetTooltip(isSyncBackend
+          ? "Press ESC to cancel (UI is blocked during sync rendering)"
+          : "Cancel the current rendering");
     }
   }
 
-  // Show rendering progress
+  // Show rendering progress (live in async mode; not visible in sync mode)
   if (m_isRendering) {
-    // Update timer
     m_renderTimer.end();
 
-    // Since rendering is now synchronous, this code path won't be reached
-    // until rendering is complete. Progress updates happen within the render loop.
-    // Calculate progress
     float progress = 0.0f;
     if (m_totalFrames > 0) {
       progress = static_cast<float>(m_currentFrame)
           / static_cast<float>(m_totalFrames);
     }
 
-    // Show progress bar with percentage
     char progressText[64];
     snprintf(progressText,
         sizeof(progressText),
@@ -298,6 +318,9 @@ void CameraPoses::buildUI_interpolationControls()
         m_totalFrames,
         progress * 100.0f);
     ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f), progressText);
+
+    // Elapsed time
+    ImGui::Text("Elapsed: %.1f s", m_renderTimer.seconds());
   }
 
   ImGui::Unindent(INDENT_AMOUNT);
@@ -397,11 +420,13 @@ void CameraPoses::renderInterpolatedPath()
   // Calculate total frames for capture
   const int capturedTotalFrames = m_totalFrames;
 
-  // Execute rendering synchronously in main thread
-  // NOTE: This WILL block the UI during rendering, but it's safer than
-  // creating separate ANARI devices from different threads, which causes
-  // OptiX crashes. For async rendering with UI updates, a more complex
-  // solution would be needed (e.g., frame-by-frame execution with event loop).
+  // Determine if the renderer supports asynchronous rendering.
+  // Some backends (e.g. barney) cannot safely create ANARI devices from
+  // background threads, so we fall back to synchronous (UI-blocking) rendering.
+  const auto &libraryName = core->offline.renderer.libraryName;
+  const bool forceSync =
+      (libraryName.find("barney") != std::string::npos);
+
   auto renderTask = [this,
       core,
       samplesCopy,
@@ -594,19 +619,40 @@ void CameraPoses::renderInterpolatedPath()
         anari::release(d, d);
       };
   
-  // Execute the rendering task synchronously
-  renderTask();
-  
-  // Mark rendering as complete
-  m_isRendering = false;
-  m_renderTimer.end();
-  
-  if (m_cancelRequested) {
-    tsd::core::logStatus("[CameraPoses] Rendering cancelled (%.2f seconds)",
-        m_renderTimer.seconds());
+  if (forceSync) {
+    // Synchronous: blocks UI but required for backends like barney
+    tsd::core::logStatus(
+        "[CameraPoses] Using synchronous rendering (backend: '%s')",
+        libraryName.c_str());
+    renderTask();
+    m_isRendering = false;
+    m_renderTimer.end();
+    if (m_cancelRequested) {
+      tsd::core::logStatus("[CameraPoses] Rendering cancelled (%.2f seconds)",
+          m_renderTimer.seconds());
+    } else {
+      tsd::core::logStatus("[CameraPoses] Rendering complete (%.2f seconds)",
+          m_renderTimer.seconds());
+    }
   } else {
-    tsd::core::logStatus("[CameraPoses] Rendering complete (%.2f seconds)",
-        m_renderTimer.seconds());
+    // Asynchronous: UI stays responsive, progress bar updates live
+    tsd::core::logStatus(
+        "[CameraPoses] Using asynchronous rendering (backend: '%s')",
+        libraryName.c_str());
+    m_renderFuture = std::async(std::launch::async, [this, renderTask]() {
+      renderTask();
+      m_isRendering = false;
+      m_renderTimer.end();
+      if (m_cancelRequested) {
+        tsd::core::logStatus(
+            "[CameraPoses] Rendering cancelled (%.2f seconds)",
+            m_renderTimer.seconds());
+      } else {
+        tsd::core::logStatus(
+            "[CameraPoses] Rendering complete (%.2f seconds)",
+            m_renderTimer.seconds());
+      }
+    });
   }
 }
 
