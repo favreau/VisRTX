@@ -173,10 +173,4 @@ void RenderIndex::signalInvalidateCachedObjects()
   populate(false); // always 'false' as this may already be the delegate
   updateWorld();
 }
-
-void RenderIndex::signalAnimationTimeChanged(float)
-{
-  // no-op
-}
-
 } // namespace tsd::rendering

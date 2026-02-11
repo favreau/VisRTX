@@ -149,6 +149,7 @@ struct StructuredRectilinearSamplerState
   cudaTextureObject_t axisLUT[3];
   vec3 axisBoundsMin;
   vec3 axisBoundsMax;
+  vec3 invAvgVoxelSpacing;
 };
 
 // NanoVDB Sampler States
@@ -157,16 +158,22 @@ struct NvdbRegularSamplerState
 {
   using GridType = nanovdb::Grid<nanovdb::NanoTree<T>>;
   using AccessorType = typename GridType::AccessorType;
-  using SamplerType = nanovdb::math::SampleFromVoxels<AccessorType, 1>;
+  using NearestSamplerType = nanovdb::math::SampleFromVoxels<AccessorType, 0>;
+  using LinearSamplerType = nanovdb::math::SampleFromVoxels<AccessorType, 1>;
 
   const GridType *grid;
   AccessorType accessor;
-  SamplerType sampler;
+  union
+  {
+    NearestSamplerType nearestSampler;
+    LinearSamplerType linearSampler;
+  };
   nanovdb::Vec3f offsetDown;
   nanovdb::Vec3f offsetUp;
   nanovdb::Vec3f scale;
   nanovdb::Vec3f indexMin;
   nanovdb::Vec3f indexMax;
+  SpatialFieldFilter filter;
 };
 
 // NanoVDB Rectilinear Sampler States
@@ -175,11 +182,16 @@ struct NvdbRectilinearSamplerState
 {
   using GridType = nanovdb::Grid<nanovdb::NanoTree<T>>;
   using AccessorType = typename GridType::AccessorType;
-  using SamplerType = nanovdb::math::SampleFromVoxels<AccessorType, 1>;
+  using NearestSamplerType = nanovdb::math::SampleFromVoxels<AccessorType, 0>;
+  using LinearSamplerType = nanovdb::math::SampleFromVoxels<AccessorType, 1>;
 
   const GridType *grid;
   AccessorType accessor;
-  SamplerType sampler;
+  union
+  {
+    NearestSamplerType nearestSampler;
+    LinearSamplerType linearSampler;
+  };
   nanovdb::Vec3f offsetDown;
   nanovdb::Vec3f offsetUp;
   nanovdb::Vec3f scaleDown;
@@ -187,6 +199,8 @@ struct NvdbRectilinearSamplerState
   nanovdb::Vec3f indexMin;
   nanovdb::Vec3f indexMax;
   cudaTextureObject_t axisLUT[3];
+  nanovdb::Vec3f invAvgVoxelSize;
+  SpatialFieldFilter filter;
 };
 
 struct VolumeSamplingState

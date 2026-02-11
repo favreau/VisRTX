@@ -416,11 +416,18 @@ struct StructuredRegularData
   StructuredRegularData() = default;
 };
 
+enum class SpatialFieldFilter : uint8_t
+{
+  Nearest = 0,
+  Linear = 1
+};
+
 struct NVdbRegularData
 {
   nanovdb::GridType gridType;
   const void *gridData;
   bool cellCentered;
+  SpatialFieldFilter filter;
 
   NVdbRegularData() = default;
 };
@@ -442,7 +449,9 @@ struct NVdbRectilinearData
   nanovdb::GridType gridType;
   const void *gridData;
   bool cellCentered;
+  SpatialFieldFilter filter;
   cudaTextureObject_t axisLUT[3];
+  vec3 invAvgVoxelSize;
 
   NVdbRectilinearData() = default;
 };
