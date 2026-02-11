@@ -48,7 +48,7 @@ struct Image2D : public Sampler
 
   int numChannels() const override;
   
-  // Public accessor for texture object (used by analytical fields)
+  // Public accessor for texture object (used by analytical/custom fields)
   cudaTextureObject_t textureObject() const { return m_texture; }
 
  private:
