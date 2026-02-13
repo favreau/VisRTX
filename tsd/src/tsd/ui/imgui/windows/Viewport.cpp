@@ -1190,6 +1190,28 @@ void Viewport::ui_menubar()
 
       ImGui::Separator();
 
+      // AI Upscaling (OptiX 2x) //
+      {
+        if (ImGui::Checkbox("AI Upscale 2x", &m_enableUpscaling)) {
+          if (m_anariPass) {
+            auto d = m_anariPass->getDevice();
+            auto f = m_anariPass->getFrame();
+            int val = m_enableUpscaling ? 1 : 0;
+            anari::setParameter(d, f, "enableUpscaling", val);
+            anari::commitParameters(d, f);
+          }
+        }
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetTooltip(
+              "Render at half resolution and use OptiX AI\n"
+              "to upscale 2x to display resolution.\n"
+              "Improves interactive performance with\n"
+              "minimal quality loss (requires NVIDIA RTX).");
+        }
+      }
+
+      ImGui::Separator();
+
       const char *aovItems[] = {"default",
           "depth",
           "albedo",

@@ -181,6 +181,9 @@ struct Viewport : public Window
   tsd::math::int2 m_renderSize{0, 0};
   float m_resolutionScale{1.f};
 
+  // AI upscaling (OptiX UPSCALE2X)
+  bool m_enableUpscaling{false};
+
   float m_latestFL{0.f};
   float m_latestAnariFL{0.f};
   float m_minFL{std::numeric_limits<float>::max()};
