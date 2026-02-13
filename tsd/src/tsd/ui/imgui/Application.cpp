@@ -24,16 +24,10 @@ namespace tsd::ui::imgui {
 
 Application::Application(int argc, const char **argv)
 {
+  std::vector<std::string> args(argv, argv + argc);
   auto *core = appCore();
-  core->parseCommandLine(argc, argv);
-
-  if (core->commandLine.preloadDevices) {
-    printf("[TSD] pre-loading all ANARI devices...");
-    for (auto l : core->commandLine.libraryList)
-      core->anari.loadDevice(l);
-    printf("done\n");
-  }
-
+  parseCommandLine(args);
+  core->parseCommandLine(args);
   if (!core->commandLine.stateFile.empty())
     m_filenameToLoadNextFrame = core->commandLine.stateFile;
 }
@@ -43,6 +37,16 @@ Application::~Application() = default;
 tsd::app::Core *Application::appCore()
 {
   return &m_core;
+}
+
+UIConfig *Application::uiConfig()
+{
+  return &m_uiConfig;
+}
+
+CommandLineOptions *Application::commandLineOptions()
+{
+  return &m_commandLine;
 }
 
 void Application::getFilenameFromDialog(std::string &filenameOut, bool save)
@@ -73,6 +77,33 @@ void Application::getFilenameFromDialog(std::string &filenameOut, bool save)
   }
 }
 
+void Application::showImportFileDialog()
+{
+  m_fileDialog->show();
+}
+
+void Application::showExportNanoVDBFileDialog()
+{
+  m_exportNanoVDBFileDialog->show();
+}
+
+void Application::parseCommandLine(std::vector<std::string> &args)
+{
+  for (int i = 1; i < args.size(); i++) {
+    std::string arg = std::move(args[i]); // consume arguments
+    if (arg.empty())
+      continue;
+    if (arg == "--noDefaultLayout")
+      m_commandLine.useDefaultLayout = false;
+    else if (arg == "--secondaryView" || arg == "-sv")
+      m_commandLine.secondaryViewportLibrary = std::move(args[++i]);
+    else if (arg == "--noDefaultRenderer")
+      m_commandLine.useDefaultRenderer = false;
+    else
+      args[i] = std::move(arg); // move back unconsumed arguments
+  }
+}
+
 anari_viewer::WindowArray Application::setupWindows()
 {
   anari_viewer::ui::init();
@@ -84,7 +115,7 @@ anari_viewer::WindowArray Application::setupWindows()
   io.Fonts->ConfigData[0].FontDataOwnedByAtlas = false;
   io.FontDefault = font;
 
-  if (appCore()->commandLine.useDefaultLayout)
+  if (commandLineOptions()->useDefaultLayout)
     ImGui::LoadIniSettingsFromMemory(getDefaultLayout());
 
   m_appSettingsDialog = std::make_unique<AppSettingsDialog>(this);
@@ -92,10 +123,6 @@ anari_viewer::WindowArray Application::setupWindows()
   m_offlineRenderModal = std::make_unique<OfflineRenderModal>(this);
   m_fileDialog = std::make_unique<ImportFileDialog>(this);
   m_exportNanoVDBFileDialog = std::make_unique<ExportNanoVDBFileDialog>(this);
-
-  m_core.windows.taskModal = m_taskModal.get();
-  m_core.windows.importDialog = m_fileDialog.get();
-  m_core.windows.exportNanoVDBDialog = m_exportNanoVDBFileDialog.get();
 
   m_applicationName = SDL_GetWindowTitle(sdlWindow());
   updateWindowTitle();
@@ -344,10 +371,10 @@ void Application::saveApplicationState(const char *_filename)
 
     // General application settings
     auto &settings = root["settings"];
-    settings["logVerbose"] = core.logging.verbose;
-    settings["logEchoOutput"] = core.logging.echoOutput;
-    settings["fontScale"] = core.windows.fontScale;
-    settings["uiRounding"] = core.windows.uiRounding;
+    settings["logVerbose"] = core.logVerbose();
+    settings["logEchoOutput"] = core.logEchoOutput();
+    settings["fontScale"] = m_uiConfig.fontScale;
+    settings["uiRounding"] = m_uiConfig.rounding;
 
     // Camera poses
     auto &cameraPoses = root["cameraPoses"];
@@ -372,7 +399,7 @@ void Application::saveApplicationState(const char *_filename)
     updateWindowTitle();
   };
 
-  m_taskModal->activate(doSave, "Please Wait: Saving Session...");
+  showTaskModal(doSave, "Please Wait: Saving Session...");
 }
 
 void Application::loadApplicationState(const char *filename)
@@ -406,10 +433,16 @@ void Application::loadApplicationState(const char *filename)
   // General application settings
   if (auto *c = root.child("settings"); c != nullptr) {
     auto &settings = *c;
-    settings["logVerbose"].getValue(ANARI_BOOL, &core.logging.verbose);
-    settings["logEchoOutput"].getValue(ANARI_BOOL, &core.logging.echoOutput);
-    settings["fontScale"].getValue(ANARI_FLOAT32, &core.windows.fontScale);
-    settings["uiRounding"].getValue(ANARI_FLOAT32, &core.windows.uiRounding);
+
+    bool logVerbose = core.logVerbose();
+    settings["logVerbose"].getValue(ANARI_BOOL, &logVerbose);
+    core.setLogVerbose(logVerbose);
+    bool logEchoOutput = core.logEchoOutput();
+    settings["logEchoOutput"].getValue(ANARI_BOOL, &logEchoOutput);
+    core.setLogEchoOutput(logEchoOutput);
+
+    settings["fontScale"].getValue(ANARI_FLOAT32, &m_uiConfig.fontScale);
+    settings["uiRounding"].getValue(ANARI_FLOAT32, &m_uiConfig.rounding);
   }
 
   core.view.poses.clear();
