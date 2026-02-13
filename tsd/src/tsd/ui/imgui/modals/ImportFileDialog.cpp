@@ -8,6 +8,8 @@
 #include <SDL3/SDL_dialog.h>
 // tsd_io
 #include "tsd/io/importers.hpp"
+// tsd_core
+#include "tsd/core/Logging.hpp"
 
 namespace tsd::ui::imgui {
 
@@ -99,18 +101,13 @@ void ImportFileDialog::buildUI()
       auto importRoot = core->getFirstSelected();
       if (!importRoot.valid())
         importRoot = layer->root();
-      app::ImportFile file{
-          static_cast<app::ImporterType>(m_selectedFileType), m_filename};
-      core->importFile(file, importRoot);
+      tsd::io::ImportFile file{
+          static_cast<tsd::io::ImporterType>(m_selectedFileType), m_filename};
+      tsd::io::import_file(scene, file, importRoot);
       scene.signalLayerChange(layer);
     };
 
-    if (!appCore()->windows.taskModal)
-      doLoad();
-    else {
-      appCore()->windows.taskModal->activate(
-          doLoad, "Please Wait: Importing Data...");
-    }
+    m_app->showTaskModal(doLoad, "Please Wait: Importing Data...");
   }
 }
 

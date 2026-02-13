@@ -3,6 +3,7 @@
 
 #include "AppSettingsDialog.h"
 // tsd_ui
+#include "tsd/ui/imgui/Application.h"
 #include "tsd/ui/imgui/tsd_ui_imgui.h"
 
 namespace tsd::ui::imgui {
@@ -11,8 +12,9 @@ AppSettingsDialog::AppSettingsDialog(Application *app)
     : Modal(app, "AppSettings")
 {
   auto *core = appCore();
+  const auto &libraryList = core->anari.libraryList();
   if (core->offline.renderer.activeRenderer < 0)
-    core->setOfflineRenderingLibrary(core->commandLine.libraryList[0]);
+    core->setOfflineRenderingLibrary(libraryList[0]);
 }
 
 void AppSettingsDialog::buildUI()
@@ -29,18 +31,18 @@ void AppSettingsDialog::buildUI()
 
 void AppSettingsDialog::applySettings()
 {
-  auto *core = appCore();
+  const auto *config = m_app->uiConfig();
 
   ImGuiIO &io = ImGui::GetIO();
-  io.FontGlobalScale = core->windows.fontScale;
+  io.FontGlobalScale = config->fontScale;
 
   ImGuiStyle &style = ImGui::GetStyle();
-  style.WindowRounding = core->windows.uiRounding;
-  style.ChildRounding = core->windows.uiRounding;
-  style.FrameRounding = core->windows.uiRounding;
-  style.ScrollbarRounding = core->windows.uiRounding;
-  style.GrabRounding = core->windows.uiRounding;
-  style.PopupRounding = core->windows.uiRounding;
+  style.WindowRounding = config->rounding;
+  style.ChildRounding = config->rounding;
+  style.FrameRounding = config->rounding;
+  style.ScrollbarRounding = config->rounding;
+  style.GrabRounding = config->rounding;
+  style.PopupRounding = config->rounding;
 }
 
 void AppSettingsDialog::buildUI_applicationSettings()
@@ -52,11 +54,12 @@ void AppSettingsDialog::buildUI_applicationSettings()
 
   bool doUpdate = false;
 
-  doUpdate |=
-      ImGui::DragFloat("font size", &core->windows.fontScale, 0.01f, 0.5f, 4.f);
+  auto *config = m_app->uiConfig();
 
   doUpdate |=
-      ImGui::DragFloat("rounding", &core->windows.uiRounding, 0.01f, 0.f, 12.f);
+      ImGui::DragFloat("font size", &config->fontScale, 0.01f, 0.5f, 4.f);
+
+  doUpdate |= ImGui::DragFloat("rounding", &config->rounding, 0.01f, 0.f, 12.f);
 
   bool useFlat = core->anari.useFlatRenderIndex();
   if (ImGui::Checkbox("use flat render index", &useFlat))
@@ -234,10 +237,11 @@ void AppSettingsDialog::buildUI_offlineRenderSettings()
   }
 
   ImGui::SameLine();
+  const auto &libraryList = appCore()->anari.libraryList();
   if (ImGui::BeginCombo("##library_combo", "", ImGuiComboFlags_NoPreview)) {
-    for (size_t n = 0; n < core->commandLine.libraryList.size(); n++) {
-      if (ImGui::Selectable(core->commandLine.libraryList[n].c_str(), false))
-        core->setOfflineRenderingLibrary(core->commandLine.libraryList[n]);
+    for (size_t n = 0; n < libraryList.size(); n++) {
+      if (ImGui::Selectable(libraryList[n].c_str(), false))
+        core->setOfflineRenderingLibrary(libraryList[n]);
     }
     ImGui::EndCombo();
   }

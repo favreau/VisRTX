@@ -9,21 +9,13 @@
 // tsd_rendering
 #include "tsd/rendering/index/RenderIndex.hpp"
 #include "tsd/rendering/pipeline/passes/VisualizeAOVPass.h"
-#include "tsd/rendering/view/Manipulator.hpp"
-// std
-#include <map>
-#include <string>
-#include <utility>
-
-#include "tsd/app/TaskQueue.h"
-#include "tsd/app/renderAnimationSequence.h"
 #include "tsd/rendering/view/CameraPath.h"
+#include "tsd/rendering/view/Manipulator.hpp"
+// tsd_io
+#include "tsd/io/importers.hpp"
 
-namespace tsd::ui::imgui {
-struct BlockingTaskModal;
-struct ImportFileDialog;
-struct ExportNanoVDBFileDialog;
-} // namespace tsd::ui::imgui
+#include "tsd/app/ANARIDeviceManager.h"
+#include "tsd/app/renderAnimationSequence.h"
 
 namespace tsd::core {
 struct Animation;
@@ -31,64 +23,18 @@ struct Animation;
 
 namespace tsd::app {
 
-struct Core;
-
 using CameraPose = tsd::rendering::CameraPose;
-using DeviceInitParam = std::pair<std::string, tsd::core::Any>;
-
-enum class ImporterType
-{
-  AGX,
-  ASSIMP,
-  ASSIMP_FLAT,
-  AXYZ,
-  DLAF,
-  E57XYZ,
-  GLTF,
-  HDRI,
-  HSMESH,
-  NBODY,
-  OBJ,
-  PDB,
-  PLY,
-  POINTSBIN_MULTIFILE,
-  PT,
-  SILO,
-  SMESH,
-  SMESH_ANIMATION, // time series version
-  SWC,
-  TRK,
-  USD,
-  USD2,
-  XYZDP,
-  VOLUME,
-  TSD,
-  XF, // Special case for transfer function files
-      // Not an actual scene importer, but used to set transfer function from
-      // CLI
-  BLANK, // Must be last import type before 'NONE'
-  NONE
-};
-
-using ImportFile = std::pair<ImporterType, std::string>;
-using ImportAnimationFiles = std::pair<ImporterType, std::vector<std::string>>;
 
 struct CommandLineOptions
 {
-  bool useDefaultLayout{true};
-  bool useDefaultRenderer{true};
-  bool loadingScene{false};
-  bool preloadDevices{false};
   bool loadedFromStateFile{false};
   std::string stateFile;
   std::string currentLayerName{"default"};
-  std::vector<ImportFile> filenames;
-  std::vector<ImportAnimationFiles> animationFilenames;
+  std::vector<tsd::io::ImportFile> filenames;
+  std::vector<tsd::io::ImportAnimationFiles> animationFilenames;
   std::vector<tsd::core::Token> animationLayerNames;
-  ImportAnimationFiles *currentAnimationSequence{nullptr};
-  ImporterType importerType{ImporterType::NONE};
-  std::vector<std::string> libraryList;
-  std::string secondaryViewportLibrary;
+  tsd::io::ImportAnimationFiles *currentAnimationSequence{nullptr};
+  tsd::io::ImporterType importerType{tsd::io::ImporterType::NONE};
   std::string cameraFile;
 };
 
@@ -106,56 +52,6 @@ struct TSDState
   StashedSelection stashedSelection;
 };
 
-struct ANARIDeviceManager
-{
-  ANARIDeviceManager(const bool *verboseFlag = nullptr);
-
-  anari::Device loadDevice(const std::string &libName,
-      const std::vector<DeviceInitParam> &initialDeviceParams = {});
-
-  const anari::Extensions *loadDeviceExtensions(const std::string &libName);
-  tsd::rendering::RenderIndex *acquireRenderIndex(
-      tsd::core::Scene &c, anari::Device device);
-  void releaseRenderIndex(anari::Device device);
-  void releaseAllDevices();
-  tsd::core::MultiUpdateDelegate &getUpdateDelegate();
-
-  void setUseFlatRenderIndex(
-      bool f); // next acquireRenderIndex(...) will use flat render index
-  bool useFlatRenderIndex() const;
-
-  void saveSettings(tsd::core::DataNode &root);
-  void loadSettings(tsd::core::DataNode &root);
-
- private:
-  const bool *m_verboseFlag{nullptr};
-  struct LiveAnariIndex
-  {
-    int refCount{0};
-    tsd::rendering::RenderIndex *idx{nullptr};
-  };
-  std::map<anari::Device, LiveAnariIndex> m_rIdxs;
-  tsd::core::MultiUpdateDelegate m_delegate;
-  std::map<std::string, anari::Device> m_loadedDevices;
-  std::map<std::string, anari::Extensions> m_loadedDeviceExtensions;
-
-  // Settings //
-
-  struct Settings
-  {
-    // Use flat render index by default, unless set otherwise
-    // This is to avoid issues with instancing in the scene graph
-    // and to allow for faster rendering in some cases.
-    bool forceFlat{false};
-  } m_settings;
-};
-
-struct LogState
-{
-  bool verbose{false};
-  bool echoOutput{false};
-};
-
 struct CameraState
 {
   std::vector<CameraPose> poses;
@@ -163,11 +59,6 @@ struct CameraState
   tsd::rendering::CameraPathSettings pathSettings;
   size_t cameraPathCameraIndex{TSD_INVALID_INDEX};
   tsd::core::Animation *cameraPathAnimation{nullptr};
-};
-
-struct ImporterState
-{
-  core::TransferFunction transferFunction;
 };
 
 struct OfflineRenderSequenceConfig
@@ -218,31 +109,13 @@ struct OfflineRenderSequenceConfig
   void loadSettings(tsd::core::DataNode &root);
 };
 
-struct Windows
-{
-  tsd::ui::imgui::BlockingTaskModal *taskModal{nullptr};
-  tsd::ui::imgui::ImportFileDialog *importDialog{nullptr};
-  tsd::ui::imgui::ExportNanoVDBFileDialog *exportNanoVDBDialog{nullptr};
-  float fontScale{1.f};
-  float uiRounding{9.f};
-};
-
-struct Tasking
-{
-  TaskQueue queue{10};
-};
-
 struct Core
 {
   CommandLineOptions commandLine;
   TSDState tsd;
   ANARIDeviceManager anari;
-  LogState logging;
   CameraState view;
-  ImporterState importer;
   OfflineRenderSequenceConfig offline;
-  Windows windows;
-  Tasking jobs;
 
   /////////////////////////////////////////////////////////////////////////////
   /////////////////////////////////////////////////////////////////////////////
@@ -251,18 +124,22 @@ struct Core
   Core();
   ~Core();
 
-  void parseCommandLine(int argc, const char **argv);
+  // Command line parsing //
+
+  void parseCommandLine(int argc, const char **argv); // raw main() arguments
+  void parseCommandLine(std::vector<std::string> &args); // removes used args
   void setupSceneFromCommandLine(bool hdriOnly = false);
-  void importFile(const ImportFile &file, tsd::core::LayerNodeRef root = {});
-  void importFiles(
-      const std::vector<ImportFile> &files, tsd::core::LayerNodeRef root = {});
-  void importAnimations(const std::vector<ImportAnimationFiles> &files,
-      tsd::core::LayerNodeRef root = {});
+
+  // Logging //
+
+  bool logVerbose() const;
+  void setLogVerbose(bool v);
+  bool logEchoOutput() const;
+  void setLogEchoOutput(bool v);
 
   // Offline rendering //
 
   void setOfflineRenderingLibrary(const std::string &libName);
-  void renderOfflineAnimationSequence(RenderSequenceCallback cb = {});
 
   // Selection //
 
@@ -300,14 +177,13 @@ struct Core
   Core &operator=(const Core &) = delete;
   Core &operator=(Core &&) = delete;
   //////////////////////////////
-};
 
-void anariStatusFunc(const void *_core,
-    ANARIDevice device,
-    ANARIObject source,
-    ANARIDataType sourceType,
-    ANARIStatusSeverity severity,
-    ANARIStatusCode code,
-    const char *message);
+ private:
+  struct LogState
+  {
+    bool verbose{false};
+    bool echoOutput{false};
+  } m_logging;
+};
 
 } // namespace tsd::app
