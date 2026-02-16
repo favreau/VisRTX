@@ -5,6 +5,7 @@
 
 #include "Message.hpp"
 // std
+#include <cstdint>
 #include <future>
 #include <memory>
 #include <optional>
@@ -86,10 +87,10 @@ struct NetworkServer : public NetworkChannel
 struct NetworkClient : public NetworkChannel
 {
   NetworkClient() = default;
-  NetworkClient(const std::string &host, short port);
+  NetworkClient(const std::string &host, uint16_t port);
   ~NetworkClient() override = default;
 
-  void connect(const std::string &host, short port);
+  void connect(const std::string &host, uint16_t port);
   void disconnect();
 };
 

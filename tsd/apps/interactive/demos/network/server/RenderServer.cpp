@@ -27,7 +27,7 @@ RenderServer::RenderServer(int argc, const char **argv)
 
 RenderServer::~RenderServer() = default;
 
-void RenderServer::run(short port)
+void RenderServer::run(uint32_t port)
 {
   m_port = port;
 
