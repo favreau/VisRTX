@@ -12,6 +12,8 @@
 #include <tsd/io/serialization.hpp>
 // tsd_network
 #include <tsd/network/messages/TransferScene.hpp>
+// std
+#include <algorithm>
 
 #include "NetworkUpdateDelegate.hpp"
 #include "RemoteViewport.h"
@@ -39,7 +41,7 @@ struct Application : public TSDApplication
   tsd::ui::imgui::RemoteViewport *m_viewport{nullptr};
   std::shared_ptr<tsd::network::NetworkClient> m_client;
   std::string m_host{"127.0.0.1"};
-  short m_port{12345};
+  uint16_t m_port{49000};
 };
 
 // Application definitions ////////////////////////////////////////////////////
@@ -141,7 +143,7 @@ void Application::uiMainMenuBar()
 
       int port = m_port;
       if (ImGui::InputInt("Port", &port))
-        m_port = static_cast<short>(port);
+        m_port = static_cast<uint16_t>(std::clamp(port, 1, 65535));
 
       if (ImGui::Button("Connect"))
         connect();
