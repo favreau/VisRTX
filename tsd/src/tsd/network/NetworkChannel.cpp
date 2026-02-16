@@ -275,12 +275,12 @@ void NetworkServer::start_accept()
 
 // NetworkClient definitions //////////////////////////////////////////////////
 
-NetworkClient::NetworkClient(const std::string &host, short port)
+NetworkClient::NetworkClient(const std::string &host, uint16_t port)
 {
   connect(host, port);
 }
 
-void NetworkClient::connect(const std::string &host, short port)
+void NetworkClient::connect(const std::string &host, uint16_t port)
 {
   start_messaging();
   asio::ip::tcp::resolver resolver(m_io_context);

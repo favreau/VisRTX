@@ -23,7 +23,7 @@ struct RenderServer
   RenderServer(int argc, const char **argv);
   ~RenderServer();
 
-  void run(short port = 12345);
+  void run(uint32_t port = 12345);
 
  private:
   enum class ServerMode
