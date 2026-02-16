@@ -361,6 +361,15 @@ Layer *Scene::addLayer(Token name)
   return ls.ptr.get();
 }
 
+Token Scene::getLayerName(const Layer *layer) const
+{
+  for (size_t i = 0; i < m_layers.size(); i++) {
+    if (m_layers.at_index(i).second.ptr.get() == layer)
+      return m_layers.at_index(i).first;
+  }
+  return {};
+}
+
 bool Scene::layerIsActive(Token name) const
 {
   auto *ls = m_layers.at(name);
