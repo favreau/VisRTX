@@ -33,8 +33,10 @@
 
 // std
 #include <cstdlib>
+#ifdef USE_NVML
 // nvml
 #include <nvml.h>
+#endif
 
 #include <anari/frontend/anari_enums.h>
 #include <optix_types.h>
@@ -55,11 +57,10 @@
 // PTX //
 
 // renderers
-#include "renderer/AmbientOcclusion.h"
 #include "renderer/Debug.h"
-#include "renderer/DirectLight.h"
-#include "renderer/PathTracer.h"
-#include "renderer/Raycast.h"
+#include "renderer/Fast.h"
+#include "renderer/Interactive.h"
+#include "renderer/Quality.h"
 #include "renderer/Test.h"
 
 // materials
@@ -428,10 +429,9 @@ VisRTXDevice::~VisRTXDevice()
   CUDA_SYNC_CHECK();
 
   optixModuleDestroy(state.rendererModules.debug);
-  optixModuleDestroy(state.rendererModules.raycast);
-  optixModuleDestroy(state.rendererModules.ambientOcclusion);
-  optixModuleDestroy(state.rendererModules.pathTracer);
-  optixModuleDestroy(state.rendererModules.directLight);
+  optixModuleDestroy(state.rendererModules.fast);
+  optixModuleDestroy(state.rendererModules.quality);
+  optixModuleDestroy(state.rendererModules.interactive);
 #ifdef USE_MDL
   optixModuleDestroy(state.rendererModules.mdl);
 #endif // defined(USE_MDL)
@@ -613,6 +613,7 @@ DeviceInitStatus VisRTXDevice::initOptix()
         ANARI_SEVERITY_DEBUG, "VisRTX using CUDA %i.%i", major, minor);
   }
 
+#ifdef USE_NVML
   {
     char driverVersion[80]; // Buffer to store driver version
 
@@ -649,6 +650,7 @@ DeviceInitStatus VisRTXDevice::initOptix()
     }
     nvmlShutdown();
   }
+#endif
 
   OPTIX_CHECK_RETURN_VALUE(optixInit(), DeviceInitStatus::FAILURE);
   setCUDADevice();
@@ -764,17 +766,12 @@ DeviceInitStatus VisRTXDevice::initOptix()
   auto compileTasks = std::array{
       init_module(
           &state.rendererModules.debug, Debug::ptx(), "'debug' renderer"),
+      init_module(&state.rendererModules.fast, Fast::ptx(), "'fast' renderer"),
       init_module(
-          &state.rendererModules.raycast, Raycast::ptx(), "'raycast' renderer"),
-      init_module(&state.rendererModules.ambientOcclusion,
-          AmbientOcclusion::ptx(),
-          "'ao' renderer"),
-      init_module(&state.rendererModules.pathTracer,
-          PathTracer::ptx(),
-          "'pathTracer' renderer"),
-      init_module(&state.rendererModules.directLight,
-          DirectLight::ptx(),
-          "'default' renderer"),
+          &state.rendererModules.quality, Quality::ptx(), "'quality' renderer"),
+      init_module(&state.rendererModules.interactive,
+          Interactive::ptx(),
+          "'interactive' renderer"),
       init_module(&state.rendererModules.test, Test::ptx(), "'test' renderer"),
       init_module(&state.intersectionModules.customIntersectors,
           intersection_ptx(),

@@ -153,6 +153,8 @@ struct Scene
   LayerNodeRef insertChildTransformNode(LayerNodeRef parent,
       mat4 xfm = mat4(tsd::math::identity),
       const char *name = "");
+  LayerNodeRef insertChildTransformArrayNode(
+      LayerNodeRef parent, Array *a, const char *name = "");
   template <typename T>
   LayerNodeRef insertChildObjectNode(
       LayerNodeRef parent, ObjectPoolRef<T> obj, const char *name = "");
@@ -170,7 +172,7 @@ struct Scene
 
   // Remove nodes //
 
-  void removeInstancedObject(
+  void removeNode(
       LayerNodeRef obj, bool deleteReferencedObjects = false);
 
   // Indicate changes occurred //
@@ -317,6 +319,12 @@ inline ObjectPoolRef<T> Scene::getObject(size_t i) const
   static_assert(std::is_base_of<Object, T>::value,
       "Scene::getObject<> can only get tsd::Object subclasses");
   return {};
+}
+
+template <>
+inline SurfaceRef Scene::getObject(size_t i) const
+{
+  return m_db.surface.at(i);
 }
 
 template <>

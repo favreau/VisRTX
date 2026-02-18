@@ -82,9 +82,9 @@ VISRTX_GLOBAL void __miss__()
   // no-op
 }
 
-// AmbientOcclusion shading policy for templated rendering loop /////////////
+// Fast shading policy for templated rendering loop /////////////////////////
 
-struct AmbientOcclusionShadingPolicy
+struct FastShadingPolicy
 {
   static VISRTX_DEVICE vec4 shadeSurface(const MaterialShadingState &shadingState,
       ScreenSample &ss,
@@ -92,9 +92,12 @@ struct AmbientOcclusionShadingPolicy
       const SurfaceHit &hit)
   {
     const auto &rendererParams = frameData.renderer;
-    const auto &aoParams = rendererParams.params.ao;
+    const auto &aoParams = rendererParams.params.fast;
 
-    const float aoFactor = aoParams.aoSamples > 0
+    const float ndotl = glm::abs(glm::dot(ray.dir, hit.Ns));
+
+    const bool traceAO = aoParams.aoBlend > 0.f && aoParams.aoSamples > 0;
+    const float aoFactor = traceAO
         ? computeAO(ss,
               ray,
               hit,
@@ -106,10 +109,12 @@ struct AmbientOcclusionShadingPolicy
     auto materialBaseColor = materialEvaluateTint(shadingState);
     auto materialOpacity = materialEvaluateOpacity(shadingState);
 
-    const auto lighting =
-        aoFactor * rendererParams.ambientIntensity * rendererParams.ambientColor;
+    const float lighting = glm::mix(ndotl,
+        aoFactor * rendererParams.ambientIntensity,
+        aoParams.aoBlend);
 
-    return vec4(materialBaseColor * lighting, materialOpacity);
+    return vec4(materialBaseColor * lighting * rendererParams.ambientColor,
+        materialOpacity);
   }
 };
 
@@ -119,7 +124,7 @@ VISRTX_GLOBAL void __raygen__()
   if (pixelOutOfFrame(ss.pixel, frameData.fb))
     return;
 
-  renderPixel<AmbientOcclusionShadingPolicy>(frameData, ss);
+  renderPixel<FastShadingPolicy>(frameData, ss);
 }
 
 } // namespace visrtx

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "ExtensionManager.h"
+
 #include "modals/AppSettingsDialog.h"
 #include "modals/BlockingTaskModal.h"
 #include "modals/ExportNanoVDBFileDialog.h"
@@ -56,6 +58,8 @@ class Application : public anari_viewer::Application
   void showImportFileDialog();
   void showExportNanoVDBFileDialog();
 
+  ExtensionManager *extensionManager() const;
+
   ///////////////////////////////////////////////////////
   //// Application is not a movable or copyable type ////
   Application(const Application &) = delete;
@@ -76,6 +80,11 @@ class Application : public anari_viewer::Application
   // Internal API //
 
   virtual void uiMainMenuBar();
+
+#ifdef TSD_USE_LUA
+  void renderLuaMenu();
+#endif
+  void renderActionMenu(const std::vector<ActionMenuNode> &entries);
 
   void doSave(const std::string &name = "");
 
@@ -125,6 +134,8 @@ class Application : public anari_viewer::Application
   std::string m_currentSessionFilename;
   std::string m_filenameToSaveNextFrame;
   std::string m_filenameToLoadNextFrame;
+
+  std::unique_ptr<ExtensionManager> m_extensionManager;
 
   struct UsdDeviceState
   {

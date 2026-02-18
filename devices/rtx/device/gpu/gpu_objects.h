@@ -664,17 +664,18 @@ struct DebugRendererGPUData
   int method;
 };
 
-struct AORendererGPUData
+struct FastRendererGPUData
 {
   int aoSamples;
+  float aoBlend;
 };
 
-struct PTRendererGPUData
+struct QualityRendererGPUData
 {
   int maxDepth;
 };
 
-struct DirectLightRendererGPUData
+struct InteractiveRendererGPUData
 {
   float lightFalloff;
   int aoSamples;
@@ -686,9 +687,9 @@ struct DirectLightRendererGPUData
 union RendererParametersGPUData
 {
   DebugRendererGPUData debug;
-  AORendererGPUData ao;
-  PTRendererGPUData pathTracer;
-  DirectLightRendererGPUData directLight;
+  FastRendererGPUData fast;
+  QualityRendererGPUData quality;
+  InteractiveRendererGPUData interactive;
 };
 
 enum class BackgroundMode

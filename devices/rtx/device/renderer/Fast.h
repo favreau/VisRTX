@@ -29,44 +29,26 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "Raycast.h"
-// ptx
-#include "Raycast_ptx.h"
+#pragma once
+
+#include "Renderer.h"
 
 namespace visrtx {
 
-static const std::vector<HitgroupFunctionNames> g_raycastHitNames = {
-    {"__closesthit__primary", "__anyhit__primary"}};
-
-static const std::vector<std::string> g_raycastMissNames = {"__miss__"};
-
-Raycast::Raycast(DeviceGlobalState *s) : Renderer(s) {}
-
-void Raycast::commitParameters()
+struct Fast : public Renderer
 {
-  Renderer::commitParameters();
-  m_sampleLimit = 1; // single-shot renderer
-  m_denoise = false; // never denoise
-}
+  Fast(DeviceGlobalState *s);
+  void commitParameters() override;
+  void populateFrameData(FrameGPUData &fd) const override;
+  OptixModule optixModule() const override;
+  Span<HitgroupFunctionNames> hitgroupSbtNames() const override;
+  Span<std::string> missSbtNames() const override;
 
-OptixModule Raycast::optixModule() const
-{
-  return deviceState()->rendererModules.raycast;
-}
+  static ptx_blob ptx();
 
-Span<HitgroupFunctionNames> Raycast::hitgroupSbtNames() const
-{
-  return make_Span(g_raycastHitNames.data(), g_raycastHitNames.size());
-}
-
-Span<std::string> Raycast::missSbtNames() const
-{
-  return make_Span(g_raycastMissNames.data(), g_raycastMissNames.size());
-}
-
-ptx_blob Raycast::ptx()
-{
-  return {Raycast_ptx, sizeof(Raycast_ptx)};
-}
+ private:
+  int m_aoSamples{1};
+  float m_aoBlend{1.f};
+};
 
 } // namespace visrtx
