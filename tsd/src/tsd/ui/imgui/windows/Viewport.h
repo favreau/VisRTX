@@ -149,6 +149,7 @@ struct Viewport : public Window
         const tsd::core::Object *o, const tsd::core::Parameter *p) override;
     anari::Device d{nullptr};
     anari::Renderer r{nullptr};
+    anari::Frame f{nullptr};
   } m_rud;
 
   // Camera manipulator //
@@ -180,9 +181,6 @@ struct Viewport : public Window
   tsd::math::int2 m_viewportSize{0, 0};
   tsd::math::int2 m_renderSize{0, 0};
   float m_resolutionScale{1.f};
-
-  // AI upscaling (OptiX UPSCALE2X)
-  bool m_enableUpscaling{false};
 
   float m_latestFL{0.f};
   float m_latestAnariFL{0.f};

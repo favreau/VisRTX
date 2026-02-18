@@ -634,6 +634,7 @@ void Viewport::updateFrame()
     return;
 
   m_rud.r = m_renderers[m_currentRenderer];
+  m_rud.f = m_anariPass->getFrame();
   m_anariPass->setCamera(m_currentCamera);
   m_anariPass->setRenderer(m_rud.r);
   m_anariPass->setWorld(m_rIdx->world());
@@ -1190,28 +1191,6 @@ void Viewport::ui_menubar()
 
       ImGui::Separator();
 
-      // AI Upscaling (OptiX 2x) //
-      {
-        if (ImGui::Checkbox("AI Upscale 2x", &m_enableUpscaling)) {
-          if (m_anariPass) {
-            auto d = m_anariPass->getDevice();
-            auto f = m_anariPass->getFrame();
-            int val = m_enableUpscaling ? 1 : 0;
-            anari::setParameter(d, f, "enableUpscaling", val);
-            anari::commitParameters(d, f);
-          }
-        }
-        if (ImGui::IsItemHovered()) {
-          ImGui::SetTooltip(
-              "Render at half resolution and use OptiX AI\n"
-              "to upscale 2x to display resolution.\n"
-              "Improves interactive performance with\n"
-              "minimal quality loss (requires NVIDIA RTX).");
-        }
-      }
-
-      ImGui::Separator();
-
       const char *aovItems[] = {"default",
           "depth",
           "albedo",
@@ -1694,6 +1673,12 @@ void Viewport::RendererUpdateDelegate::signalParameterUpdated(
   if (d && r) {
     o->updateANARIParameter(d, r, *p, p->name().c_str());
     anari::commitParameters(d, r);
+    if (f && p->name() == "denoise") {
+      auto &val = p->value();
+      int enable = (val.valid() && val.is<bool>() && val.get<bool>()) ? 1 : 0;
+      anari::setParameter(d, f, "enableDenoising", enable);
+      anari::commitParameters(d, f);
+    }
   }
 }
 
