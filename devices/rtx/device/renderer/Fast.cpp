@@ -29,25 +29,52 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#pragma once
-
-#include "Renderer.h"
+#include "Fast.h"
+// ptx
+#include "Fast_ptx.h"
 
 namespace visrtx {
 
-struct AmbientOcclusion : public Renderer
+static const std::vector<HitgroupFunctionNames> g_fastHitNames = {
+    {"__closesthit__primary", "__anyhit__primary"},
+    {"__closesthit__shadow", "__anyhit__shadow"}};
+
+static const std::vector<std::string> g_fastMissNames = {"__miss__", "__miss__"};
+
+Fast::Fast(DeviceGlobalState *s) : Renderer(s, 1.f) {}
+
+void Fast::commitParameters()
 {
-  AmbientOcclusion(DeviceGlobalState *s);
-  void commitParameters() override;
-  void populateFrameData(FrameGPUData &fd) const override;
-  OptixModule optixModule() const override;
-  Span<HitgroupFunctionNames> hitgroupSbtNames() const override;
-  Span<std::string> missSbtNames() const override;
+  Renderer::commitParameters();
+  m_aoSamples = std::clamp(getParam<int>("ambientSamples", 1), 0, 256);
+  m_aoBlend = std::clamp(getParam<float>("aoBlend", 1.f), 0.f, 1.f);
+}
 
-  static ptx_blob ptx();
+void Fast::populateFrameData(FrameGPUData &fd) const
+{
+  Renderer::populateFrameData(fd);
+  fd.renderer.params.fast.aoSamples = m_aoSamples;
+  fd.renderer.params.fast.aoBlend = m_aoBlend;
+}
 
- private:
-  int m_aoSamples{1};
-};
+OptixModule Fast::optixModule() const
+{
+  return deviceState()->rendererModules.fast;
+}
+
+Span<HitgroupFunctionNames> Fast::hitgroupSbtNames() const
+{
+  return make_Span(g_fastHitNames.data(), g_fastHitNames.size());
+}
+
+Span<std::string> Fast::missSbtNames() const
+{
+  return make_Span(g_fastMissNames.data(), g_fastMissNames.size());
+}
+
+ptx_blob Fast::ptx()
+{
+  return {Fast_ptx, sizeof(Fast_ptx)};
+}
 
 } // namespace visrtx
