@@ -149,6 +149,7 @@ struct Viewport : public Window
         const tsd::core::Object *o, const tsd::core::Parameter *p) override;
     anari::Device d{nullptr};
     anari::Renderer r{nullptr};
+    anari::Frame f{nullptr};
   } m_rud;
 
   // Camera manipulator //

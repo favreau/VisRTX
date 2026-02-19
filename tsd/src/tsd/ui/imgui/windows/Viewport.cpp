@@ -634,6 +634,7 @@ void Viewport::updateFrame()
     return;
 
   m_rud.r = m_renderers[m_currentRenderer];
+  m_rud.f = m_anariPass->getFrame();
   m_anariPass->setCamera(m_currentCamera);
   m_anariPass->setRenderer(m_rud.r);
   m_anariPass->setWorld(m_rIdx->world());
@@ -1672,6 +1673,10 @@ void Viewport::RendererUpdateDelegate::signalParameterUpdated(
   if (d && r) {
     o->updateANARIParameter(d, r, *p, p->name().c_str());
     anari::commitParameters(d, r);
+    if (f && std::strcmp(p->name().c_str(), "denoise") == 0) {
+      o->updateANARIParameter(d, f, *p, "denoise");
+      anari::commitParameters(d, f);
+    }
   }
 }
 
