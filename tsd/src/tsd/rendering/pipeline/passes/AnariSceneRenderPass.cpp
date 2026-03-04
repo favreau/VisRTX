@@ -407,6 +407,12 @@ void AnariSceneRenderPass::copyFrameData()
     }
   }
 
+#ifdef ENABLE_CUDA
+  // Ensure any async GPU work (e.g. convertFloatColorBuffer_) that reads
+  // mapped frame pointers completes before we unmap and Barney frees them.
+  cudaStreamSynchronize(m_buffers.stream);
+#endif
+
   anari::unmap(m_device, m_frame, colorChannel);
   anari::unmap(m_device, m_frame, depthChannel);
   if (m_enableIDs)

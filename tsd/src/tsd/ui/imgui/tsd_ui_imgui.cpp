@@ -608,10 +608,20 @@ bool buildUI_parameter(tsd::core::Object &o,
       update |= ImGui::DragFloat3(name, (float *)value);
     break;
   case ANARI_FLOAT32_VEC4:
-    if (usage & tsd::core::ParameterUsageHint::COLOR)
+    if (usage & tsd::core::ParameterUsageHint::COLOR) {
       update |= ImGui::ColorEdit4(name, (float *)value);
-    else
+    } else if (bounded) {
+      float lo = pMin ? pMin.get<tsd::math::float4>().x
+                      : std::numeric_limits<float>::lowest();
+      float hi = pMax ? pMax.get<tsd::math::float4>().x
+                      : std::numeric_limits<float>::max();
+      if (pMin && pMax)
+        update |= ImGui::SliderFloat4(name, (float *)value, lo, hi);
+      else
+        update |= ImGui::DragFloat4(name, (float *)value, 0.01f, lo, hi);
+    } else {
       update |= ImGui::DragFloat4(name, (float *)value);
+    }
     break;
   case ANARI_STRING: {
     if (!p.stringValues().empty()) {
