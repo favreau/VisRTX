@@ -110,8 +110,19 @@ void MultiDeviceSceneRenderPass::updateSize()
 void MultiDeviceSceneRenderPass::render(RenderBuffers &b, int stageId)
 {
   m_buffers.stream = b.stream;
-  foreach_frame([](anari::Device d, anari::Frame f) { anari::render(d, f); });
-  foreach_frame([](anari::Device d, anari::Frame f) { anari::wait(d, f); });
+
+  // Secondary devices render first so their world models are built before the
+  // primary device composites.  With tethered devices the primary render fans
+  // out to all slots — if a secondary slot's model is stale the composited
+  // frame will show broken tiles.
+  for (size_t i = 1; i < numDevices(); ++i)
+    anari::render(m_devices[i], m_frames[i]);
+  for (size_t i = 1; i < numDevices(); ++i)
+    anari::wait(m_devices[i], m_frames[i]);
+
+  anari::render(m_devices[0], m_frames[0]);
+  anari::wait(m_devices[0], m_frames[0]);
+
   copyFrameData();
   composite(b, stageId);
 }
