@@ -19,6 +19,8 @@ struct MultiDeviceSceneRenderPass : public RenderPass
 
   size_t numDevices() const;
 
+  anari::Frame getFrame(size_t i = 0) const;
+
   void setCamera(size_t i, anari::Camera c);
   void setRenderer(size_t i, anari::Renderer r);
   void setWorld(size_t i, anari::World w);

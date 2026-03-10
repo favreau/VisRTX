@@ -40,6 +40,11 @@ size_t MultiDeviceSceneRenderPass::numDevices() const
   return m_devices.size();
 }
 
+anari::Frame MultiDeviceSceneRenderPass::getFrame(size_t i) const
+{
+  return (i < m_frames.size()) ? m_frames[i] : nullptr;
+}
+
 void MultiDeviceSceneRenderPass::setCamera(size_t i, anari::Camera c)
 {
   auto d = m_devices[i];
