@@ -40,6 +40,7 @@
       "khr_sampler_image1d",
       "khr_sampler_image2d",
       "khr_sampler_image3d",
+      "khr_sampler_imagexd_clamp_to_border",
       "khr_sampler_primitive",
       "khr_sampler_transform",
       "khr_spatial_field_nanovdb",
@@ -59,7 +60,7 @@
   "objects": [
     {
       "type": "ANARI_RENDERER",
-      "name": "default",
+      "name": "interactive",
       "parameters": [
         {
           "name": "sampleLimit",
@@ -192,6 +193,15 @@
           "minimum": 0.0001,
           "maximum": 10.0,
           "description": "sampling rate of volumes when ray marching shadows"
+        },
+        {
+          "name": "cutPlane",
+          "types": [
+            "ANARI_FLOAT32_VEC4"
+          ],
+          "tags": [],
+          "default": [0.0, 0.0, 0.0, 0.0],
+          "description": "cutting plane equation (nx, ny, nz, d); disabled when all zero (vec4(0))"
         }
       ]
     },
@@ -319,6 +329,15 @@
           "minimum": 0.001,
           "maximum": 10.0,
           "description": "sampling rate of volumes when ray marching"
+        },
+        {
+          "name": "cutPlane",
+          "types": [
+            "ANARI_FLOAT32_VEC4"
+          ],
+          "tags": [],
+          "default": [0.0, 0.0, 0.0, 0.0],
+          "description": "cutting plane equation (nx, ny, nz, d); disabled when all zero (vec4(0))"
         }
       ]
     },
@@ -402,9 +421,18 @@
             "ANARI_INT32"
           ],
           "tags": [],
-          "default": 3,
+          "default": 5,
           "minimum": 1,
           "description": "Maximum number of ray bounces"
+        },
+        {
+          "name": "cutPlane",
+          "types": [
+            "ANARI_FLOAT32_VEC4"
+          ],
+          "tags": [],
+          "default": [0.0, 0.0, 0.0, 0.0],
+          "description": "cutting plane equation (nx, ny, nz, d); disabled when all zero (vec4(0))"
         }
       ]
     },

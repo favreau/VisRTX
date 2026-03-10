@@ -20,7 +20,6 @@ struct Viewport;
 struct CameraPoses : public Window
 {
   CameraPoses(Application *app,
-      Viewport *viewport = nullptr,
       const char *name = "Camera Poses");
   void buildUI() override;
 
@@ -32,7 +31,7 @@ struct CameraPoses : public Window
 
   tsd::math::float3 m_turntableCenter{0.f, 0.f, 0.f};
   tsd::math::float3 m_turntableAzimuths{0.f, 360.f, 20.f};
-  tsd::math::float3 m_turntableElevations{0.f, 45.f, 10.f};
+  tsd::math::float3 m_turntableElevations{5.f, 45.f, 10.f};
   float m_turntableDistance{1.f};
 
   bool m_updateViewport{true}; // Update viewport during rendering
@@ -45,7 +44,6 @@ struct CameraPoses : public Window
   std::atomic<bool> m_hasNewPose{false};
   tsd::rendering::CameraPose m_currentPose;
   std::mutex m_poseMutex;
-  Viewport *m_viewport{nullptr};
 };
 
 } // namespace tsd::ui::imgui

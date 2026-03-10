@@ -46,6 +46,7 @@ CommandLineOptions *Application::commandLineOptions()
 {
   return &m_commandLine;
 }
+
 #ifdef TSD_USE_LUA
 ExtensionManager *Application::extensionManager() const
 {
@@ -127,6 +128,8 @@ anari_viewer::WindowArray Application::setupWindows()
   m_offlineRenderModal = std::make_unique<OfflineRenderModal>(this);
   m_fileDialog = std::make_unique<ImportFileDialog>(this);
   m_exportNanoVDBFileDialog = std::make_unique<ExportNanoVDBFileDialog>(this);
+  m_vorticityDialog = std::make_unique<VorticityDialog>(this);
+  m_cuttingPlaneDialog = std::make_unique<CuttingPlaneDialog>(this);
 
   m_applicationName = SDL_GetWindowTitle(sdlWindow());
   updateWindowTitle();
@@ -135,10 +138,8 @@ anari_viewer::WindowArray Application::setupWindows()
 
   SDL_SetRenderVSync(sdlRenderer(), 1);
 
-#ifdef TSD_USE_LUA
   m_extensionManager = std::make_unique<ExtensionManager>();
   m_extensionManager->initialize(appCore());
-#endif
 
   return {};
 }
@@ -188,6 +189,16 @@ void Application::uiFrameStart()
     modalActive = true;
   }
 
+  if (m_vorticityDialog->visible()) {
+    m_vorticityDialog->renderUI();
+    modalActive = true;
+  }
+
+  if (m_cuttingPlaneDialog->visible()) {
+    m_cuttingPlaneDialog->renderUI();
+    modalActive = true;
+  }
+
   if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S))
     this->getFilenameFromDialog(m_filenameToSaveNextFrame, true);
   else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiKey_S))
@@ -202,10 +213,20 @@ void Application::uiFrameStart()
 void Application::teardown()
 {
   teardownUsdDevice();
+  teardownTsdDevice();
   anari_viewer::ui::shutdown();
 }
 
 void Application::uiMainMenuBar()
+{
+  uiMainMenuBar_File();
+  uiMainMenuBar_Edit();
+  uiMainMenuBar_Tools();
+  uiMainMenuBar_Lua();
+  uiMainMenuBar_View();
+}
+
+void Application::uiMainMenuBar_File()
 {
   if (ImGui::BeginMenu("File")) {
     if (ImGui::MenuItem("Load"))
@@ -254,7 +275,10 @@ void Application::uiMainMenuBar()
 
     ImGui::EndMenu();
   }
+}
 
+void Application::uiMainMenuBar_Edit()
+{
   if (ImGui::BeginMenu("Edit")) {
     if (ImGui::MenuItem("Settings"))
       m_appSettingsDialog->show();
@@ -276,14 +300,22 @@ void Application::uiMainMenuBar()
     ImGui::Separator();
 
     if (ImGui::BeginMenu("Scene")) {
-      if (ImGui::MenuItem("Cleanup Only"))
-        m_core.tsd.scene.removeUnusedObjects();
+      if (ImGui::MenuItem("Cleanup Unused Objects"))
+        m_core.tsd.scene.removeUnusedObjects(false);
 
-      if (ImGui::MenuItem("Defragment Only"))
+      if (ImGui::MenuItem("Cleanup Unused Objects + Renderers"))
+        m_core.tsd.scene.removeUnusedObjects(true);
+
+      if (ImGui::MenuItem("Defragment Scene Storage"))
         m_core.tsd.scene.defragmentObjectStorage();
 
-      if (ImGui::MenuItem("Cleanup + Defragment")) {
-        m_core.tsd.scene.removeUnusedObjects();
+      if (ImGui::MenuItem("Cleanup Unused Objects + Defragment")) {
+        m_core.tsd.scene.removeUnusedObjects(false);
+        m_core.tsd.scene.defragmentObjectStorage();
+      }
+
+      if (ImGui::MenuItem("Cleanup Unused + Defragment All")) {
+        m_core.tsd.scene.removeUnusedObjects(true);
         m_core.tsd.scene.defragmentObjectStorage();
       }
 
@@ -292,7 +324,10 @@ void Application::uiMainMenuBar()
 
     ImGui::EndMenu();
   }
+}
 
+void Application::uiMainMenuBar_Tools()
+{
   if (ImGui::BeginMenu("Tools")) {
     if (ImGui::BeginMenu("OpenUSD Device")) {
       if (usdDeviceIsSetup()) {
@@ -309,6 +344,14 @@ void Application::uiMainMenuBar()
       ImGui::EndDisabled();
       ImGui::EndMenu();
     }
+
+    ImGui::Separator();
+
+    if (ImGui::MenuItem("Flow Analysis"))
+      m_vorticityDialog->show();
+
+    if (ImGui::MenuItem("Cutting Plane"))
+      m_cuttingPlaneDialog->show();
 
     ImGui::Separator();
 
@@ -330,11 +373,27 @@ void Application::uiMainMenuBar()
 
     ImGui::EndMenu();
   }
-
+}
+void Application::uiMainMenuBar_Lua()
+{
 #ifdef TSD_USE_LUA
-  renderLuaMenu();
-#endif
+  if (ImGui::BeginMenu("Lua")) {
+    const auto &tree = m_extensionManager->getMenuTree();
+    uiActionMenu(tree);
 
+    if (!tree.empty())
+      ImGui::Separator();
+
+    if (ImGui::MenuItem("Reload Script"))
+      m_extensionManager->refresh();
+
+    ImGui::EndMenu();
+  }
+#endif
+}
+
+void Application::uiMainMenuBar_View()
+{
   if (ImGui::BeginMenu("View")) {
     for (auto &w : m_windows) {
       ImGui::PushID(&w);
@@ -343,6 +402,31 @@ void Application::uiMainMenuBar()
     }
 
     ImGui::EndMenu();
+  }
+}
+
+void Application::uiActionMenu(const std::vector<ActionMenuNode> &entries)
+{
+  for (const auto &entry : entries) {
+    if (entry.isSeparator) {
+      ImGui::Separator();
+    } else if (entry.isFolder) {
+      if (ImGui::BeginMenu(entry.name.c_str())) {
+        uiActionMenu(entry.children);
+        ImGui::EndMenu();
+      }
+    } else {
+      if (ImGui::MenuItem(entry.name.c_str())) {
+        showTaskModal(
+            [this, actionIndex = entry.actionIndex]() {
+              m_extensionManager->executeAction(actionIndex);
+            },
+            "Executing Action...");
+      }
+
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", entry.name.c_str());
+    }
   }
 }
 
@@ -427,6 +511,15 @@ void Application::loadApplicationState(const char *filename)
   auto &core = *appCore();
   auto &root = m_settings.root();
 
+  // TSD context from app state file, or context-only file
+  if (auto *c = root.child("context"); c != nullptr)
+    tsd::io::load_Scene(core.tsd.scene, *c);
+  else
+    tsd::io::load_Scene(core.tsd.scene, root);
+
+  // Clear out context tree
+  root["context"].reset();
+
   // Window state
   auto &windows = root["windows"];
   for (auto *w : m_windows)
@@ -468,15 +561,6 @@ void Application::loadApplicationState(const char *filename)
     });
   }
 
-  // TSD context from app state file, or context-only file
-  if (auto *c = root.child("context"); c != nullptr)
-    tsd::io::load_Scene(core.tsd.scene, *c);
-  else
-    tsd::io::load_Scene(core.tsd.scene, root);
-
-  // Clear out context tree
-  root["context"].reset();
-
   m_appSettingsDialog->applySettings();
 
   tsd::core::logStatus("...loaded state from '%s'", filename);
@@ -512,7 +596,7 @@ void Application::setupUsdDevice()
   }
 
   m_usdDevice.renderIndex =
-      m_core.anari.acquireRenderIndex(m_core.tsd.scene, d);
+      m_core.anari.acquireRenderIndex(m_core.tsd.scene, "usd", d);
   m_usdDevice.frame = anari::newObject<anari::Frame>(d);
   anari::setParameter(
       d, m_usdDevice.frame, "world", m_usdDevice.renderIndex->world());
@@ -569,7 +653,7 @@ void Application::setupTsdDevice()
   }
 
   m_tsdDevice.renderIndex =
-      m_core.anari.acquireRenderIndex(m_core.tsd.scene, d);
+      m_core.anari.acquireRenderIndex(m_core.tsd.scene, "tsd", d);
   m_tsdDevice.frame = anari::newObject<anari::Frame>(d);
   anari::setParameter(
       d, m_tsdDevice.frame, "world", m_tsdDevice.renderIndex->world());
@@ -628,49 +712,6 @@ void Application::updateWindowTitle()
                                             : m_currentSessionFilename;
 
   SDL_SetWindowTitle(w, title.c_str());
-}
-
-#ifdef TSD_USE_LUA
-void Application::renderLuaMenu()
-{
-  if (ImGui::BeginMenu("Lua")) {
-    const auto &tree = m_extensionManager->getMenuTree();
-    renderActionMenu(tree);
-
-    if (!tree.empty())
-      ImGui::Separator();
-
-    if (ImGui::MenuItem("Reload Script"))
-      m_extensionManager->refresh();
-
-    ImGui::EndMenu();
-  }
-}
-#endif
-
-void Application::renderActionMenu(const std::vector<ActionMenuNode> &entries)
-{
-  for (const auto &entry : entries) {
-    if (entry.isSeparator) {
-      ImGui::Separator();
-    } else if (entry.isFolder) {
-      if (ImGui::BeginMenu(entry.name.c_str())) {
-        renderActionMenu(entry.children);
-        ImGui::EndMenu();
-      }
-    } else {
-      if (ImGui::MenuItem(entry.name.c_str())) {
-        showTaskModal(
-            [this, actionIndex = entry.actionIndex]() {
-              m_extensionManager->executeAction(actionIndex);
-            },
-            "Executing Action...");
-      }
-
-      if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s", entry.name.c_str());
-    }
-  }
 }
 
 } // namespace tsd::ui::imgui

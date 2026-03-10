@@ -6,6 +6,7 @@
 #include "tsd/core/Logging.hpp"
 #include "tsd/core/scene/Scene.hpp"
 // std
+#include <algorithm>
 #include <iomanip>
 
 namespace tsd::core {
@@ -14,6 +15,7 @@ namespace tokens {
 
 Token none = "none";
 Token unknown = "unknown";
+Token defaultToken = "default";
 
 } // namespace tokens
 
@@ -57,6 +59,7 @@ Object::Object(Object &&o)
   m_updateDelegate = std::move(o.m_updateDelegate);
   m_metadata = std::move(o.m_metadata);
   m_useCounts = std::move(o.m_useCounts);
+  m_rendererDeviceName = std::move(o.m_rendererDeviceName);
   for (auto &p : m_parameters)
     p.second.setObserver(this);
 }
@@ -74,6 +77,7 @@ Object &Object::operator=(Object &&o)
   m_updateDelegate = std::move(o.m_updateDelegate);
   m_metadata = std::move(o.m_metadata);
   m_useCounts = std::move(o.m_useCounts);
+  m_rendererDeviceName = std::move(o.m_rendererDeviceName);
   for (auto &p : m_parameters)
     p.second.setObserver(this);
   return *this;
@@ -99,10 +103,15 @@ Scene *Object::scene() const
   return m_scene;
 }
 
+Token Object::rendererDeviceName() const
+{
+  return m_rendererDeviceName;
+}
+
 size_t Object::totalUseCount() const
 {
   return useCount(UseKind::APP) + useCount(UseKind::PARAMETER)
-      + useCount(UseKind::LAYER);
+      + useCount(UseKind::LAYER) + useCount(UseKind::INTERNAL);
 }
 
 size_t Object::useCount(UseKind kind) const
@@ -114,6 +123,8 @@ size_t Object::useCount(UseKind kind) const
     return m_useCounts.parameter;
   case UseKind::LAYER:
     return m_useCounts.layer;
+  case UseKind::INTERNAL:
+    return m_useCounts.internal;
   }
 
   logError("Object::UseCount() called with an unhandled UseKind");
@@ -131,6 +142,9 @@ void Object::incUseCount(UseKind kind)
     break;
   case UseKind::LAYER:
     m_useCounts.layer++;
+    break;
+  case UseKind::INTERNAL:
+    m_useCounts.internal++;
     break;
   }
 }
@@ -152,6 +166,10 @@ void Object::decUseCount(UseKind kind)
     useCount = &m_useCounts.layer;
     typeStr = "LAYER";
     break;
+  case UseKind::INTERNAL:
+    useCount = &m_useCounts.internal;
+    typeStr = "INTERNAL";
+    break;
   }
 
   if (*useCount > 0)
@@ -159,8 +177,9 @@ void Object::decUseCount(UseKind kind)
   else {
     logError(
         "Object::decUseCount() called on object with zero use count on object"
-        " of type %s and name '%s', with use kind of {%s}",
+        " of type %s, idx %zu, and name '%s', with use kind of {%s}",
         anari::toString(type()),
+        index(),
         name().c_str(),
         typeStr);
   }
@@ -191,7 +210,12 @@ void Object::setName(const char *n)
   m_name = n;
 }
 
-Any Object::getMetadataValue(const std::string &name) const
+void Object::setName(const std::string &n)
+{
+  m_name = n;
+}
+
+Any Object::getMetadataValue(std::string_view name) const
 {
   if (!m_metadata)
     return {};
@@ -201,7 +225,7 @@ Any Object::getMetadataValue(const std::string &name) const
     return {};
 }
 
-void Object::getMetadataArray(const std::string &name,
+void Object::getMetadataArray(std::string_view name,
     anari::DataType *type,
     const void **ptr,
     size_t *size) const
@@ -215,26 +239,29 @@ void Object::getMetadataArray(const std::string &name,
     c->getValueAsArray(type, ptr, size);
 }
 
-void Object::setMetadataValue(const std::string &name, Any v)
+void Object::setMetadataValue(std::string_view name, Any v)
 {
   initMetadata();
   m_metadata->root().append(name) = v;
+  m_versions.metadata++;
 }
 
-void Object::setMetadataArray(const std::string &name,
+void Object::setMetadataArray(std::string_view name,
     anari::DataType type,
     const void *v,
     size_t numElements)
 {
   initMetadata();
   m_metadata->root().append(name).setValueAsArray(type, v, numElements);
+  m_versions.metadata++;
 }
 
-void Object::removeMetadata(const std::string &name)
+void Object::removeMetadata(std::string_view name)
 {
   if (!m_metadata)
     return;
   m_metadata->root().remove(name);
+  m_versions.metadata++;
 }
 
 size_t Object::numMetadata() const
@@ -257,6 +284,7 @@ const char *Object::getMetadataName(size_t i) const
 Parameter &Object::addParameter(Token name)
 {
   m_parameters.set(name, Parameter(this, name.c_str()));
+  m_versions.parameter++;
   return *parameter(name);
 }
 
@@ -337,6 +365,40 @@ const char *Object::parameterNameAt(size_t i) const
   return m_parameters.at_index(i).first.c_str();
 }
 
+void Object::beginParameterBatch()
+{
+  m_inParameterBatch = true;
+}
+
+void Object::endParameterBatch()
+{
+  m_inParameterBatch = false;
+
+  auto &bp = m_batchedParameters;
+
+  // Remove duplicates
+  std::sort(bp.begin(), bp.end());
+  bp.erase(std::unique(bp.begin(), bp.end()), bp.end());
+
+  // Flush updates through delegate
+  if (m_updateDelegate)
+    m_updateDelegate->signalParameterBatchUpdated(this, bp);
+
+  m_versions.parameter++;
+
+  bp.clear();
+}
+
+ObjectVersion Object::lastParameterChange() const
+{
+  return m_versions.parameter;
+}
+
+ObjectVersion Object::lastMetadataChange() const
+{
+  return m_versions.metadata;
+}
+
 anari::Object Object::makeANARIObject(anari::Device) const
 {
   return {};
@@ -397,13 +459,24 @@ void Object::parameterChanged(const Parameter *p, const Any &oldValue)
       obj->decUseCount(UseKind::PARAMETER);
   }
   incObjectUseCountParameter(p);
-  if (m_updateDelegate)
+  if (m_inParameterBatch) {
+    m_batchedParameters.push_back(const_cast<Parameter *>(p));
+  } else if (m_updateDelegate) {
     m_updateDelegate->signalParameterUpdated(this, p);
+    m_versions.parameter++;
+  }
 }
 
 void Object::removeParameter(const Parameter *p)
 {
+  if (m_inParameterBatch) {
+    logError(
+        "Object::removeParameter() called while in a parameter batch update. "
+        "This is not supported and will lead to unexpected behavior.");
+  }
+
   removeParameter(p->name());
+  m_versions.parameter++;
 }
 
 BaseUpdateDelegate *Object::updateDelegate() const
@@ -471,32 +544,15 @@ std::vector<std::string> getANARIObjectSubtypes(
   return retval;
 }
 
-Object parseANARIObjectInfo(
-    anari::Device d, ANARIDataType objectType, const char *subtype)
+void parseANARIObjectInfo(
+    Object &o, anari::Device d, ANARIDataType objectType, const char *subtype)
 {
-  Object retval(objectType, subtype);
-
-  if (objectType == ANARI_RENDERER) {
-    retval.addParameter("background")
-        .setValue(float4(0.05f, 0.05f, 0.05f, 1.f))
-        .setDescription("background color")
-        .setUsage(ParameterUsageHint::COLOR);
-    retval.addParameter("ambientRadiance")
-        .setValue(0.25f)
-        .setDescription("intensity of ambient light")
-        .setMin(0.f);
-    retval.addParameter("ambientColor")
-        .setValue(float3(1.f))
-        .setDescription("color of ambient light")
-        .setUsage(ParameterUsageHint::COLOR);
-  }
-
   auto *parameter = (const ANARIParameter *)anariGetObjectInfo(
       d, objectType, subtype, "parameter", ANARI_PARAMETER_LIST);
 
   for (; parameter && parameter->name != nullptr; parameter++) {
     tsd::core::Token name(parameter->name);
-    if (retval.parameter(name))
+    if (o.parameter(name))
       continue;
 
     auto *description = (const char *)anariGetParameterInfo(d,
@@ -539,7 +595,7 @@ Object parseANARIObjectInfo(
         "value",
         ANARI_STRING_LIST);
 
-    auto &p = retval.addParameter(name);
+    auto &p = o.addParameter(name);
     p.setValue(Any(parameter->type, nullptr));
     p.setDescription(description ? description : "");
     p.setValue(parseValue(parameter->type, defaultValue));
@@ -551,10 +607,18 @@ Object parseANARIObjectInfo(
     std::vector<std::string> svs;
     for (; stringValues && *stringValues; stringValues++)
       svs.push_back(*stringValues);
-    if (!svs.empty())
+    if (!svs.empty()) {
       p.setStringValues(svs);
+      p.setValue(svs[0].c_str()); // reset default value
+    }
   }
+}
 
+Object parseANARIObjectInfo(
+    anari::Device d, ANARIDataType objectType, const char *subtype)
+{
+  Object retval(objectType, subtype);
+  parseANARIObjectInfo(retval, d, objectType, subtype);
   return retval;
 }
 

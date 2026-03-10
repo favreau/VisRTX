@@ -11,8 +11,10 @@ namespace tsd::rendering {
 
 struct RenderIndexAllLayers : public RenderIndex
 {
-  RenderIndexAllLayers(
-      Scene &scene, anari::Device d, bool alwaysGatherAllLights = false);
+  RenderIndexAllLayers(Scene &scene,
+      tsd::core::Token deviceName,
+      anari::Device d,
+      bool alwaysGatherAllLights = false);
   ~RenderIndexAllLayers() override;
 
   bool isFlat() const override;
@@ -25,7 +27,8 @@ struct RenderIndexAllLayers : public RenderIndex
   void signalObjectParameterUseCountZero(const Object *obj) override;
   void signalObjectLayerUseCountZero(const Object *obj) override;
   void signalLayerAdded(const Layer *l) override;
-  void signalLayerUpdated(const Layer *l) override;
+  void signalLayerStructureUpdated(const Layer *l) override;
+  void signalLayerTransformUpdated(const Layer *l) override;
   void signalLayerRemoved(const Layer *l) override;
   void signalActiveLayersChanged() override;
   void signalObjectFilteringChanged() override;
@@ -35,6 +38,7 @@ struct RenderIndexAllLayers : public RenderIndex
   void updateWorld() override;
   void syncLayerInstances(
       const Layer *layer, bool appendExisting, uint8_t mask);
+  void syncLayerTransforms(const Layer *layer);
   void releaseAllInstances();
 
   RenderIndexFilterFcn m_filter;

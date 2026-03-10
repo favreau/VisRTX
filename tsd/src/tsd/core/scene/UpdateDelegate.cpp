@@ -65,6 +65,13 @@ void MultiUpdateDelegate::signalParameterRemoved(
     d->signalParameterRemoved(o, p);
 }
 
+void MultiUpdateDelegate::signalParameterBatchUpdated(
+    const Object *o, const std::vector<Parameter *> &ps)
+{
+  for (auto &d : m_delegates)
+    d->signalParameterBatchUpdated(o, ps);
+}
+
 void MultiUpdateDelegate::signalArrayMapped(const Array *a)
 {
   for (auto &d : m_delegates)
@@ -107,10 +114,16 @@ void MultiUpdateDelegate::signalLayerAdded(const Layer *l)
     d->signalLayerAdded(l);
 }
 
-void MultiUpdateDelegate::signalLayerUpdated(const Layer *l)
+void MultiUpdateDelegate::signalLayerStructureUpdated(const Layer *l)
 {
   for (auto &d : m_delegates)
-    d->signalLayerUpdated(l);
+    d->signalLayerStructureUpdated(l);
+}
+
+void MultiUpdateDelegate::signalLayerTransformUpdated(const Layer *l)
+{
+  for (auto &d : m_delegates)
+    d->signalLayerTransformUpdated(l);
 }
 
 void MultiUpdateDelegate::signalLayerRemoved(const Layer *l)

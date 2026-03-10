@@ -25,13 +25,15 @@ struct World : public Object
   void commitParameters() override;
   void finalize() override;
 
+  void updateLayer();
+
   const tsd::rendering::RenderIndexAllLayers *getRenderIndex() const;
+  tsd::rendering::RenderIndexAllLayers *getRenderIndex();
 
  private:
   tsd::core::Layer *layer() const;
 
   void updateValidObjects();
-  void updateLayer();
 
   helium::ChangeObserverPtr<helium::ObjectArray> m_zeroSurfaceData;
   helium::ChangeObserverPtr<helium::ObjectArray> m_zeroVolumeData;
@@ -45,6 +47,8 @@ struct World : public Object
 
   tsd::core::Token m_layerName;
   tsd::rendering::RenderIndexAllLayers *m_renderIndex{nullptr};
+
+  tsd::core::ObjectVersion m_instancingUpdated{};
 };
 
 } // namespace tsd_device

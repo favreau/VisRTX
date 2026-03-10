@@ -44,12 +44,14 @@ void InstancingControls::buildUI()
 
 void InstancingControls::createScene()
 {
-  auto &scene = appCore()->tsd.scene;
-  auto *layer = scene.defaultLayer();
-
   // Clear out previous scene //
 
+  auto &scene = appCore()->tsd.scene;
   scene.removeAllObjects();
+
+  // Then only get the default layer //
+
+  auto *layer = scene.defaultLayer();
 
   // Default (global) material //
 
@@ -77,7 +79,7 @@ void InstancingControls::createScene()
 
   // Finally update instancing in RenderIndexes //
 
-  scene.signalLayerChange(layer);
+  scene.signalLayerStructureChanged(layer);
 }
 
 void InstancingControls::generateSpheres()

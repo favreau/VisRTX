@@ -3,14 +3,12 @@
 
 #pragma once
 
-#include "tsd/core/scene/Object.hpp"
+#include "tsd/core/scene/ObjectUsePtr.hpp"
 
 namespace tsd::core {
 
 struct Camera : public Object
 {
-  static constexpr anari::DataType ANARI_TYPE = ANARI_CAMERA;
-
   DECLARE_OBJECT_DEFAULT_LIFETIME(Camera);
 
   Camera(Token subtype = tokens::unknown);
@@ -22,6 +20,7 @@ struct Camera : public Object
 };
 
 using CameraRef = ObjectPoolRef<Camera>;
+using CameraAppRef = ObjectUsePtr<Camera, Object::UseKind::APP>;
 
 namespace tokens::camera {
 

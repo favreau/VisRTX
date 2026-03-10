@@ -16,6 +16,7 @@ PRIVATE
   importers/import_AXYZ.cpp
   importers/import_DLAF.cpp
   importers/import_E57XYZ.cpp
+  importers/import_ENSIGHT.cpp
   importers/import_file.cpp
   importers/import_FLASH.cpp
   importers/import_GLTF.cpp
@@ -38,8 +39,10 @@ PRIVATE
   importers/import_TRK.cpp
   importers/import_volume.cpp
   importers/import_VTI.cpp
+  importers/import_VTP.cpp
   importers/import_VTU.cpp
   importers/import_XYZDP.cpp
+  procedural/computeVorticity.cpp
   procedural/generate_cylinders.cpp
   procedural/generate_default_lights.cpp
   procedural/generate_hdri_dome.cpp

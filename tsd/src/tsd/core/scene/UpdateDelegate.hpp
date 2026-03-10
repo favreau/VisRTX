@@ -23,6 +23,8 @@ struct BaseUpdateDelegate
   virtual void signalObjectAdded(const Object *o) = 0;
   virtual void signalParameterUpdated(const Object *o, const Parameter *p) = 0;
   virtual void signalParameterRemoved(const Object *o, const Parameter *p) = 0;
+  virtual void signalParameterBatchUpdated(
+      const Object *o, const std::vector<Parameter *> &ps) = 0;
   virtual void signalArrayMapped(const Array *a) = 0;
   virtual void signalArrayUnmapped(const Array *a) = 0;
   virtual void signalObjectParameterUseCountZero(const Object *obj) = 0;
@@ -30,7 +32,8 @@ struct BaseUpdateDelegate
   virtual void signalObjectRemoved(const Object *o) = 0;
   virtual void signalRemoveAllObjects() = 0;
   virtual void signalLayerAdded(const Layer *l) = 0;
-  virtual void signalLayerUpdated(const Layer *l) = 0;
+  virtual void signalLayerStructureUpdated(const Layer *l) = 0;
+  virtual void signalLayerTransformUpdated(const Layer *l) = 0;
   virtual void signalLayerRemoved(const Layer *l) = 0;
   virtual void signalActiveLayersChanged() = 0;
   virtual void signalObjectFilteringChanged() = 0;
@@ -53,6 +56,9 @@ struct EmptyUpdateDelegate : public BaseUpdateDelegate
   void signalObjectAdded(const Object *) override {}
   void signalParameterUpdated(const Object *, const Parameter *) override {}
   void signalParameterRemoved(const Object *, const Parameter *) override {}
+  void signalParameterBatchUpdated(
+      const Object *, const std::vector<Parameter *> &) override
+  {}
   void signalArrayMapped(const Array *) override {}
   void signalArrayUnmapped(const Array *) override {}
   void signalObjectParameterUseCountZero(const Object *obj) override {};
@@ -60,7 +66,8 @@ struct EmptyUpdateDelegate : public BaseUpdateDelegate
   void signalObjectRemoved(const Object *) override {}
   void signalRemoveAllObjects() override {}
   void signalLayerAdded(const Layer *) override {}
-  void signalLayerUpdated(const Layer *) override {}
+  void signalLayerStructureUpdated(const Layer *) override {}
+  void signalLayerTransformUpdated(const Layer *) override {}
   void signalLayerRemoved(const Layer *) override {}
   void signalActiveLayersChanged() override {}
   void signalObjectFilteringChanged() override {}
@@ -89,6 +96,8 @@ struct MultiUpdateDelegate : public BaseUpdateDelegate
   void signalObjectAdded(const Object *o) override;
   void signalParameterUpdated(const Object *o, const Parameter *p) override;
   void signalParameterRemoved(const Object *o, const Parameter *p) override;
+  void signalParameterBatchUpdated(
+      const Object *o, const std::vector<Parameter *> &ps) override;
   void signalArrayMapped(const Array *a) override;
   void signalArrayUnmapped(const Array *a) override;
   void signalObjectParameterUseCountZero(const Object *obj) override;
@@ -96,7 +105,8 @@ struct MultiUpdateDelegate : public BaseUpdateDelegate
   void signalObjectRemoved(const Object *o) override;
   void signalRemoveAllObjects() override;
   void signalLayerAdded(const Layer *) override;
-  void signalLayerUpdated(const Layer *) override;
+  void signalLayerStructureUpdated(const Layer *) override;
+  void signalLayerTransformUpdated(const Layer *) override;
   void signalLayerRemoved(const Layer *) override;
   void signalActiveLayersChanged() override;
   void signalObjectFilteringChanged() override;

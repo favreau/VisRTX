@@ -443,7 +443,7 @@ void LayerTree::buildUI_tree()
       ImGuiIO &io = ImGui::GetIO();
       copyNodesTo(dragAndDropTarget, droppedNodes, !io.KeyCtrl);
 
-      appCore()->tsd.scene.signalLayerChange(&layer);
+      appCore()->tsd.scene.signalLayerStructureChanged(&layer);
     }
   }
 }
@@ -546,7 +546,7 @@ void LayerTree::buildUI_handleSelection()
           appCore()->setSelected(newNodes);
         }
 
-        scene.signalLayerChange(&layer);
+        scene.signalLayerStructureChanged(&layer);
       }
     }
   }
@@ -591,7 +591,7 @@ void LayerTree::buildUI_objectSceneMenu()
     bool enabled = (*menuNode)->isEnabled();
     if (nodeSelected && ImGui::Checkbox("visible", &enabled)) {
       (*menuNode)->setEnabled(enabled);
-      scene.signalLayerChange(&layer);
+      scene.signalLayerStructureChanged(&layer);
     }
 
     if (nodeSelected && ImGui::MenuItem("show all")) {
@@ -599,7 +599,7 @@ void LayerTree::buildUI_objectSceneMenu()
         n->setEnabled(true);
         return true;
       });
-      scene.signalLayerChange(&layer);
+      scene.signalLayerStructureChanged(&layer);
     }
 
     if (nodeSelected && ImGui::MenuItem("hide all")) {
@@ -607,10 +607,11 @@ void LayerTree::buildUI_objectSceneMenu()
         n->setEnabled(false);
         return true;
       });
-      scene.signalLayerChange(&layer);
+      scene.signalLayerStructureChanged(&layer);
     }
 
-    ImGui::Separator();
+    if (nodeSelected)
+      ImGui::Separator();
 
     if (nodeSelected && ImGui::BeginMenu("rename")) {
       ImGui::InputText("##edit_node_name", &(*menuNode)->name());
@@ -714,13 +715,9 @@ void LayerTree::buildUI_objectSceneMenu()
         OBJECT_UI_MENU_ITEM("light", ANARI_LIGHT);
         OBJECT_UI_MENU_ITEM("surface", ANARI_SURFACE);
         OBJECT_UI_MENU_ITEM("volume", ANARI_VOLUME);
+#undef OBJECT_UI_MENU_ITEM
         ImGui::EndMenu();
       }
-
-      ImGui::Separator();
-
-      if (ImGui::MenuItem("import..."))
-        m_app->showImportFileDialog();
 
       ImGui::Separator();
 
@@ -762,6 +759,11 @@ void LayerTree::buildUI_objectSceneMenu()
 
         ImGui::EndMenu();
       }
+
+      ImGui::Separator();
+
+      if (ImGui::MenuItem("from file..."))
+        m_app->showImportFileDialog();
 
       ImGui::EndMenu();
     }

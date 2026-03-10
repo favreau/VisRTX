@@ -21,25 +21,29 @@ enum MessageType
   SERVER_START_RENDERING,
   SERVER_STOP_RENDERING,
   SERVER_SET_FRAME_CONFIG,
-  SERVER_SET_VIEW,
   SERVER_SET_OBJECT_PARAMETER,
   SERVER_REMOVE_OBJECT_PARAMETER,
+  SERVER_SET_CURRENT_RENDERER,
+  SERVER_SET_CURRENT_CAMERA,
   SERVER_SET_ARRAY_DATA,
   SERVER_ADD_OBJECT,
   SERVER_REMOVE_OBJECT,
   SERVER_REMOVE_ALL_OBJECTS,
   SERVER_UPDATE_LAYER,
+  SERVER_SAVE_STATE_FILE,
 
   // Get state: server -> client
   CLIENT_RECEIVE_FRAME_BUFFER_COLOR,
   CLIENT_RECEIVE_FRAME_CONFIG,
+  CLIENT_RECEIVE_CURRENT_RENDERER,
   CLIENT_RECEIVE_SCENE,
-  CLIENT_RECEIVE_VIEW,
+  CLIENT_RECEIVE_CURRENT_CAMERA,
   CLIENT_SCENE_TRANSFER_BEGIN, // notify the client a big message is coming...
 
   // Request state: client-> server
   SERVER_REQUEST_FRAME_CONFIG,
-  SERVER_REQUEST_VIEW,
+  SERVER_REQUEST_CURRENT_RENDERER,
+  SERVER_REQUEST_CURRENT_CAMERA,
   SERVER_REQUEST_SCENE,
 
   // All ping messages
@@ -68,13 +72,6 @@ struct RenderSession
     } buffers;
     int buffersVersion{0};
   } frame;
-
-  struct View
-  {
-    tsd::math::float3 azeldist{0.f, 0.f, 1.f};
-    tsd::math::float3 lookat{0.f, 0.f, 0.f};
-  } view;
-  int viewVersion{0};
 };
 
 } // namespace tsd::network

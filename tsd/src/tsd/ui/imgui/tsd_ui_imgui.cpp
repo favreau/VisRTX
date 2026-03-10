@@ -297,14 +297,18 @@ void buildUI_object(tsd::core::Object &o,
     ImGui::Text("   subtype: %s", o.subtype().c_str());
   }
 
-  ImGui::Text("use counts: %zu | %zu | %zu",
+  if (o.type() == ANARI_RENDERER)
+    ImGui::Text("    device: %s", o.rendererDeviceName().c_str());
+
+  ImGui::Text("use counts: [ %zu | %zu | %zu | %zu ]",
       o.useCount(tsd::core::Object::UseKind::APP),
       o.useCount(tsd::core::Object::UseKind::PARAMETER),
-      o.useCount(tsd::core::Object::UseKind::LAYER));
+      o.useCount(tsd::core::Object::UseKind::LAYER),
+      o.useCount(tsd::core::Object::UseKind::INTERNAL));
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip(
         "references to this object:"
-        " application | parameter | layer");
+        " application | parameter | layer | internal");
   }
 
   ImGui::Separator();
@@ -636,9 +640,10 @@ bool buildUI_parameter(tsd::core::Object &o,
       else
         ImGui::BulletText("%s | [%zu] %s", name, idx, anari::toString(type));
     } else {
-      if (useTable)
-        ImGui::Text("%s", anari::toString(type));
-      else
+      if (useTable) {
+        ImGui::TextColored(
+            ImVec4(0.6f, 0.6f, 0.6f, 1.f), "%s", anari::toString(type));
+      } else
         ImGui::BulletText("%s | %s", name, anari::toString(type));
     }
     break;

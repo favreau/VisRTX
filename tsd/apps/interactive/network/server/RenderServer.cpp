@@ -7,6 +7,8 @@
 #include "tsd/core/Timer.hpp"
 // tsd_io
 #include "tsd/io/serialization.hpp"
+// tsd_rendering
+#include "tsd/rendering/view/ManipulatorToTSD.hpp"
 // tsd_network
 #include "tsd/network/messages/NewObject.hpp"
 #include "tsd/network/messages/ParameterChange.hpp"
@@ -15,12 +17,14 @@
 #include "tsd/network/messages/TransferArrayData.hpp"
 #include "tsd/network/messages/TransferLayer.hpp"
 #include "tsd/network/messages/TransferScene.hpp"
+// std
+#include <cstdlib>
 
 namespace tsd::network {
 
 RenderServer::RenderServer(int argc, const char **argv)
 {
-  tsd::core::setLogToStdout();
+  tsd::core::setLogToStdout(true);
   tsd::core::logStatus("[Server] Parsing command line...");
   m_core.parseCommandLine(argc, argv);
 }
@@ -33,7 +37,7 @@ void RenderServer::run(short port)
 
   setup_Scene();
   setup_ANARIDevice();
-  setup_Manipulator();
+  setup_Camera();
   setup_RenderPipeline();
   setup_Messaging();
 
@@ -54,9 +58,9 @@ void RenderServer::run(short port)
       }
       std::this_thread::sleep_for(std::chrono::seconds(1));
     } else if (m_currentMode == ServerMode::RENDERING) {
-      tsd::core::logDebug("[Server] Rendering frame...");
+      if (m_previousMode != ServerMode::RENDERING)
+        tsd::core::logDebug("[Server] Rendering frames...");
       update_FrameConfig();
-      update_View();
       m_renderPipeline.render();
       send_FrameBuffer();
     } else if (m_currentMode == ServerMode::SEND_SCENE) {
@@ -85,8 +89,7 @@ void RenderServer::run(short port)
   m_server->stop();
   m_server->removeAllHandlers();
 
-  anari::release(m_device, m_camera);
-  anari::release(m_device, m_renderer);
+  m_camera = {};
   m_core.anari.releaseRenderIndex(m_device);
   m_core.anari.releaseAllDevices();
 }
@@ -103,50 +106,43 @@ void RenderServer::setup_Scene()
 void RenderServer::setup_ANARIDevice()
 {
   tsd::core::logStatus("[Server] Loading 'environment' device...");
-  auto device = m_core.anari.loadDevice("environment");
+  const char *libNameEnv = std::getenv("ANARI_LIBRARY");
+  if (!libNameEnv) {
+    tsd::core::logWarning(
+        "[Server] ANARI_LIBRARY environment variable not set,"
+        " defaulting to 'helide'");
+    libNameEnv = "helide"; // default to helide if env var not set
+  } else {
+    tsd::core::logStatus(
+        "[Server] ANARI_LIBRARY environment variable set to '%s'", libNameEnv);
+  }
+
+  m_libName = libNameEnv;
+
+  auto device = m_core.anari.loadDevice(m_libName);
   if (!device) {
-    tsd::core::logError("[Server] Failed to load 'environment' ANARI device.");
+    tsd::core::logError(
+        "[Server] Failed to load '%s' ANARI device.", m_libName.c_str());
     std::exit(EXIT_FAILURE);
   }
 
   auto &scene = m_core.tsd.scene;
 
   m_device = device;
-  m_renderIndex = m_core.anari.acquireRenderIndex(scene, device);
-  m_camera = anari::newObject<anari::Camera>(device, "perspective");
-  m_renderer = anari::newObject<anari::Renderer>(device, "default");
-
-  anari::setParameter(device, m_renderer, "ambientRadiance", 1.f);
-  anari::commitParameters(device, m_renderer);
+  m_renderIndex = m_core.anari.acquireRenderIndex(scene, m_libName, device);
+  m_camera = scene.defaultCamera();
+  m_renderers = scene.renderersOfDevice(m_libName).empty()
+      ? scene.createStandardRenderers(m_libName, device)
+      : scene.renderersOfDevice(m_libName);
+  m_currentRenderer = m_renderers[0];
 }
 
-void RenderServer::setup_Manipulator()
+void RenderServer::setup_Camera()
 {
-  tsd::core::logStatus("[Server] Setting up manipulator...");
-
-  tsd::math::float3 bounds[2] = {{-1.f, -1.f, -1.f}, {1.f, 1.f, 1.f}};
-  auto &scene = m_core.tsd.scene;
-  if (!anariGetProperty(m_device,
-          m_renderIndex->world(),
-          "bounds",
-          ANARI_FLOAT32_BOX3,
-          &bounds[0],
-          sizeof(bounds),
-          ANARI_WAIT)) {
-    tsd::core::logWarning("[Server] anari::World returned no bounds!");
-  }
-
-  auto center = 0.5f * (bounds[0] + bounds[1]);
-  auto diag = bounds[1] - bounds[0];
-
-  m_manipulator.setConfig(center, 1.25f * linalg::length(diag), {0.f, 20.f});
-
-  auto azel = m_manipulator.azel();
-  auto dist = m_manipulator.distance();
-  auto lookat = m_manipulator.at();
-
-  m_session.view.azeldist = {azel.x, azel.y, dist};
-  m_session.view.lookat = lookat;
+  tsd::core::logStatus("[Server] Setting up camera...");
+  tsd::rendering::Manipulator manipulator;
+  manipulator.setConfig(m_renderIndex->computeDefaultView());
+  tsd::rendering::updateCameraObject(*m_camera, manipulator, true);
 }
 
 void RenderServer::setup_RenderPipeline()
@@ -160,9 +156,10 @@ void RenderServer::setup_RenderPipeline()
       m_renderPipeline.emplace_back<tsd::rendering::AnariSceneRenderPass>(
           m_device);
   arp->setWorld(m_renderIndex->world());
-  arp->setRenderer(m_renderer);
-  arp->setCamera(m_camera);
+  arp->setRenderer(m_renderIndex->renderer(m_currentRenderer->index()));
+  arp->setCamera(m_renderIndex->camera(m_camera->index()));
   arp->setEnableIDs(false);
+  m_sceneRenderPass = arp;
 
   auto *ccbp =
       m_renderPipeline.emplace_back<tsd::rendering::CopyFromColorBufferPass>();
@@ -233,27 +230,6 @@ void RenderServer::setup_Messaging()
         }
       });
 
-  m_server->registerHandler(
-      MessageType::SERVER_SET_VIEW, [&](const tsd::network::Message &msg) {
-        auto *view = &m_session.view;
-        auto pos = 0u;
-        if (tsd::network::payloadRead(msg, pos, view)) {
-          m_session.viewVersion++;
-          tsd::core::logDebug(
-              "[Server] Received view: azel=(%f,%f), dist=%f, "
-              "lookat=(%f,%f,%f), version=%d",
-              view->azeldist.x,
-              view->azeldist.y,
-              view->azeldist.z,
-              view->lookat.x,
-              view->lookat.y,
-              view->lookat.z,
-              m_session.viewVersion);
-        } else {
-          tsd::core::logError("[Server] Invalid payload for SERVER_SET_VIEW");
-        }
-      });
-
   m_server->registerHandler(MessageType::SERVER_SET_OBJECT_PARAMETER,
       [this](const tsd::network::Message &msg) {
         tsd::network::messages::ParameterChange paramChange(
@@ -266,6 +242,55 @@ void RenderServer::setup_Messaging()
         tsd::network::messages::ParameterRemove paramRemove(
             msg, &m_core.tsd.scene);
         paramRemove.execute();
+      });
+
+  m_server->registerHandler(MessageType::SERVER_SET_CURRENT_RENDERER,
+      [this](const tsd::network::Message &msg) {
+        size_t idx = 0;
+        uint32_t pos = 0;
+        if (tsd::network::payloadRead(msg, pos, &idx)) {
+          if (idx < m_renderers.size()) {
+            auto renderer = m_renderers[idx];
+            tsd::core::logDebug(
+                "[Server] Setting current renderer to index %u (subtype '%s')",
+                idx,
+                renderer->subtype().c_str());
+            m_currentRenderer = renderer;
+            m_sceneRenderPass->setRenderer(m_renderIndex->renderer(idx));
+          } else {
+            tsd::core::logError(
+                "[Server] Invalid renderer index %u in "
+                "SERVER_SET_CURRENT_RENDERER",
+                idx);
+          }
+        } else {
+          tsd::core::logError(
+              "[Server] Invalid payload for SERVER_SET_CURRENT_RENDERER");
+        }
+      });
+
+  m_server->registerHandler(MessageType::SERVER_SET_CURRENT_CAMERA,
+      [this](const tsd::network::Message &msg) {
+        size_t idx = 0;
+        uint32_t pos = 0;
+        if (tsd::network::payloadRead(msg, pos, &idx)) {
+          auto camera = m_core.tsd.scene.getObject<tsd::core::Camera>(idx);
+          if (camera) {
+            tsd::core::logDebug(
+                "[Server] Setting current camera to index %u (subtype '%s')",
+                idx,
+                camera->subtype().c_str());
+            m_sceneRenderPass->setCamera(m_renderIndex->camera(idx));
+          } else {
+            tsd::core::logError(
+                "[Server] Invalid camera index %u in "
+                "SERVER_SET_CURRENT_CAMERA",
+                idx);
+          }
+        } else {
+          tsd::core::logError(
+              "[Server] Invalid payload for SERVER_SET_CURRENT_CAMERA");
+        }
       });
 
   m_server->registerHandler(MessageType::SERVER_SET_ARRAY_DATA,
@@ -298,6 +323,21 @@ void RenderServer::setup_Messaging()
         layerMsg.execute();
       });
 
+  m_server->registerHandler(MessageType::SERVER_SAVE_STATE_FILE,
+      [this](const tsd::network::Message &msg) {
+        std::string filename;
+        uint32_t pos = 0;
+        if (tsd::network::payloadRead(msg, pos, filename)) {
+          tsd::core::logStatus(
+              "[Server] Saving state file '%s' as requested by client.",
+              filename.c_str());
+          tsd::io::save_Scene(m_core.tsd.scene, filename.c_str());
+        } else {
+          tsd::core::logError(
+              "[Server] Invalid payload for SERVER_SAVE_STATE_FILE");
+        }
+      });
+
   m_server->registerHandler(MessageType::SERVER_REQUEST_FRAME_CONFIG,
       [s = m_server, session = &m_session](const tsd::network::Message &msg) {
         tsd::core::logDebug("[Server] Client requested frame config.");
@@ -305,10 +345,18 @@ void RenderServer::setup_Messaging()
             MessageType::CLIENT_RECEIVE_FRAME_CONFIG, &session->frame.config);
       });
 
-  m_server->registerHandler(MessageType::SERVER_REQUEST_VIEW,
-      [s = m_server, session = &m_session](const tsd::network::Message &msg) {
-        tsd::core::logDebug("[Server] Client requested view.");
-        s->send(MessageType::CLIENT_RECEIVE_VIEW, &session->view);
+  m_server->registerHandler(MessageType::SERVER_REQUEST_CURRENT_RENDERER,
+      [this, s = m_server](const tsd::network::Message &msg) {
+        tsd::core::logDebug("[Server] Client requested current renderer.");
+        auto idx = m_currentRenderer->index();
+        s->send(MessageType::CLIENT_RECEIVE_CURRENT_RENDERER, &idx);
+      });
+
+  m_server->registerHandler(MessageType::SERVER_REQUEST_CURRENT_CAMERA,
+      [this, s = m_server](const tsd::network::Message &msg) {
+        tsd::core::logDebug("[Server] Client requested current camera.");
+        auto idx = m_camera->index();
+        s->send(MessageType::CLIENT_RECEIVE_CURRENT_CAMERA, &idx);
       });
 
   m_server->registerHandler(MessageType::SERVER_REQUEST_SCENE,
@@ -330,26 +378,13 @@ void RenderServer::update_FrameConfig()
   m_sessionVersions.frameConfigVersion = m_session.frame.configVersion;
 
   auto d = m_device;
+  auto c = m_renderIndex->camera(m_camera->index());
   anari::setParameter(d,
-      m_camera,
+      c,
       "aspect",
       float(m_session.frame.config.size.x)
           / float(m_session.frame.config.size.y));
-  anari::commitParameters(d, m_camera);
-}
-
-void RenderServer::update_View()
-{
-  if (m_session.viewVersion == m_sessionVersions.viewVersion)
-    return;
-
-  auto d = m_device;
-  m_manipulator.setAzel({m_session.view.azeldist.x, m_session.view.azeldist.y});
-  m_manipulator.setDistance(m_session.view.azeldist.z);
-  m_manipulator.setCenter(m_session.view.lookat);
-  tsd::rendering::updateCameraParametersPerspective(d, m_camera, m_manipulator);
-  anari::commitParameters(d, m_camera);
-  m_sessionVersions.viewVersion = m_session.viewVersion;
+  anari::commitParameters(d, c);
 }
 
 void RenderServer::send_FrameBuffer()

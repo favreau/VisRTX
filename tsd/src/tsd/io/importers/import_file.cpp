@@ -51,6 +51,8 @@ void import_file(Scene &scene,
     tsd::io::import_DLAF(scene, file.c_str(), root);
   else if (f.first == ImporterType::E57XYZ)
     tsd::io::import_E57XYZ(scene, file.c_str(), root);
+  else if (f.first == ImporterType::ENSIGHT)
+    tsd::io::import_ENSIGHT(scene, file.c_str(), root);
   else if (f.first == ImporterType::GLTF)
     tsd::io::import_GLTF(scene, file.c_str(), root);
   else if (f.first == ImporterType::HDRI)
@@ -84,7 +86,11 @@ void import_file(Scene &scene,
   else if (f.first == ImporterType::USD2) {
     tsd::io::import_USD(scene, file.c_str(), root);
     tsd::io::import_USD2(scene, file.c_str(), root);
-  } else if (f.first == ImporterType::XYZDP)
+  } else if (f.first == ImporterType::VTP)
+    tsd::io::import_VTP(scene, file.c_str(), root);
+  else if (f.first == ImporterType::VTU)
+    tsd::io::import_VTU(scene, file.c_str(), root);
+  else if (f.first == ImporterType::XYZDP)
     tsd::io::import_XYZDP(scene, file.c_str(), root);
   else if (f.first == ImporterType::VOLUME)
     tsd::io::import_volume(scene, file.c_str(), tf, root);

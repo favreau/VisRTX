@@ -37,11 +37,10 @@ struct RenderServer
 
   void setup_Scene();
   void setup_ANARIDevice();
-  void setup_Manipulator();
+  void setup_Camera();
   void setup_RenderPipeline();
   void setup_Messaging();
   void update_FrameConfig();
-  void update_View();
   void send_FrameBuffer();
   void set_Mode(ServerMode mode);
 
@@ -55,12 +54,14 @@ struct RenderServer
   std::shared_ptr<NetworkServer> m_server;
   MessageFuture m_lastSentFrame;
 
+  std::string m_libName;
   anari::Device m_device{nullptr};
-  anari::Camera m_camera{nullptr};
-  anari::Renderer m_renderer{nullptr};
-  tsd::rendering::Manipulator m_manipulator;
+  tsd::core::CameraAppRef m_camera;
+  std::vector<tsd::core::RendererAppRef> m_renderers;
+  tsd::core::RendererAppRef m_currentRenderer;
   tsd::rendering::RenderIndex *m_renderIndex{nullptr};
   tsd::rendering::RenderPipeline m_renderPipeline;
+  tsd::rendering::AnariSceneRenderPass *m_sceneRenderPass{nullptr};
   ServerMode m_currentMode{ServerMode::DISCONNECTED};
   ServerMode m_nextMode{ServerMode::DISCONNECTED};
   ServerMode m_previousMode{ServerMode::DISCONNECTED};

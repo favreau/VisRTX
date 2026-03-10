@@ -48,6 +48,8 @@ struct Any
   T get() const;
   template <typename T>
   T getAs(anari::DataType expectedHeldAnariType = ANARI_UNKNOWN) const;
+  template <typename T>
+  T getValueOr(const T &alt) const;
 
   size_t getAsObjectIndex() const; // when storing object indices only
 
@@ -143,7 +145,7 @@ inline Any::Any(ANARIDataType type, size_t v) : Any()
 {
   if (anari::isObject(type)) {
     m_type = type;
-    std::memcpy(m_storage.data(), &v, anari::sizeOf(type));
+    std::memcpy(m_storage.data(), &v, sizeof(v));
   }
 }
 
@@ -224,6 +226,12 @@ inline T Any::getAs(anari::DataType expectedType) const
   }
 
   return storageAs<T>();
+}
+
+template <typename T>
+inline T Any::getValueOr(const T &alt) const
+{
+  return is<T>() ? get<T>() : alt;
 }
 
 inline const void *Any::data() const

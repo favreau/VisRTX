@@ -82,16 +82,14 @@ struct InteractiveShadingPolicy
     vec3 contrib = materialEvaluateEmission(shadingState, -ray.dir);
 
     // Handle ambient light contribution
-    if (rendererParams.ambientIntensity > 0.0f) {
-      contrib += rendererParams.ambientColor * rendererParams.ambientIntensity
-          * materialEvaluateTint(shadingState);
-    }
+    contrib += rendererParams.ambientColor * rendererParams.ambientIntensity
+        * materialEvaluateTint(shadingState);
 
     // Handle all lights contributions
     for (size_t i = 0; i < world.numLightInstances; i++) {
       const auto &light = world.lightInstances[i];
       const auto lightSample =
-          sampleLight(ss, hit, light.lightIndex, light.xfm);
+          sampleLight(ss, hit.hitpoint, light.lightIndex, light.xfm);
 
       if (lightSample.pdf == 0.0f)
         continue;
@@ -148,7 +146,8 @@ struct InteractiveShadingPolicy
 
         auto sampleDir = randomDir(ss.rs, bounceHit.Ns);
         auto cosineT = dot(bounceHit.Ns, sampleDir);
-        auto color = materialEvaluateTint(bounceShadingState) * cosineT;
+        auto color = materialEvaluateTint(bounceShadingState) * cosineT
+            * rendererParams.ambientColor * rendererParams.ambientIntensity;
         contrib += color * nextRay.contributionWeight;
       } else {
         // No hit, get background contribution directly (no surface to weight
@@ -180,6 +179,7 @@ VISRTX_GLOBAL void __anyhit__shadow()
   auto &rendererParams = frameData.renderer.params;
 
   if (ray::isIntersectingSurfaces()) {
+    ray::cullCutPlane();
     SurfaceHit hit;
     ray::populateSurfaceHit(hit);
 
@@ -211,6 +211,7 @@ VISRTX_GLOBAL void __anyhit__shadow()
 VISRTX_GLOBAL void __anyhit__shading()
 {
   ray::cullbackFaces();
+  ray::cullCutPlane();
 }
 
 VISRTX_GLOBAL void __closesthit__shading()

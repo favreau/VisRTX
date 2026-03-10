@@ -8,8 +8,9 @@
 
 namespace tsd::rendering {
 
-RenderIndex::RenderIndex(Scene &scene, anari::Device d)
-    : m_cache(scene, d), m_ctx(&scene)
+RenderIndex::RenderIndex(
+    Scene &scene, tsd::core::Token deviceName, anari::Device d)
+    : m_cache(scene, deviceName, d), m_ctx(&scene)
 {
   anari::retain(d, d);
   m_world = anari::newObject<anari::World>(d);
@@ -32,6 +33,42 @@ anari::World RenderIndex::world() const
   return m_world;
 }
 
+anari::Renderer RenderIndex::renderer(size_t i)
+{
+  return (anari::Renderer)m_cache.getHandle(ANARI_RENDERER, i, true);
+}
+
+anari::Camera RenderIndex::camera(size_t i)
+{
+  return (anari::Camera)m_cache.getHandle(ANARI_CAMERA, i, true);
+}
+
+CameraPose RenderIndex::computeDefaultView() const
+{
+  tsd::math::float3 bounds[2] = {{-1.f, -1.f, -1.f}, {1.f, 1.f, 1.f}};
+  if (!anariGetProperty(device(),
+          world(),
+          "bounds",
+          ANARI_FLOAT32_BOX3,
+          &bounds[0],
+          sizeof(bounds),
+          ANARI_WAIT)) {
+    tsd::core::logWarning(
+        "[RenderIndex::computeDefaultView] "
+        "anari::World returned no bounds!");
+  }
+
+  auto center = 0.5f * (bounds[0] + bounds[1]);
+  auto diag = bounds[1] - bounds[0];
+
+  CameraPose pose;
+  pose.fixedDist = 1.25f * tsd::math::length(diag);
+  pose.lookat = center;
+  pose.azeldist = {0.f, 20.f, pose.fixedDist};
+  pose.upAxis = static_cast<int>(UpAxis::POS_Y);
+  return pose;
+}
+
 void RenderIndex::logCacheInfo() const
 {
   logStatus("RENDER INDEX:");
@@ -45,6 +82,8 @@ void RenderIndex::logCacheInfo() const
   logStatus("      fields: %zu", m_cache.field.size());
   logStatus("      lights: %zu", m_cache.light.size());
   logStatus("      arrays: %zu", m_cache.array.size());
+  logStatus("     cameras: %zu", m_cache.camera.size());
+  logStatus("   renderers: %zu", m_cache.renderer.size());
 }
 
 void RenderIndex::populate(bool setAsUpdateDelegate)
@@ -66,6 +105,8 @@ void RenderIndex::populate(bool setAsUpdateDelegate)
   createANARICacheObjects(db.field, m_cache.field);
   createANARICacheObjects(db.volume, m_cache.volume);
   createANARICacheObjects(db.light, m_cache.light);
+  createANARICacheObjects(db.camera, m_cache.camera);
+  createANARICacheObjects(db.renderer, m_cache.renderer);
 
   if (setAsUpdateDelegate)
     m_ctx->setUpdateDelegate(this);
@@ -111,6 +152,13 @@ void RenderIndex::signalParameterRemoved(const Object *o, const Parameter *p)
   }
 }
 
+void RenderIndex::signalParameterBatchUpdated(
+    const Object *o, const std::vector<Parameter *> &ps)
+{
+  for (auto *p : ps)
+    signalParameterUpdated(o, p);
+}
+
 void RenderIndex::signalArrayMapped(const Array *a)
 {
   if (anari::isObject(a->elementType()))
@@ -132,7 +180,12 @@ void RenderIndex::signalLayerAdded(const Layer *)
   // no-op
 }
 
-void RenderIndex::signalLayerUpdated(const Layer *)
+void RenderIndex::signalLayerStructureUpdated(const Layer *)
+{
+  // no-op
+}
+
+void RenderIndex::signalLayerTransformUpdated(const Layer *)
 {
   // no-op
 }

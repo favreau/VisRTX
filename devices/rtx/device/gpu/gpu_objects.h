@@ -672,7 +672,7 @@ struct FastRendererGPUData
 
 struct QualityRendererGPUData
 {
-  int maxDepth;
+  int maxRayDepth;
 };
 
 struct InteractiveRendererGPUData
@@ -711,13 +711,13 @@ struct RendererGPUData
   RendererBackgroundGPUData background;
   glm::vec3 ambientColor;
   int numIterations;
-  int maxRayDepth;
   float ambientIntensity;
   float inverseVolumeSamplingRate;
   float occlusionDistance;
   bool cullTriangleBF;
   bool premultiplyBackground;
   bool tonemap; // enable internal tonemapping during sample accumulation
+  glm::vec4 cutPlane; // cutting plane (nx,ny,nz,d); disabled when all zero (GPU default)
 };
 
 // Frame //

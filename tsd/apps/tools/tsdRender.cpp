@@ -32,6 +32,7 @@ static tsd::rendering::Manipulator g_manipulator;
 static std::vector<tsd::rendering::CameraPose> g_cameraPoses;
 static std::unique_ptr<tsd::app::Core> g_core;
 
+static tsd::core::Token g_deviceName;
 static anari::Library g_library{nullptr};
 static anari::Device g_device{nullptr};
 static anari::Camera g_camera{nullptr};
@@ -67,6 +68,7 @@ static void loadANARIDevice()
   };
 
   auto library = g_core->offline.renderer.libraryName;
+  g_deviceName = library;
 
   printf("Loading ANARI device from '%s' library...", library.c_str());
   fflush(stdout);
@@ -109,8 +111,8 @@ static void initTSDRenderIndex()
   fflush(stdout);
 
   g_timer.start();
-  g_renderIndex =
-      std::make_unique<tsd::rendering::RenderIndexAllLayers>(*g_ctx, g_device);
+  g_renderIndex = std::make_unique<tsd::rendering::RenderIndexAllLayers>(
+      *g_ctx, g_deviceName, g_device);
   g_timer.end();
 
   printf("done (%.2f ms)\n", g_timer.milliseconds());
@@ -188,26 +190,7 @@ static void setupCameraManipulator()
   } else {
     printf("from world bounds...");
     fflush(stdout);
-
-    tsd::math::float3 bounds[2] = {{-1.f, -1.f, -1.f}, {1.f, 1.f, 1.f}};
-    anariGetProperty(g_device,
-        g_renderIndex->world(),
-        "bounds",
-        ANARI_FLOAT32_BOX3,
-        &bounds[0],
-        sizeof(bounds),
-        ANARI_WAIT);
-
-    auto center = 0.5f * (bounds[0] + bounds[1]);
-    auto diag = bounds[1] - bounds[0];
-
-    tsd::rendering::CameraPose pose;
-    pose.fixedDist = 2.f * tsd::math::length(diag);
-    pose.lookat = center;
-    pose.azeldist = {0.f, 20.f, pose.fixedDist};
-    pose.upAxis = static_cast<int>(tsd::rendering::UpAxis::POS_Y);
-
-    g_cameraPoses.push_back(std::move(pose));
+    g_cameraPoses.push_back(g_renderIndex->computeDefaultView());
   }
   g_timer.end();
 
@@ -281,6 +264,13 @@ static void setupRenderPipeline()
   printf("done (%.2f ms)\n", g_timer.milliseconds());
 }
 
+static std::string frameFilename(int i)
+{
+  char buf[32];
+  snprintf(buf, sizeof(buf), "tsdRender_%04d.png", i);
+  return buf;
+}
+
 static void renderFrames()
 {
   const auto frameWidth = g_core->offline.frame.width;
@@ -294,36 +284,82 @@ static void renderFrames()
 
   g_timer.start();
 
-  for (size_t i = 0; i < g_cameraPoses.size(); i++) {
-    const auto &pose = g_cameraPoses[i];
+  // Check for keyframe animations
+  bool hasKeyframeAnimation = false;
+  const tsd::core::Object *animatedCamera = nullptr;
+  for (size_t i = 0; i < g_ctx->numberOfAnimations(); i++) {
+    auto *anim = g_ctx->animation(i);
+    if (anim->hasKeyframes()) {
+      hasKeyframeAnimation = true;
+      if (!animatedCamera && anim->keyframeTargetObject())
+        animatedCamera = anim->keyframeTargetObject();
+    }
+  }
 
-    g_manipulator.setConfig(pose);
-    tsd::rendering::updateCameraParametersPerspective(
-        g_device, g_camera, g_manipulator);
-    anari::commitParameters(g_device, g_camera);
+  if (hasKeyframeAnimation) {
+    const int totalFrames = g_ctx->getAnimationTotalFrames();
 
-    printf("...frame %zu...\n", i);
-    fflush(stdout);
+    // If no animated camera, set static pose once from saved poses
+    if (!animatedCamera) {
+      g_manipulator.setConfig(g_cameraPoses[0]);
+      tsd::rendering::updateCameraParametersPerspective(
+          g_device, g_camera, g_manipulator);
+      anari::commitParameters(g_device, g_camera);
+    }
 
-    for (int i = 0; i < frameSamples; i++)
-      g_renderPipeline->render();
+    printf("...animating %d frames...\n", totalFrames);
 
-    std::string filename = "tsdRender_";
-    if (i < 10)
-      filename += "000" + std::to_string(i) + ".png";
-    else if (i < 100)
-      filename += "00" + std::to_string(i) + ".png";
-    else if (i < 1000)
-      filename += "0" + std::to_string(i) + ".png";
-    else
-      filename += std::to_string(i) + ".png";
+    for (int i = 0; i < totalFrames; i++) {
+      g_ctx->setAnimationFrame(i);
 
-    stbi_write_png(filename.c_str(),
-        frameWidth,
-        frameHeight,
-        4,
-        g_renderPipeline->getColorBuffer(),
-        4 * frameWidth);
+      if (animatedCamera) {
+        using anari::math::float3;
+        if (auto v = animatedCamera->parameterValueAs<float3>("position"))
+          anari::setParameter(g_device, g_camera, "position", *v);
+        if (auto v = animatedCamera->parameterValueAs<float3>("direction"))
+          anari::setParameter(g_device, g_camera, "direction", *v);
+        if (auto v = animatedCamera->parameterValueAs<float3>("up"))
+          anari::setParameter(g_device, g_camera, "up", *v);
+        if (auto v = animatedCamera->parameterValueAs<float>("fovy"))
+          anari::setParameter(g_device, g_camera, "fovy", *v);
+        anari::commitParameters(g_device, g_camera);
+      }
+
+      printf("...frame %d / %d...\n", i, totalFrames - 1);
+      fflush(stdout);
+
+      for (int s = 0; s < frameSamples; s++)
+        g_renderPipeline->render();
+
+      auto filename = frameFilename(i);
+      stbi_write_png(filename.c_str(),
+          frameWidth,
+          frameHeight,
+          4,
+          g_renderPipeline->getColorBuffer(),
+          4 * frameWidth);
+    }
+  } else {
+    // Original camera-pose turntable behavior
+    for (size_t i = 0; i < g_cameraPoses.size(); i++) {
+      g_manipulator.setConfig(g_cameraPoses[i]);
+      tsd::rendering::updateCameraParametersPerspective(
+          g_device, g_camera, g_manipulator);
+      anari::commitParameters(g_device, g_camera);
+
+      printf("...frame %zu...\n", i);
+      fflush(stdout);
+
+      for (int s = 0; s < frameSamples; s++)
+        g_renderPipeline->render();
+
+      stbi_write_png(frameFilename(i).c_str(),
+          frameWidth,
+          frameHeight,
+          4,
+          g_renderPipeline->getColorBuffer(),
+          4 * frameWidth);
+    }
   }
 
   g_timer.end();

@@ -13,9 +13,8 @@ namespace tsd::io {
 
 using namespace tsd::core;
 
-VolumeRef import_volume(Scene &scene,
-    const char *filepath,
-    LayerNodeRef location)
+VolumeRef import_volume(
+    Scene &scene, const char *filepath, LayerNodeRef location)
 {
   SpatialFieldRef field;
 
@@ -31,8 +30,25 @@ VolumeRef import_volume(Scene &scene,
     field = import_MHD(scene, filepath);
   else if (ext == ".vtu")
     field = import_VTU(scene, filepath);
-  else if (ext == ".vti")
-    field = import_VTI(scene, filepath);
+  else if (ext == ".vti") {
+    std::vector<SpatialFieldRef> extraFields;
+    field = import_VTI(scene, filepath, location, &extraFields);
+    // Store extra fields as named object parameters on the Volume so they
+    // survive scene GC and are selectable via the ObjectEditor "select" button.
+    if (field && !extraFields.empty()) {
+      float2 valueRange = field->computeValueRange();
+      auto tx = scene.insertChildTransformNode(
+          location ? location : scene.defaultLayer()->root());
+      auto [inst, volume] = scene.insertNewChildObjectNode<Volume>(
+          tx, tokens::volume::transferFunction1D);
+      volume->setName(fileOf(filepath).c_str());
+      volume->setParameterObject("value", *field);
+      volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &valueRange);
+      for (auto &extra : extraFields)
+        volume->setParameterObject(extra->name().c_str(), *extra);
+      return volume;
+    }
+  }
   else if (ext == ".silo" || ext == ".sil")
     field = import_SILO(scene, filepath);
   else {
@@ -64,7 +80,7 @@ VolumeRef import_volume(Scene &scene,
 
 VolumeRef import_volume(Scene &scene,
     const char *filepath,
-    const TransferFunction& transferFunction,
+    const TransferFunction &transferFunction,
     LayerNodeRef location)
 {
   auto volume = import_volume(scene, filepath, location);
@@ -82,15 +98,16 @@ VolumeRef import_volume(Scene &scene,
     colormap.push_back({color.x, color.y, color.z, opacty});
   }
 
-  auto colorArray = scene.createArray(
-      ANARI_FLOAT32_VEC4, colormap.size());
+  auto colorArray = scene.createArray(ANARI_FLOAT32_VEC4, colormap.size());
   colorArray->setData(colormap);
   volume->setParameterObject("color", *colorArray);
 
   if (transferFunction.range.lower < transferFunction.range.upper)
-    volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &transferFunction.range);
+    volume->setParameter(
+        "valueRange", ANARI_FLOAT32_BOX1, &transferFunction.range);
 
-  volume->setMetadataArray("opacityControlPoints", ANARI_FLOAT32_VEC2,
+  volume->setMetadataArray("opacityControlPoints",
+      ANARI_FLOAT32_VEC2,
       transferFunction.opacityPoints.data(),
       transferFunction.opacityPoints.size());
 

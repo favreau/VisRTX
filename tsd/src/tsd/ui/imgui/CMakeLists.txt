@@ -14,7 +14,11 @@ project_sources(PRIVATE
   modals/OfflineRenderModal.cpp
   modals/ImportFileDialog.cpp
   modals/Modal.cpp
+  modals/CuttingPlaneDialog.cpp
+  modals/VorticityDialog.cpp
   windows/Animations.cpp
+  windows/Timeline.cpp
+  windows/BaseViewport.cpp
   windows/CameraPoses.cpp
   windows/DatabaseEditor.cpp
   windows/IsosurfaceEditor.cpp
@@ -32,10 +36,8 @@ project_sources(PRIVATE
 )
 
 if(TSD_USE_LUA)
-  project_sources(PRIVATE
-  )
   project_link_libraries(PRIVATE tsd_lua tsd_ext_sol2)
-  project_compile_definitions(PRIVATE TSD_USE_LUA=1)
+  project_compile_definitions(PRIVATE TSD_USE_LUA)
 endif()
 
 project_link_libraries(

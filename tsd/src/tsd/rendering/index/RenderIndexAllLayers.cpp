@@ -6,6 +6,7 @@
 #include "RenderToAnariObjectsVisitor.hpp"
 // tsd_core
 #include "tsd/core/Logging.hpp"
+#include "tsd/rendering/index/TransformsToAnariVisitor.hpp"
 // std
 #include <algorithm>
 #include <iterator>
@@ -23,9 +24,11 @@ static void releaseInstances(
 
 // RenderIndexAllLayers definitions ///////////////////////////////////////////
 
-RenderIndexAllLayers::RenderIndexAllLayers(
-    Scene &scene, anari::Device d, bool alwaysGatherAllLights)
-    : RenderIndex(scene, d), m_forceAllLights(alwaysGatherAllLights)
+RenderIndexAllLayers::RenderIndexAllLayers(Scene &scene,
+    tsd::core::Token deviceName,
+    anari::Device d,
+    bool alwaysGatherAllLights)
+    : RenderIndex(scene, deviceName, d), m_forceAllLights(alwaysGatherAllLights)
 {
   m_includedLayers = scene.getActiveLayers();
 }
@@ -98,10 +101,18 @@ void RenderIndexAllLayers::signalLayerAdded(const Layer *l)
   updateWorld();
 }
 
-void RenderIndexAllLayers::signalLayerUpdated(const Layer *l)
+void RenderIndexAllLayers::signalLayerStructureUpdated(const Layer *l)
 {
   if (m_instanceCache.contains(l)) {
     syncLayerInstances(l, false, objectMask_all());
+    updateWorld();
+  }
+}
+
+void RenderIndexAllLayers::signalLayerTransformUpdated(const Layer *l)
+{
+  if (m_instanceCache.contains(l)) {
+    syncLayerTransforms(l);
     updateWorld();
   }
 }
@@ -221,6 +232,17 @@ void RenderIndexAllLayers::syncLayerInstances(
     releaseInstances(d, cached);
     cached = instances;
   }
+
+  syncLayerTransforms(layer);
+}
+
+void RenderIndexAllLayers::syncLayerTransforms(const Layer *_layer)
+{
+  auto d = device();
+
+  auto *layer = const_cast<Layer *>(_layer);
+  TransformsToAnariVisitor visitor(d, m_instanceCache[layer].data());
+  layer->traverse(layer->root(), visitor);
 }
 
 void RenderIndexAllLayers::releaseAllInstances()

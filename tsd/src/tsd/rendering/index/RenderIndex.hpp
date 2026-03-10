@@ -9,6 +9,7 @@
 #include "tsd/core/scene/UpdateDelegate.hpp"
 // tsd_rendering
 #include "tsd/rendering/index/RenderIndexFilterFcn.hpp"
+#include "tsd/rendering/view/Manipulator.hpp"
 
 namespace tsd::rendering {
 
@@ -18,11 +19,15 @@ struct RenderToAnariObjectsVisitor;
 
 struct RenderIndex : public BaseUpdateDelegate
 {
-  RenderIndex(Scene &scene, anari::Device d);
+  RenderIndex(Scene &scene, tsd::core::Token deviceName, anari::Device d);
   virtual ~RenderIndex();
 
   anari::Device device() const;
   anari::World world() const;
+  anari::Renderer renderer(size_t i);
+  anari::Camera camera(size_t i);
+
+  CameraPose computeDefaultView() const;
 
   void logCacheInfo() const;
 
@@ -39,10 +44,13 @@ struct RenderIndex : public BaseUpdateDelegate
   void signalObjectAdded(const Object *o) override;
   void signalParameterUpdated(const Object *o, const Parameter *p) override;
   void signalParameterRemoved(const Object *o, const Parameter *p) override;
+  void signalParameterBatchUpdated(
+      const Object *o, const std::vector<Parameter *> &ps) override;
   void signalArrayMapped(const Array *a) override;
   void signalArrayUnmapped(const Array *a) override;
   void signalLayerAdded(const Layer *l) override;
-  void signalLayerUpdated(const Layer *l) override;
+  void signalLayerStructureUpdated(const Layer *l) override;
+  void signalLayerTransformUpdated(const Layer *l) override;
   void signalLayerRemoved(const Layer *l) override;
   void signalActiveLayersChanged() override;
   void signalObjectFilteringChanged() override;

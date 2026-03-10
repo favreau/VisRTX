@@ -6,6 +6,7 @@
 #include "tsd/core/DataTree.hpp"
 #include "tsd/core/FlatMap.hpp"
 #include "tsd/core/ObjectPool.hpp"
+#include "tsd/core/ObjectVersion.hpp"
 #include "tsd/core/Parameter.hpp"
 #include "tsd/core/TSDMath.hpp"
 #include "tsd/core/Token.hpp"
@@ -14,7 +15,16 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <type_traits>
+
+namespace tsd::core {
+struct Object;
+} // namespace tsd::core
+
+namespace tsd::io {
+void nodeToNewObject(core::DataNode &node, core::Object &obj);
+} // namespace tsd::io
 
 namespace tsd::core {
 
@@ -27,6 +37,7 @@ namespace tokens {
 
 extern Token none;
 extern Token unknown;
+extern Token defaultToken;
 
 } // namespace tokens
 
@@ -44,7 +55,7 @@ struct Object : public ParameterObserver
 {
   using ParameterMap = FlatMap<Token, Parameter>;
   // clang-format off
-  enum class UseKind { APP, PARAMETER, LAYER };
+  enum class UseKind { APP, PARAMETER, LAYER, INTERNAL };
   // clang-format on
 
   Object(anari::DataType type = ANARI_UNKNOWN, Token subtype = tokens::none);
@@ -60,6 +71,7 @@ struct Object : public ParameterObserver
   Token subtype() const;
   size_t index() const;
   Scene *scene() const;
+  Token rendererDeviceName() const; // only populated by Renderer
 
   //// Use count tracking (Scene garbage collection) ////
 
@@ -73,19 +85,20 @@ struct Object : public ParameterObserver
   const std::string &name() const;
   std::string &editableName();
   void setName(const char *n);
+  void setName(const std::string &n);
 
-  Any getMetadataValue(const std::string &name) const;
-  void getMetadataArray(const std::string &name,
+  Any getMetadataValue(std::string_view name) const;
+  void getMetadataArray(std::string_view name,
       anari::DataType *type,
       const void **ptr,
       size_t *size) const;
 
-  void setMetadataValue(const std::string &name, Any v);
-  void setMetadataArray(const std::string &name,
+  void setMetadataValue(std::string_view name, Any v);
+  void setMetadataArray(std::string_view name,
       anari::DataType type,
       const void *v,
       size_t numElements);
-  void removeMetadata(const std::string &name);
+  void removeMetadata(std::string_view name);
 
   size_t numMetadata() const;
   const char *getMetadataName(size_t i) const;
@@ -117,6 +130,14 @@ struct Object : public ParameterObserver
   Parameter &parameterAt(size_t i);
   const char *parameterNameAt(size_t i) const;
 
+  void beginParameterBatch(); // parameter changes are batched, until end
+  void endParameterBatch(); // stop batching + flush all parameter changes
+
+  //// Change tracking ////
+
+  ObjectVersion lastParameterChange() const;
+  ObjectVersion lastMetadataChange() const;
+
   //// ANARI Objects /////
 
   virtual anari::Object makeANARIObject(anari::Device d) const;
@@ -139,8 +160,11 @@ struct Object : public ParameterObserver
   virtual void removeParameter(const Parameter *p) override;
   BaseUpdateDelegate *updateDelegate() const;
 
+  Token m_rendererDeviceName{}; // only used by Renderer
+
  private:
   friend struct Scene;
+  friend void io::nodeToNewObject(core::DataNode &node, Object &obj);
 
   void incObjectUseCountParameter(const Parameter *p);
   void decObjectUseCountParameter(const Parameter *p);
@@ -148,7 +172,11 @@ struct Object : public ParameterObserver
   void initMetadata() const;
 
   Scene *m_scene{nullptr};
+
   ParameterMap m_parameters;
+  bool m_inParameterBatch{false};
+  std::vector<Parameter *> m_batchedParameters;
+
   anari::DataType m_type{ANARI_UNKNOWN};
   Token m_subtype;
   std::string m_name;
@@ -161,7 +189,13 @@ struct Object : public ParameterObserver
     size_t app{0};
     size_t parameter{0};
     size_t layer{0};
+    size_t internal{0};
   } m_useCounts;
+  struct Versions
+  {
+    ObjectVersion parameter{0};
+    ObjectVersion metadata{0};
+  } m_versions;
 };
 
 void print(const Object &obj, std::ostream &out = std::cout);
@@ -178,6 +212,9 @@ constexpr bool isObject()
 
 std::vector<std::string> getANARIObjectSubtypes(
     anari::Device d, anari::DataType type);
+
+void parseANARIObjectInfo(
+    Object &o, anari::Device d, ANARIDataType objectType, const char *subtype);
 
 Object parseANARIObjectInfo(
     anari::Device d, ANARIDataType type, const char *subtype);

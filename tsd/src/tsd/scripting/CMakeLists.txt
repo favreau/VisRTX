@@ -35,7 +35,7 @@ PRIVATE
 
 project_compile_definitions(
 PUBLIC
-  TSD_USE_LUA=1
+  TSD_USE_LUA
 PRIVATE
   TSD_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
@@ -46,6 +46,4 @@ if(MSVC)
     bindings/ObjectBindings.cpp
     PROPERTIES COMPILE_OPTIONS "/bigobj"
   )
-elseif(UNIX)
-  target_link_options(tsd_lua PUBLIC -rdynamic)
 endif()

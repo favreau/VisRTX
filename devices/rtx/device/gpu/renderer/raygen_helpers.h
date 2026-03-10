@@ -85,6 +85,7 @@ VISRTX_DEVICE void renderPixel(FrameGPUData &frameData, ScreenSample ss)
     // Jittered samples are produced by next iterations.
     bool isVeryFirstRay = i == 0 && ss.frameData->fb.frameID == 0;
     auto ray = makePrimaryRay(ss, isVeryFirstRay);
+    applyCuttingPlane(rendererParams.cutPlane, ray);
     float tmax = ray.t.upper;
 
     // Output accumulators

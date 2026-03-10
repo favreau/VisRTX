@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "tsd/core/scene/Object.hpp"
+#include "tsd/core/scene/ObjectUsePtr.hpp"
 
 namespace tsd::core {
 
@@ -11,8 +11,6 @@ struct Scene;
 
 struct SpatialField : public Object
 {
-  static constexpr anari::DataType ANARI_TYPE = ANARI_SPATIAL_FIELD;
-
   DECLARE_OBJECT_DEFAULT_LIFETIME(SpatialField);
 
   SpatialField(Token subtype = tokens::unknown);
@@ -26,6 +24,7 @@ struct SpatialField : public Object
 };
 
 using SpatialFieldRef = ObjectPoolRef<SpatialField>;
+using SpatialFieldAppRef = ObjectUsePtr<SpatialField, Object::UseKind::APP>;
 
 namespace tokens::spatial_field {
 

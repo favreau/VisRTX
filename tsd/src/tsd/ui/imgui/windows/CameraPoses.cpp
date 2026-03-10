@@ -22,8 +22,7 @@
 
 namespace tsd::ui::imgui {
 
-CameraPoses::CameraPoses(Application *app, Viewport *viewport, const char *name)
-    : Window(app, name), m_viewport(viewport)
+CameraPoses::CameraPoses(Application *app, const char *name) : Window(app, name)
 {}
 
 void CameraPoses::buildUI()
@@ -49,11 +48,13 @@ void CameraPoses::buildUI()
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("add a series of turntable camera poses");
 
+#if 0
   ImGui::SameLine();
   ImGui::BeginDisabled(!m_viewport);
   if (ImGui::Button("camera"))
     m_viewport->addCameraObjectFromCurrentView();
   ImGui::EndDisabled();
+#endif
 
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("add new camera object from current view");
@@ -238,7 +239,8 @@ void CameraPoses::buildUI_interpolationControls()
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
   ImGui::TextWrapped(
       "Note: Rendering uses Offline Render Settings. "
-      "To change output folder, file prefix, and renderer: File / App Settings / Offline Render Settings");
+      "To change output folder, file prefix, and renderer: "
+      "File / App Settings / Offline Render Settings");
   ImGui::PopStyleColor();
 
   // Render or Cancel button
@@ -421,14 +423,16 @@ void CameraPoses::renderInterpolatedPath()
           capturedTotalFrames]() {
         // Setup render pipeline
         auto &config = core->offline;
-        auto d = core->anari.loadDevice(config.renderer.libraryName.c_str());
+        auto deviceName = config.renderer.libraryName.c_str();
+        auto d = core->anari.loadDevice(deviceName);
         if (!d) {
           tsd::core::logError("[CameraPoses] Failed to load ANARI device");
           return;
         }
 
         auto &scene = core->tsd.scene;
-        auto *renderIndex = core->anari.acquireRenderIndex(scene, d);
+        auto *renderIndex =
+            core->anari.acquireRenderIndex(scene, deviceName, d);
         if (!renderIndex) {
           tsd::core::logError("[CameraPoses] Failed to acquire render index");
           anari::release(d, d);

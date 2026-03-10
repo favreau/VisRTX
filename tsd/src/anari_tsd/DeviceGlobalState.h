@@ -3,8 +3,10 @@
 
 #pragma once
 
-// tsd_core
+// tsd_app
 #include "tsd/app/Core.h"
+// tsd_core
+#include "tsd/core/ObjectVersion.hpp"
 // helium
 #include <helium/BaseGlobalDeviceState.h>
 #include <helium/helium_math.h>
@@ -15,12 +17,21 @@ using TSDAny = tsd::core::Any;
 
 struct DeviceGlobalState : public helium::BaseGlobalDeviceState
 {
-  DeviceGlobalState(ANARIDevice d);
+  DeviceGlobalState(anari::Device d);
 
-  tsd::core::Scene scene;
+  bool usingExternalScene() const;
+
+  tsd::core::Scene *scene{nullptr};
+  tsd::core::Scene localScene;
   tsd::app::ANARIDeviceManager anari;
 
   anari::Device device{nullptr};
+  tsd::core::Token deviceName;
+
+  struct ObjectUpdates
+  {
+    tsd::core::ObjectVersion instancing{};
+  } objectUpdates;
 
   int cameraCount{0};
   int surfaceCount{0};

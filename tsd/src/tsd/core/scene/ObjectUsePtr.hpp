@@ -14,12 +14,13 @@ struct ObjectUsePtr
       "ObjectUsePtr can only be instantiated with tsd::core::Object types");
 
   ObjectUsePtr() = default;
-  ObjectUsePtr(T *o);
-  ObjectUsePtr(ObjectPoolRef<T> o);
-  ObjectUsePtr(const ObjectUsePtr<T, K> &o);
-  ObjectUsePtr(ObjectUsePtr<T, K> &&o);
   ~ObjectUsePtr();
 
+  ObjectUsePtr(T *o);
+  ObjectUsePtr(ObjectPoolRef<T> o);
+
+  ObjectUsePtr(const ObjectUsePtr<T, K> &o);
+  ObjectUsePtr(ObjectUsePtr<T, K> &&o);
   ObjectUsePtr &operator=(const ObjectUsePtr<T, K> &o);
   ObjectUsePtr &operator=(ObjectUsePtr<T, K> &&o);
 
@@ -35,27 +36,41 @@ struct ObjectUsePtr
   T *operator->();
   T &operator*();
 
+  ObjectPoolRef<T> ref() const;
+
   operator bool() const;
 
  private:
   ObjectPoolRef<T> m_object;
 };
 
+template <typename T, Object::UseKind K>
+bool operator==(const ObjectUsePtr<T, K> &a, const ObjectUsePtr<T, K> &b);
+
+template <typename T, Object::UseKind K>
+bool operator!=(const ObjectUsePtr<T, K> &a, const ObjectUsePtr<T, K> &b);
+
 // Inlined definitions ////////////////////////////////////////////////////////
+
+template <typename T, Object::UseKind K>
+inline ObjectUsePtr<T, K>::~ObjectUsePtr()
+{
+  reset();
+}
 
 template <typename T, Object::UseKind K>
 inline ObjectUsePtr<T, K>::ObjectUsePtr(T *o)
     : m_object(o ? o->self() : ObjectPoolRef<T>{})
 {
   if (m_object)
-    m_object->incUseCount(Object::UseKind::APP);
+    m_object->incUseCount(K);
 }
 
 template <typename T, Object::UseKind K>
 inline ObjectUsePtr<T, K>::ObjectUsePtr(ObjectPoolRef<T> o) : m_object(o)
 {
   if (m_object)
-    m_object->incUseCount(Object::UseKind::APP);
+    m_object->incUseCount(K);
 }
 
 template <typename T, Object::UseKind K>
@@ -63,7 +78,7 @@ inline ObjectUsePtr<T, K>::ObjectUsePtr(const ObjectUsePtr<T, K> &o)
     : m_object(o.m_object)
 {
   if (m_object)
-    m_object->incUseCount(Object::UseKind::APP);
+    m_object->incUseCount(K);
 }
 
 template <typename T, Object::UseKind K>
@@ -71,12 +86,6 @@ inline ObjectUsePtr<T, K>::ObjectUsePtr(ObjectUsePtr<T, K> &&o)
     : m_object(o.m_object)
 {
   o.m_object = {};
-}
-
-template <typename T, Object::UseKind K>
-inline ObjectUsePtr<T, K>::~ObjectUsePtr()
-{
-  reset();
 }
 
 template <typename T, Object::UseKind K>
@@ -94,12 +103,10 @@ inline ObjectUsePtr<T, K> &ObjectUsePtr<T, K>::operator=(const ObjectUsePtr &o)
 template <typename T, Object::UseKind K>
 inline ObjectUsePtr<T, K> &ObjectUsePtr<T, K>::operator=(ObjectUsePtr<T, K> &&o)
 {
-  if (this != &o) {
+  if (this != &o && m_object != o.m_object) {
     reset();
     m_object = o.m_object;
     o.m_object = {};
-    if (m_object)
-      m_object->incUseCount(K);
   }
   return *this;
 }
@@ -174,9 +181,30 @@ inline T &ObjectUsePtr<T, K>::operator*()
 }
 
 template <typename T, Object::UseKind K>
+inline ObjectPoolRef<T> ObjectUsePtr<T, K>::ref() const
+{
+  return m_object;
+}
+
+template <typename T, Object::UseKind K>
 inline ObjectUsePtr<T, K>::operator bool() const
 {
   return m_object;
+}
+
+template <typename T, Object::UseKind K>
+inline bool operator==(const ObjectUsePtr<T, K> &a, const ObjectUsePtr<T, K> &b)
+{
+  auto *a1 = a.get();
+  auto *b1 = b.get();
+  return (a1 && b1) && (a1->type() == b1->type())
+      && (a1->index() == b1->index());
+}
+
+template <typename T, Object::UseKind K>
+inline bool operator!=(const ObjectUsePtr<T, K> &a, const ObjectUsePtr<T, K> &b)
+{
+  return !(a == b);
 }
 
 } // namespace tsd::core

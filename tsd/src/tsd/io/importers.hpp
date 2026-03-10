@@ -22,6 +22,11 @@ void import_ASSIMP(Scene &scene, const char *filename, LayerNodeRef location = {
 void import_AXYZ(Scene &scene, const char *filename, LayerNodeRef location = {});
 void import_DLAF(Scene &scene, const char *filename, LayerNodeRef location = {}, bool useDefaultMaterial = false);
 void import_E57XYZ(Scene &scene, const char *filename, LayerNodeRef location = {});
+void import_ENSIGHT(Scene &scene,
+    const char *filename,
+    LayerNodeRef location = {},
+    const std::vector<std::string> &fields = {},
+    int timestep = 0);
 void import_GLTF(Scene &scene, const char *filename, LayerNodeRef location = {});
 void import_HDRI(Scene &scene, const char *filename, LayerNodeRef location = {});
 void import_HSMESH(Scene &scene, const char *filename, LayerNodeRef location = {});
@@ -37,6 +42,8 @@ void import_SWC(Scene &scene, const char *filename, LayerNodeRef location = {});
 void import_TRK(Scene &scene, const char *filename, LayerNodeRef location = {});
 void import_USD(Scene &scene, const char *filename, LayerNodeRef location = {});
 void import_USD2(Scene &scene, const char *filename, LayerNodeRef location = {});
+void import_VTP(Scene &scene, const char *filepath, LayerNodeRef location = {});
+void import_VTU(Scene &scene, const char *filepath, LayerNodeRef location);
 void import_XYZDP(Scene &scene, const char *filename, LayerNodeRef location = {});
 
 // Spatial field importers //
@@ -45,7 +52,10 @@ SpatialFieldRef import_RAW(Scene &scene, const char *filename);
 SpatialFieldRef import_FLASH(Scene &scene, const char *filename);
 SpatialFieldRef import_NVDB(Scene &scene, const char *filename);
 SpatialFieldRef import_MHD(Scene &scene, const char *filename);
-SpatialFieldRef import_VTI(Scene &scene, const char *filename);
+SpatialFieldRef import_VTI(Scene &scene,
+    const char *filename,
+    LayerNodeRef location = {},
+    std::vector<SpatialFieldRef> *extraFields = nullptr);
 SpatialFieldRef import_VTU(Scene &scene, const char *filename);
 SpatialFieldRef import_SILO(Scene &scene, const char *filename);
 
@@ -75,6 +85,7 @@ enum class ImporterType
   AXYZ,
   DLAF,
   E57XYZ,
+  ENSIGHT,
   GLTF,
   HDRI,
   HSMESH,
@@ -91,6 +102,8 @@ enum class ImporterType
   TRK,
   USD,
   USD2,
+  VTP,
+  VTU,
   XYZDP,
   VOLUME,
   TSD,

@@ -27,6 +27,8 @@ struct NetworkUpdateDelegate : public tsd::core::BaseUpdateDelegate
       const tsd::core::Object *, const tsd::core::Parameter *) override;
   void signalParameterRemoved(
       const tsd::core::Object *, const tsd::core::Parameter *) override;
+  void signalParameterBatchUpdated(const tsd::core::Object *,
+      const std::vector<tsd::core::Parameter *> &) override;
   void signalArrayMapped(const tsd::core::Array *) override;
   void signalArrayUnmapped(const tsd::core::Array *) override;
   void signalObjectParameterUseCountZero(const tsd::core::Object *obj) override;
@@ -34,7 +36,8 @@ struct NetworkUpdateDelegate : public tsd::core::BaseUpdateDelegate
   void signalObjectRemoved(const tsd::core::Object *) override;
   void signalRemoveAllObjects() override;
   void signalLayerAdded(const tsd::core::Layer *) override;
-  void signalLayerUpdated(const tsd::core::Layer *) override;
+  void signalLayerStructureUpdated(const tsd::core::Layer *) override;
+  void signalLayerTransformUpdated(const tsd::core::Layer *) override;
   void signalLayerRemoved(const tsd::core::Layer *) override;
   void signalActiveLayersChanged() override;
   void signalObjectFilteringChanged() override;
@@ -42,6 +45,8 @@ struct NetworkUpdateDelegate : public tsd::core::BaseUpdateDelegate
   void signalAnimationTimeChanged(float) override;
 
  private:
+  bool isReady(const char *fcn) const;
+
   tsd::core::Scene *m_scene{nullptr};
   tsd::network::NetworkChannel *m_channel{nullptr};
   bool m_enabled{true};

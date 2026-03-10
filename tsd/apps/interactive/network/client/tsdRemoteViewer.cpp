@@ -40,6 +40,7 @@ struct Application : public TSDApplication
   std::shared_ptr<tsd::network::NetworkClient> m_client;
   std::string m_host{"127.0.0.1"};
   short m_port{12345};
+  std::string m_stateFileName{"state.tsd"};
 };
 
 // Application definitions ////////////////////////////////////////////////////
@@ -63,20 +64,6 @@ Application::Application()
   m_client->registerHandler(
       MessageType::PING, [](const tsd::network::Message &msg) {
         tsd::core::logStatus("[Client] Received PING from server");
-      });
-
-  m_client->registerHandler(MessageType::CLIENT_RECEIVE_VIEW,
-      [this](const tsd::network::Message &msg) {
-        tsd::core::logStatus("[Client] Received view from server");
-        const auto *viewMsg =
-            tsd::network::payloadAs<tsd::network::RenderSession::View>(msg);
-        auto *core = appCore();
-        auto *manipulator = &core->view.manipulator;
-        manipulator->setConfig(
-            tsd::math::float3(
-                viewMsg->lookat.x, viewMsg->lookat.y, viewMsg->lookat.z),
-            viewMsg->azeldist.z,
-            tsd::math::float2(viewMsg->azeldist.x, viewMsg->azeldist.y));
       });
 
   m_client->registerHandler(MessageType::CLIENT_SCENE_TRANSFER_BEGIN,
@@ -178,6 +165,25 @@ void Application::uiMainMenuBar()
     if (ImGui::MenuItem("Pause Rendering")) {
       tsd::core::logStatus("[Client] Sending STOP_RENDERING command");
       m_client->send(MessageType::SERVER_STOP_RENDERING);
+    }
+
+    ImGui::Separator();
+
+    if (ImGui::BeginMenu("Save State File")) {
+      ImGui::InputText("Filename", &m_stateFileName);
+      ImGui::Separator();
+      if (ImGui::Button("Save")) {
+        if (!m_stateFileName.empty()) {
+          tsd::core::logStatus(
+              "[Client] Sending command to save state file '%s'",
+              m_stateFileName.c_str());
+          auto msg =
+              tsd::network::makeMessage(MessageType::SERVER_SAVE_STATE_FILE);
+          tsd::network::payloadWrite(msg, m_stateFileName);
+          m_client->send(std::move(msg));
+        }
+      }
+      ImGui::EndMenu();
     }
 
     ImGui::Separator();
@@ -334,6 +340,7 @@ void Application::disconnect()
 {
   tsd::core::logStatus("[Client] Disconnecting from server...");
   m_updateDelegate->setEnabled(false);
+  m_viewport->disconnect();
   m_client->send(MessageType::DISCONNECT).get();
   m_client->disconnect();
 
@@ -341,7 +348,6 @@ void Application::disconnect()
   core->tsd.sceneLoadComplete = false;
   core->clearSelected();
   auto &scene = core->tsd.scene;
-  scene.removeAllLayers();
   scene.removeAllObjects();
 }
 
