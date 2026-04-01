@@ -1,10 +1,11 @@
 // Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tsd/animation/AnimationManager.hpp"
 #include "tsd/core/ColorMapUtil.hpp"
-#include "tsd/core/algorithms/computeScalarRange.hpp"
 #include "tsd/io/importers.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
+#include "tsd/scene/algorithms/computeScalarRange.hpp"
 // std
 #include <array>
 #include <cstdio>
@@ -17,8 +18,11 @@ using namespace tsd::core;
 //
 // Importing a bespoke binary dump of just triangles + vertex attribute scalars
 //
-void import_SMESH(
-    Scene &scene, const char *filepath, LayerNodeRef location, bool isAnimation)
+void import_SMESH(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filepath,
+    LayerNodeRef location,
+    bool isAnimation)
 {
   auto *fp = std::fopen(filepath, "rb");
   if (!fp)
@@ -37,7 +41,7 @@ void import_SMESH(
   if (isAnimation)
     auto r = std::fread(&size, sizeof(size_t), 1, fp);
 
-  std::vector<TimeStepArrays> arrays;
+  std::vector<std::vector<ObjectUsePtr<Array>>> arrays;
 
   arrays.emplace_back(); // primitive.index
   arrays.emplace_back(); // vertex.position
@@ -51,12 +55,15 @@ void import_SMESH(
 
   if (size > 1) {
     auto animationName = "SMESH animation for " + std::string(filename);
-    auto *anim = scene.addAnimation(animationName.c_str());
-    anim->setAsTimeSteps(*geom,
+    auto tb = makeLinearTimeBase(size);
+    auto &anim = animMgr.addAnimation(animationName);
+    addArrayTimeStepBindings(anim,
+        geom.data(),
         {Token("primitive.index"),
             Token("vertex.position"),
             Token("vertex.attribute0")},
-        arrays);
+        arrays,
+        tb);
   }
 
   geom->setParameterObject("primitive.index", *arrays[0][0]);
@@ -74,8 +81,8 @@ void import_SMESH(
 
   auto surface = scene.createSurface(filename.c_str(), geom, mat);
 
-  auto surfaceLayerRef = scene.insertChildObjectNode(hs_root, surface);
-  (*surfaceLayerRef)->name() = filename;
+  auto surfaceLayerRef =
+      scene.insertChildObjectNode(hs_root, surface, filename.c_str());
 
   std::fclose(fp);
 }

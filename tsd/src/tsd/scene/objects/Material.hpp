@@ -1,0 +1,40 @@
+// Copyright 2024-2026 NVIDIA Corporation
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "tsd/scene/Object.hpp"
+
+namespace tsd::scene {
+
+/*
+ * ANARI Material object that controls the shading model and surface appearance
+ * through its parameter map and a device-specific subtype token.
+ *
+ * Example:
+ *   auto mat = scene.createObject<Material>(tokens::material::physicallyBased);
+ *   mat->setParameter("baseColor", float3{0.8f, 0.2f, 0.2f});
+ */
+struct Material : public Object
+{
+  DECLARE_OBJECT_DEFAULT_LIFETIME(Material);
+
+  Material(Token subtype = tokens::unknown);
+  virtual ~Material() = default;
+
+  ObjectPoolRef<Material> self() const;
+
+  anari::Object makeANARIObject(anari::Device d) const override;
+};
+
+using MaterialRef = ObjectPoolRef<Material>;
+
+namespace tokens::material {
+
+extern const Token matte;
+extern const Token physicallyBased;
+extern const Token mdl;
+
+} // namespace tokens::material
+
+} // namespace tsd::scene

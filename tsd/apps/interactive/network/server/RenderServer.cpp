@@ -26,7 +26,7 @@ RenderServer::RenderServer(int argc, const char **argv)
 {
   tsd::core::setLogToStdout(true);
   tsd::core::logStatus("[Server] Parsing command line...");
-  m_core.parseCommandLine(argc, argv);
+  m_ctx.parseCommandLine(argc, argv);
 }
 
 RenderServer::~RenderServer() = default;
@@ -38,7 +38,7 @@ void RenderServer::run(short port)
   setup_Scene();
   setup_ANARIDevice();
   setup_Camera();
-  setup_RenderPipeline();
+  setup_ImagePipeline();
   setup_Messaging();
 
   m_server->start();
@@ -68,9 +68,11 @@ void RenderServer::run(short port)
 
       tsd::core::Timer timer;
       timer.start();
-      tsd::network::messages::TransferScene sceneMsg(&m_core.tsd.scene);
+      tsd::network::messages::TransferScene sceneMsg(&m_ctx.tsd.scene);
       m_server->send(MessageType::CLIENT_RECEIVE_SCENE, std::move(sceneMsg))
           .get();
+      const float time = m_ctx.tsd.animationMgr.getAnimationTime();
+      m_server->send(MessageType::CLIENT_RECEIVE_TIME, &time).get();
       timer.end();
       tsd::core::logStatus("[Server] ...done! (%.3f s)", timer.seconds());
 
@@ -90,16 +92,16 @@ void RenderServer::run(short port)
   m_server->removeAllHandlers();
 
   m_camera = {};
-  m_core.anari.releaseRenderIndex(m_device);
-  m_core.anari.releaseAllDevices();
+  m_ctx.anari.releaseRenderIndex(m_device);
+  m_ctx.anari.releaseAllDevices();
 }
 
 void RenderServer::setup_Scene()
 {
   tsd::core::logStatus("[Server] Setting up scene from command line...");
-  m_core.setupSceneFromCommandLine();
+  m_ctx.setupSceneFromCommandLine();
   tsd::core::logStatus(
-      "%s", tsd::core::objectDBInfo(m_core.tsd.scene.objectDB()).c_str());
+      "%s", tsd::scene::objectDBInfo(m_ctx.tsd.scene.objectDB()).c_str());
   tsd::core::logStatus("[Server] Scene setup complete.");
 }
 
@@ -119,17 +121,17 @@ void RenderServer::setup_ANARIDevice()
 
   m_libName = libNameEnv;
 
-  auto device = m_core.anari.loadDevice(m_libName);
+  auto device = m_ctx.anari.loadDevice(m_libName);
   if (!device) {
     tsd::core::logError(
         "[Server] Failed to load '%s' ANARI device.", m_libName.c_str());
     std::exit(EXIT_FAILURE);
   }
 
-  auto &scene = m_core.tsd.scene;
+  auto &scene = m_ctx.tsd.scene;
 
   m_device = device;
-  m_renderIndex = m_core.anari.acquireRenderIndex(scene, m_libName, device);
+  m_renderIndex = m_ctx.anari.acquireRenderIndex(scene, m_libName, device);
   m_camera = scene.defaultCamera();
   m_renderers = scene.renderersOfDevice(m_libName).empty()
       ? scene.createStandardRenderers(m_libName, device)
@@ -145,7 +147,7 @@ void RenderServer::setup_Camera()
   tsd::rendering::updateCameraObject(*m_camera, manipulator, true);
 }
 
-void RenderServer::setup_RenderPipeline()
+void RenderServer::setup_ImagePipeline()
 {
   tsd::core::logStatus("[Server] Setting up render pipeline...");
 
@@ -159,7 +161,7 @@ void RenderServer::setup_RenderPipeline()
   arp->setRenderer(m_renderIndex->renderer(m_currentRenderer->index()));
   arp->setCamera(m_renderIndex->camera(m_camera->index()));
   arp->setEnableIDs(false);
-  m_sceneRenderPass = arp;
+  m_sceneImagePass = arp;
 
   auto *ccbp =
       m_renderPipeline.emplace_back<tsd::rendering::CopyFromColorBufferPass>();
@@ -233,14 +235,14 @@ void RenderServer::setup_Messaging()
   m_server->registerHandler(MessageType::SERVER_SET_OBJECT_PARAMETER,
       [this](const tsd::network::Message &msg) {
         tsd::network::messages::ParameterChange paramChange(
-            msg, &m_core.tsd.scene);
+            msg, &m_ctx.tsd.scene);
         paramChange.execute();
       });
 
   m_server->registerHandler(MessageType::SERVER_REMOVE_OBJECT_PARAMETER,
       [this](const tsd::network::Message &msg) {
         tsd::network::messages::ParameterRemove paramRemove(
-            msg, &m_core.tsd.scene);
+            msg, &m_ctx.tsd.scene);
         paramRemove.execute();
       });
 
@@ -256,7 +258,7 @@ void RenderServer::setup_Messaging()
                 idx,
                 renderer->subtype().c_str());
             m_currentRenderer = renderer;
-            m_sceneRenderPass->setRenderer(m_renderIndex->renderer(idx));
+            m_sceneImagePass->setRenderer(m_renderIndex->renderer(idx));
           } else {
             tsd::core::logError(
                 "[Server] Invalid renderer index %u in "
@@ -274,13 +276,13 @@ void RenderServer::setup_Messaging()
         size_t idx = 0;
         uint32_t pos = 0;
         if (tsd::network::payloadRead(msg, pos, &idx)) {
-          auto camera = m_core.tsd.scene.getObject<tsd::core::Camera>(idx);
+          auto camera = m_ctx.tsd.scene.getObject<tsd::scene::Camera>(idx);
           if (camera) {
             tsd::core::logDebug(
                 "[Server] Setting current camera to index %u (subtype '%s')",
                 idx,
                 camera->subtype().c_str());
-            m_sceneRenderPass->setCamera(m_renderIndex->camera(idx));
+            m_sceneImagePass->setCamera(m_renderIndex->camera(idx));
           } else {
             tsd::core::logError(
                 "[Server] Invalid camera index %u in "
@@ -296,31 +298,43 @@ void RenderServer::setup_Messaging()
   m_server->registerHandler(MessageType::SERVER_SET_ARRAY_DATA,
       [this](const tsd::network::Message &msg) {
         tsd::network::messages::TransferArrayData arrayData(
-            msg, &m_core.tsd.scene);
+            msg, &m_ctx.tsd.scene);
         arrayData.execute();
       });
 
   m_server->registerHandler(
       MessageType::SERVER_ADD_OBJECT, [this](const tsd::network::Message &msg) {
-        tsd::network::messages::NewObject newObj(msg, &m_core.tsd.scene);
+        tsd::network::messages::NewObject newObj(msg, &m_ctx.tsd.scene);
         newObj.execute();
       });
 
   m_server->registerHandler(MessageType::SERVER_REMOVE_OBJECT,
       [this](const tsd::network::Message &msg) {
-        tsd::network::messages::RemoveObject removeObj(msg, &m_core.tsd.scene);
+        tsd::network::messages::RemoveObject removeObj(msg, &m_ctx.tsd.scene);
         removeObj.execute();
       });
 
   m_server->registerHandler(MessageType::SERVER_REMOVE_ALL_OBJECTS,
       [this](const tsd::network::Message &) {
-        m_core.tsd.scene.removeAllObjects();
+        m_ctx.tsd.scene.removeAllObjects();
       });
 
   m_server->registerHandler(MessageType::SERVER_UPDATE_LAYER,
       [this](const tsd::network::Message &msg) {
-        tsd::network::messages::TransferLayer layerMsg(msg, &m_core.tsd.scene);
+        tsd::network::messages::TransferLayer layerMsg(msg, &m_ctx.tsd.scene);
         layerMsg.execute();
+      });
+
+  m_server->registerHandler(MessageType::SERVER_UPDATE_TIME,
+      [this](const tsd::network::Message &msg) {
+        float time = 0.f;
+        uint32_t pos = 0;
+        if (tsd::network::payloadRead(msg, pos, &time)) {
+          m_ctx.tsd.animationMgr.setAnimationTime(time);
+        } else {
+          tsd::core::logError(
+              "[Server] Invalid payload for SERVER_UPDATE_TIME");
+        }
       });
 
   m_server->registerHandler(MessageType::SERVER_SAVE_STATE_FILE,
@@ -331,7 +345,7 @@ void RenderServer::setup_Messaging()
           tsd::core::logStatus(
               "[Server] Saving state file '%s' as requested by client.",
               filename.c_str());
-          tsd::io::save_Scene(m_core.tsd.scene, filename.c_str());
+          tsd::io::save_Scene(m_ctx.tsd.scene, filename.c_str());
         } else {
           tsd::core::logError(
               "[Server] Invalid payload for SERVER_SAVE_STATE_FILE");

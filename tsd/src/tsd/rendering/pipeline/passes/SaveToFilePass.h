@@ -3,16 +3,26 @@
 
 #pragma once
 
-#include "RenderPass.h"
+#include "ImagePass.h"
 // std
 #include <string>
 
 namespace tsd::rendering {
 
-struct SaveToFilePass : public RenderPass
+/*
+ * ImagePass that writes the current color buffer to an image file; in
+ * single-shot mode the pass disables itself after the first successful write.
+ *
+ * Example:
+ *   auto *pass = pipeline.emplace_back<SaveToFilePass>();
+ *   pass->setFilename("frame.png");
+ *   pass->setSingleShotMode(true);
+ */
+struct SaveToFilePass : public ImagePass
 {
   SaveToFilePass();
   ~SaveToFilePass() override;
+  const char *name() const override { return "Save To File"; }
 
   void setFilename(const std::string &filename);
   const std::string &getFilename() const;
@@ -20,7 +30,7 @@ struct SaveToFilePass : public RenderPass
   void setSingleShotMode(bool enabled);
 
  private:
-  void render(RenderBuffers &b, int stageId) override;
+  void render(ImageBuffers &b, int stageId) override;
 
   std::string m_filename;
   bool m_singleShot{true};

@@ -79,9 +79,9 @@ void SimulationControls::buildUI()
   ImGui::InputFloat("delta T", &m_params.deltaT);
 }
 
-void SimulationControls::setGeometry(tsd::core::GeometryRef particles,
-    tsd::core::GeometryRef blackHoles,
-    tsd::core::SamplerRef sampler)
+void SimulationControls::setGeometry(tsd::scene::GeometryRef particles,
+    tsd::scene::GeometryRef blackHoles,
+    tsd::scene::SamplerRef sampler)
 {
   m_particleGeom = particles;
   m_bhGeom = blackHoles;
@@ -95,7 +95,7 @@ void SimulationControls::remakeDataArrays()
   const int numParticles =
       m_particlesPerSide * m_particlesPerSide * m_particlesPerSide;
 
-  auto &scene = appCore()->tsd.scene;
+  auto &scene = appContext()->tsd.scene;
   m_dataPointsCUDA = scene.createArrayCUDA(ANARI_FLOAT32_VEC3, numParticles);
   m_dataDistancesCUDA = scene.createArrayCUDA(ANARI_FLOAT32, numParticles);
   m_dataVelocitiesCUDA =

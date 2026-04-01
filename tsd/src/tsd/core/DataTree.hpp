@@ -6,6 +6,7 @@
 #include "tsd/core/Any.hpp"
 #include "tsd/core/DataStream.hpp"
 #include "tsd/core/Forest.hpp"
+#include "tsd/core/TypeMacros.hpp"
 // std
 #include <algorithm>
 #include <cstdint>
@@ -13,14 +14,23 @@
 #include <cstring>
 #include <iterator>
 #include <memory>
-#include <string_view>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace tsd::core {
 
 struct DataTree;
 
+/*
+ * Named node in a hierarchical tree that holds an Any value and an ordered
+ * list of named child nodes; supports typed get/set helpers and tree traversal.
+ *
+ * Example:
+ *   DataNode &n = tree.root()["material"];
+ *   n["roughness"] = 0.4f;
+ *   float r = n.child("roughness")->getValueAs<float>();
+ */
 struct DataNode
 {
   using Ptr = std::unique_ptr<DataNode>;
@@ -28,10 +38,9 @@ struct DataNode
 
   DataNode() = default;
   ~DataNode();
-  DataNode(const DataNode &) = default;
-  DataNode(DataNode &&) = default;
-  DataNode &operator=(const DataNode &) = default;
-  DataNode &operator=(DataNode &&v) = default;
+
+  TSD_DEFAULT_MOVEABLE(DataNode)
+  TSD_DEFAULT_COPYABLE(DataNode)
 
   const std::string &name() const;
 
@@ -138,6 +147,16 @@ using DataTreeVisitorEntryFunction =
     std::function<bool(DataNode &n, int level)>;
 using DataTreeVisitorExitFunction = std::function<void(DataNode &n, int level)>;
 
+/*
+ * Non-copyable, non-movable tree of DataNode instances rooted at a single
+ * unnamed root node; supports serialization and depth-first traversal.
+ *
+ * Example:
+ *   DataTree tree;
+ *   tree.root()["width"] = 1920;
+ *   tree.root()["height"] = 1080;
+ *   tree.traverse([](DataNode &n, int lvl){ return true; }, {});
+ */
 struct DataTree
 {
   DataTree();
@@ -167,12 +186,8 @@ struct DataTree
 
   void print();
 
-  // Not movable or copyable //
-
-  DataTree(const DataTree &) = delete;
-  DataTree &operator=(const DataTree &) = delete;
-  DataTree(DataTree &&) = delete;
-  DataTree &operator=(DataTree &&) = delete;
+  TSD_NOT_MOVEABLE(DataTree)
+  TSD_NOT_COPYABLE(DataTree)
 
  private:
   bool saveImpl(DataWriter &writer);

@@ -21,7 +21,7 @@ InstancingControls::InstancingControls(
 void InstancingControls::buildUI()
 {
   if (ImGui::Button("clear scene"))
-    appCore()->tsd.scene.removeAllObjects();
+    appContext()->tsd.scene.removeAllObjects();
 
   ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
   if (ImGui::CollapsingHeader("Instancing")) {
@@ -38,7 +38,7 @@ void InstancingControls::buildUI()
 
   ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
   if (ImGui::CollapsingHeader("Lighting")) {
-    tsd::ui::buildUI_object(*m_light, appCore()->tsd.scene, true);
+    tsd::ui::buildUI_object(*m_light, appContext()->tsd.scene, true);
   }
 }
 
@@ -46,7 +46,7 @@ void InstancingControls::createScene()
 {
   // Clear out previous scene //
 
-  auto &scene = appCore()->tsd.scene;
+  auto &scene = appContext()->tsd.scene;
   scene.removeAllObjects();
 
   // Then only get the default layer //
@@ -55,8 +55,8 @@ void InstancingControls::createScene()
 
   // Default (global) material //
 
-  auto mat = scene.createObject<tsd::core::Material>(
-      tsd::core::tokens::material::matte);
+  auto mat = scene.createObject<tsd::scene::Material>(
+      tsd::scene::tokens::material::matte);
   mat->setName("default_material");
   mat->setParameter("color", "color");
 
@@ -69,13 +69,13 @@ void InstancingControls::createScene()
 
   // Add light //
 
-  auto light = scene.createObject<tsd::core::Light>(
-      tsd::core::tokens::light::directional);
+  auto light = scene.createObject<tsd::scene::Light>(
+      tsd::scene::tokens::light::directional);
   light->setName("mainLight");
   light->setParameter("direction", tsd::math::float2(0.f, 240.f));
   m_light = light.data();
 
-  layer->root()->insert_first_child({light});
+  layer->root()->insert_first_child({layer, light});
 
   // Finally update instancing in RenderIndexes //
 
@@ -84,12 +84,12 @@ void InstancingControls::createScene()
 
 void InstancingControls::generateSpheres()
 {
-  auto &scene = appCore()->tsd.scene;
+  auto &scene = appContext()->tsd.scene;
 
   // Generate geometry //
 
-  auto spheres = scene.createObject<tsd::core::Geometry>(
-      tsd::core::tokens::geometry::sphere);
+  auto spheres = scene.createObject<tsd::scene::Geometry>(
+      tsd::scene::tokens::geometry::sphere);
 
   spheres->setName("random_spheres_geometry");
   spheres->setParameter("radius", m_particleRadius);
@@ -120,20 +120,21 @@ void InstancingControls::generateSpheres()
   auto surface =
       scene.createSurface("random_spheres", spheres, scene.defaultMaterial());
 
-  scene.defaultLayer()->root()->insert_last_child({surface});
+  auto *layer = scene.defaultLayer();
+  layer->root()->insert_last_child({layer, surface});
 }
 
 void InstancingControls::generateInstances()
 {
-  auto &scene = appCore()->tsd.scene;
+  auto &scene = appContext()->tsd.scene;
+  auto *layer = scene.defaultLayer();
 
   // Setup transforms //
 
   size_t numXfms = size_t(m_numInstances);
   auto xfmArray = scene.createArray(ANARI_FLOAT32_MAT4, numXfms);
 
-  auto xfmArrayNode =
-      scene.defaultLayer()->root()->insert_last_child({xfmArray});
+  auto xfmArrayNode = layer->root()->insert_last_child({layer, xfmArray});
 
   std::mt19937 rng;
   rng.seed(0);

@@ -65,7 +65,7 @@ local mat4 = {}
 ---@alias tsd.ParameterValue boolean|number|string|tsd.float2|tsd.float3|tsd.float4|tsd.mat4|tsd.Array|tsd.Sampler|tsd.Geometry|tsd.Material|tsd.SpatialField|tsd.Volume|tsd.Light|tsd.Camera|tsd.Surface|number[]
 
 ------------------------------------------------------------------------
--- Token (CoreBindings.cpp)
+-- Token (ContextBindings.cpp)
 ------------------------------------------------------------------------
 
 ---@class tsd.Token
@@ -83,7 +83,7 @@ function Token:str() end
 function Token:empty() end
 
 ------------------------------------------------------------------------
--- Parameter (CoreBindings.cpp — read-only descriptor)
+-- Parameter (ContextBindings.cpp — read-only descriptor)
 ------------------------------------------------------------------------
 
 ---@class tsd.Parameter
@@ -122,6 +122,7 @@ function Object:setParameter(name, value) end
 
 --- Create an array, populate it from Lua data, and bind it to a parameter.
 --- For 2D/3D arrays, `data` may be linear or shape-matching nested.
+--- `typeStr` may also name ANARI object arrays such as "geometry" or "material".
 ---@param name string
 ---@param typeStr string
 ---@param data table
@@ -365,24 +366,25 @@ function Layer:foreach(fn) end
 ---@field name string # Animation name (read/write)
 local Animation = {}
 
----@return string
-function Animation:info() end
+--- Add a parameter binding to this animation.
+---@param target tsd.Object
+---@param param string
+---@param dataType string # e.g. "float3", "spatialField"
+---@param data table # table of values or object refs
+---@param timeBase number[] # table of float timestamps
+---@param interp? string # "linear" (default), "step", or "slerp"
+function Animation:addObjectParameterBinding(target, param, dataType, data, timeBase, interp) end
 
----@return integer
-function Animation:timeStepCount() end
-
----@param time number
-function Animation:update(time) end
-
---- Bind time-step arrays to an object's parameters for animation.
---- Single parameter: pass a string name and a single Array.
---- Multi parameter: pass a table of string names and a table of Arrays.
----@overload fun(self: tsd.Animation, obj: tsd.Object, param: string, array: tsd.Array)
----@overload fun(self: tsd.Animation, obj: tsd.Object, params: string[], arrays: tsd.Array[])
-function Animation:setAsTimeSteps(obj, params, arrays) end
+--- Add a transform binding to this animation.
+---@param node tsd.LayerNode
+---@param timeBase number[] # table of float timestamps
+---@param rotation table # table of float4 quaternions
+---@param translation table # table of float3 positions
+---@param scale table # table of float3 scale factors
+function Animation:addTransformBinding(node, timeBase, rotation, translation, scale) end
 
 ------------------------------------------------------------------------
--- Scene (CoreBindings.cpp)
+-- Scene (ContextBindings.cpp)
 ------------------------------------------------------------------------
 
 ---@class tsd.Scene
@@ -439,13 +441,22 @@ function Scene:createSurface(name, geometry, material, params) end
 --- "float", "float2", "float3", "float4",
 --- "int", "int2", "int3", "int4",
 --- "uint", "uint2", "uint3", "uint4",
---- "mat4".
+--- "mat4",
+--- "spatialField", "geometry", "material", "surface", "volume",
+--- "light", "camera", "sampler", "array1d".
+--- Pass a table to populate inline; table shape determines dimensions
+--- unless explicit sizes are given.
 ---@param typeStr string
----@param items0 integer
+---@param items0_or_data integer|table
+---@overload fun(self: tsd.Scene, typeStr: string, data: table): tsd.Array
+---@overload fun(self: tsd.Scene, typeStr: string, items0: integer): tsd.Array
+---@overload fun(self: tsd.Scene, typeStr: string, items0: integer, data: table): tsd.Array
 ---@overload fun(self: tsd.Scene, typeStr: string, items0: integer, items1: integer): tsd.Array
+---@overload fun(self: tsd.Scene, typeStr: string, items0: integer, items1: integer, data: table): tsd.Array
 ---@overload fun(self: tsd.Scene, typeStr: string, items0: integer, items1: integer, items2: integer): tsd.Array
+---@overload fun(self: tsd.Scene, typeStr: string, items0: integer, items1: integer, items2: integer, data: table): tsd.Array
 ---@return tsd.Array
-function Scene:createArray(typeStr, items0) end
+function Scene:createArray(typeStr, items0_or_data) end
 
 -- Object access ----------------------------------------------------------
 
@@ -620,39 +631,6 @@ function Scene:removeAllLayers() end
 ---@overload fun(self: tsd.Scene, node: tsd.LayerNode, deleteObjects: boolean)
 function Scene:removeNode(...) end
 
--- Animation --------------------------------------------------------------
-
----@overload fun(self: tsd.Scene): tsd.Animation
----@overload fun(self: tsd.Scene, name: string): tsd.Animation
----@return tsd.Animation
-function Scene:addAnimation(...) end
-
----@return integer
-function Scene:numberOfAnimations() end
-
----@param index integer
----@return tsd.Animation
-function Scene:animation(index) end
-
----@param animation tsd.Animation
-function Scene:removeAnimation(animation) end
-
-function Scene:removeAllAnimations() end
-
----@param time number
-function Scene:setAnimationTime(time) end
-
----@return number
-function Scene:getAnimationTime() end
-
----@param increment number
-function Scene:setAnimationIncrement(increment) end
-
----@return number
-function Scene:getAnimationIncrement() end
-
-function Scene:incrementAnimationTime() end
-
 -- Cleanup ----------------------------------------------------------------
 
 function Scene:removeUnusedObjects() end
@@ -660,6 +638,63 @@ function Scene:removeUnusedObjects() end
 function Scene:defragmentObjectStorage() end
 
 function Scene:cleanupScene() end
+
+------------------------------------------------------------------------
+-- AnimationManager (CoreBindings.cpp)
+------------------------------------------------------------------------
+
+---@class tsd.AnimationManager
+local AnimationManager = {}
+
+---@overload fun(self: tsd.AnimationManager): tsd.Animation
+---@overload fun(self: tsd.AnimationManager, name: string): tsd.Animation
+---@return tsd.Animation
+function AnimationManager:addAnimation(...) end
+
+---@return tsd.Animation[]
+function AnimationManager:animations() end
+
+---@return integer
+function AnimationManager:numberOfAnimations() end
+
+---@param index integer
+function AnimationManager:removeAnimation(index) end
+
+function AnimationManager:removeAllAnimations() end
+
+---@param time number
+function AnimationManager:setAnimationTime(time) end
+
+---@return number
+function AnimationManager:getAnimationTime() end
+
+---@param increment number
+function AnimationManager:setAnimationIncrement(increment) end
+
+---@return number
+function AnimationManager:getAnimationIncrement() end
+
+function AnimationManager:incrementAnimationTime() end
+
+---@return integer
+function AnimationManager:getAnimationTotalFrames() end
+
+---@param frames integer
+function AnimationManager:setAnimationTotalFrames(frames) end
+
+---@return number
+function AnimationManager:getAnimationFPS() end
+
+---@param fps number
+function AnimationManager:setAnimationFPS(fps) end
+
+---@return integer
+function AnimationManager:getAnimationFrame() end
+
+---@param frame integer
+function AnimationManager:setAnimationFrame(frame) end
+
+function AnimationManager:incrementAnimationFrame() end
 
 ------------------------------------------------------------------------
 -- Render types (RenderBindings.cpp)
@@ -696,27 +731,27 @@ function RenderIndex:world() end
 ---@return any
 function RenderIndex:device() end
 
----@class tsd.RenderPipeline
-local RenderPipeline = {}
+---@class tsd.ImagePipeline
+local ImagePipeline = {}
 
----@overload fun(): tsd.RenderPipeline
----@overload fun(width: integer, height: integer): tsd.RenderPipeline
----@return tsd.RenderPipeline
-function RenderPipeline.new(...) end
+---@overload fun(): tsd.ImagePipeline
+---@overload fun(width: integer, height: integer): tsd.ImagePipeline
+---@return tsd.ImagePipeline
+function ImagePipeline.new(...) end
 
 ---@param width integer
 ---@param height integer
-function RenderPipeline:setDimensions(width, height) end
+function ImagePipeline:setDimensions(width, height) end
 
-function RenderPipeline:render() end
+function ImagePipeline:render() end
 
 ---@return integer
-function RenderPipeline:size() end
+function ImagePipeline:size() end
 
 ---@return boolean
-function RenderPipeline:empty() end
+function ImagePipeline:empty() end
 
-function RenderPipeline:clear() end
+function ImagePipeline:clear() end
 
 ------------------------------------------------------------------------
 -- Module-level table (injected as a global by the C++ runtime)
@@ -987,11 +1022,6 @@ function tsd.io.importSMESH(...) end
 ---@overload fun(scene: tsd.Scene, filename: string, location: tsd.LayerNode)
 function tsd.io.importTRK(...) end
 
---- Import a USD file (alternate importer).
----@overload fun(scene: tsd.Scene, filename: string)
----@overload fun(scene: tsd.Scene, filename: string, location: tsd.LayerNode)
-function tsd.io.importUSD2(...) end
-
 --- Import an XYZDP point cloud file.
 ---@overload fun(scene: tsd.Scene, filename: string)
 ---@overload fun(scene: tsd.Scene, filename: string, location: tsd.LayerNode)
@@ -1005,19 +1035,19 @@ function tsd.io.importVolume(...) end
 --- Import a RAW volume file.
 ---@param scene tsd.Scene
 ---@param filename string
----@return tsd.Volume
+---@return tsd.SpatialField
 function tsd.io.importRAW(scene, filename) end
 
 --- Import a NanoVDB volume file.
 ---@param scene tsd.Scene
 ---@param filename string
----@return tsd.Volume
+---@return tsd.SpatialField
 function tsd.io.importNVDB(scene, filename) end
 
 --- Import an MHD (MetaImage) volume file.
 ---@param scene tsd.Scene
 ---@param filename string
----@return tsd.Volume
+---@return tsd.SpatialField
 function tsd.io.importMHD(scene, filename) end
 
 --- Import a FLASH (HDF5 AMR) volume file.
@@ -1079,6 +1109,12 @@ function tsd.io.generateRtow(...) end
 ---@overload fun(scene: tsd.Scene, location: tsd.LayerNode)
 function tsd.io.generateSphereSetVolume(...) end
 
+--- Create a default RGB-ramp color map array (float4, with alpha).
+---@param scene tsd.Scene
+---@param size? integer  Number of samples (default 256).
+---@return tsd.Array
+function tsd.io.makeDefaultColorMap(scene, size) end
+
 --- Save a scene to a TSD file.
 --- When called with a state table, the file can be opened directly in
 --- tsdViewer with the correct device and camera position.
@@ -1126,14 +1162,14 @@ function tsd.render.getWorldBounds(device, index) end
 --- Special key "renderer" selects subtype (default: "default").
 --- Supports vector values for params like background (float4), ambientColor (float3).
 ---@param rendererParams? table<string, boolean|number|string|tsd.float2|tsd.float3|tsd.float4|tsd.mat4|number[]>
----@return tsd.RenderPipeline
+---@return tsd.ImagePipeline
 function tsd.render.createPipeline(width, height, device, index, camera, rendererParams) end
 
 --- Render multiple samples and save to an image file.
 --- Supported formats: png, jpg/jpeg, bmp, tga, ppm.
 --- Throws if `pipeline` is nil, `samples < 1`, or width/height are <= 0.
 --- The pipeline dimensions are set to `(width, height)` before rendering.
----@param pipeline tsd.RenderPipeline
+---@param pipeline tsd.ImagePipeline
 ---@param samples integer
 ---@param filename string
 ---@param width integer
@@ -1146,5 +1182,8 @@ function tsd.render.renderToFile(pipeline, samples, filename, width, height) end
 
 ---@type tsd.Scene
 scene = nil
+
+---@type tsd.AnimationManager
+animationMgr = nil
 
 return tsd

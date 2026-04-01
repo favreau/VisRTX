@@ -165,8 +165,37 @@ SCENARIO("tsd::core::ObjectPool defragmentation", "[ObjectPool]")
         THEN("The remaining values are correct")
         {
           REQUIRE(iv[0] == 0);
-          REQUIRE(iv[1] == 3);
-          REQUIRE(iv[2] == 4);
+          REQUIRE(iv[1] == 4);
+          REQUIRE(iv[2] == 3);
+        }
+      }
+    }
+
+    WHEN("the last 2 values are erased")
+    {
+      iv.erase(3);
+      iv.erase(4);
+
+      WHEN("and the ObjectPool is defragmented")
+      {
+        iv.defragment();
+
+        THEN("The new size and capacity are correct")
+        {
+          REQUIRE(iv.size() == 3);
+          REQUIRE(iv.capacity() == 3);
+        }
+
+        THEN("The density should be 1.f")
+        {
+          REQUIRE(iv.density() == 1.f);
+        }
+
+        THEN("The remaining values are correct")
+        {
+          REQUIRE(iv[0] == 0);
+          REQUIRE(iv[1] == 1);
+          REQUIRE(iv[2] == 2);
         }
       }
     }

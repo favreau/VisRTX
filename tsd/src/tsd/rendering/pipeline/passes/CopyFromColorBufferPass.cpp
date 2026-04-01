@@ -4,8 +4,6 @@
 #include "CopyFromColorBufferPass.hpp"
 // tsd_core
 #include "tsd/core/Logging.hpp"
-// std
-#include <cstring>
 
 namespace tsd::rendering {
 
@@ -18,7 +16,7 @@ void CopyFromColorBufferPass::setExternalBuffer(std::vector<uint8_t> &buffer)
   m_externalBuffer = &buffer;
 }
 
-void CopyFromColorBufferPass::render(RenderBuffers &b, int /*stageId*/)
+void CopyFromColorBufferPass::render(ImageBuffers &b, int /*stageId*/)
 {
   if (!b.color) {
     tsd::core::logError("[CopyFromColorBufferPass] No color buffer available");
@@ -39,7 +37,7 @@ void CopyFromColorBufferPass::render(RenderBuffers &b, int /*stageId*/)
   }
 
   m_externalBuffer->resize(totalPixels * 4); // RGBA8
-  std::memcpy(m_externalBuffer->data(), b.color, totalPixels * 4);
+  detail::memcpy_(m_externalBuffer->data(), b.color, totalPixels * 4);
 }
 
 } // namespace tsd::rendering

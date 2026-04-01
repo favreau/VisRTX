@@ -16,6 +16,7 @@
 #include <anari/anari_cpp/ext/linalg.h>
 // std
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <fstream>
@@ -29,6 +30,7 @@ ANARI_TYPEFOR_SPECIALIZATION(U64Vec2, ANARI_UINT64_VEC2);
 namespace tsd::io {
 
 using namespace tsd::core;
+using namespace tsd::scene;
 
 #ifdef _WIN32
 constexpr char path_sep = '\\';
@@ -69,10 +71,10 @@ std::vector<std::string> splitString(const std::string &s, char delim)
   return result;
 }
 
-tsd::core::ArrayRef readArray(
-    tsd::core::Scene &scene, anari::DataType elementType, std::FILE *fp)
+tsd::scene::ArrayRef readArray(
+    tsd::scene::Scene &scene, anari::DataType elementType, std::FILE *fp)
 {
-  tsd::core::ArrayRef retval;
+  tsd::scene::ArrayRef retval;
 
   size_t size = 0;
   auto r = std::fread(&size, sizeof(size_t), 1, fp);
@@ -537,7 +539,7 @@ static core::TransferFunction importParaViewTransferFunction(
         filepath.c_str());
     return {};
   } else if (const auto arrayStart = jsonContent.find("[", rgbPointsPos);
-      arrayStart == std::string::npos) {
+             arrayStart == std::string::npos) {
     logError(
         "[importParaViewTransferFunction] Invalid RGBPoints format in file: %s",
         filepath.c_str());
@@ -622,7 +624,7 @@ static core::TransferFunction importParaViewTransferFunction(
           std::istringstream opacitySS(opacityContent);
 
           for (std::string opacityToken;
-              std::getline(opacitySS, opacityToken, ',');) {
+               std::getline(opacitySS, opacityToken, ',');) {
             // Trim whitespace
             if (const auto first = opacityToken.find_first_not_of(" \t\n\r");
                 first != std::string::npos) {
@@ -757,8 +759,8 @@ anari::DataType vtkTypeToANARIType(
   }
 }
 
-tsd::core::ArrayRef makeArray1DFromVTK(
-    tsd::core::Scene &scene, vtkDataArray *array, const char *errorIdentifier)
+tsd::scene::ArrayRef makeArray1DFromVTK(
+    tsd::scene::Scene &scene, vtkDataArray *array, const char *errorIdentifier)
 {
   const void *ptr = array->GetVoidPointer(0);
   const auto numTuples = array->GetNumberOfTuples();
@@ -771,7 +773,7 @@ tsd::core::ArrayRef makeArray1DFromVTK(
   return arr;
 }
 
-tsd::core::ArrayRef makeArray3DFromVTK(tsd::core::Scene &scene,
+tsd::scene::ArrayRef makeArray3DFromVTK(tsd::scene::Scene &scene,
     vtkDataArray *array,
     size_t w,
     size_t h,
@@ -788,5 +790,114 @@ tsd::core::ArrayRef makeArray3DFromVTK(tsd::core::Scene &scene,
   return arr;
 }
 #endif
+
+// Animation helpers ///////////////////////////////////////////////////////////
+
+std::vector<float> makeLinearTimeBase(size_t count)
+{
+  std::vector<float> tb(count);
+  float denom = count > 1 ? float(count - 1) : 1.f;
+  for (size_t i = 0; i < count; i++)
+    tb[i] = float(i) / denom;
+  return tb;
+}
+
+void addValueTimeStepBindings(tsd::animation::Animation &anim,
+    Object *target,
+    const std::vector<Token> &paramNames,
+    const std::vector<ObjectUsePtr<Array>> &dataArrays,
+    const std::vector<float> &timeBase,
+    tsd::animation::InterpolationRule interp)
+{
+  for (size_t i = 0; i < paramNames.size(); i++) {
+    anim.addObjectParameterBinding(target,
+        paramNames[i],
+        dataArrays[i]->elementType(),
+        dataArrays[i]->data(),
+        timeBase.data(),
+        timeBase.size(),
+        interp);
+  }
+}
+
+void addArrayTimeStepBindings(tsd::animation::Animation &anim,
+    Object *target,
+    const std::vector<Token> &paramNames,
+    const std::vector<std::vector<ObjectUsePtr<Array>>> &arraysPerParam,
+    const std::vector<float> &timeBase)
+{
+  for (size_t i = 0; i < paramNames.size(); i++) {
+    auto &arrays = arraysPerParam[i];
+    std::vector<Object *> objectPtrs(arrays.size());
+    for (size_t j = 0; j < arrays.size(); j++)
+      objectPtrs[j] = const_cast<Array *>(arrays[j].get());
+    anim.addObjectParameterBinding(target,
+        paramNames[i],
+        ANARI_ARRAY1D,
+        objectPtrs.data(),
+        timeBase.data(),
+        arrays.size(),
+        tsd::animation::InterpolationRule::STEP);
+  }
+}
+
+static math::float4 mat3ToQuat(
+    math::float3 c0, math::float3 c1, math::float3 c2)
+{
+  // Shepperd's method
+  float trace = c0.x + c1.y + c2.z;
+  math::float4 q;
+  if (trace > 0.f) {
+    float s = 0.5f / std::sqrt(trace + 1.f);
+    q = {(c1.z - c2.y) * s, (c2.x - c0.z) * s, (c0.y - c1.x) * s, 0.25f / s};
+  } else if (c0.x > c1.y && c0.x > c2.z) {
+    float s = 0.5f / std::sqrt(1.f + c0.x - c1.y - c2.z);
+    q = {0.25f / s, (c0.y + c1.x) * s, (c2.x + c0.z) * s, (c1.z - c2.y) * s};
+  } else if (c1.y > c2.z) {
+    float s = 0.5f / std::sqrt(1.f + c1.y - c0.x - c2.z);
+    q = {(c0.y + c1.x) * s, 0.25f / s, (c1.z + c2.y) * s, (c2.x - c0.z) * s};
+  } else {
+    float s = 0.5f / std::sqrt(1.f + c2.z - c0.x - c1.y);
+    q = {(c2.x + c0.z) * s, (c1.z + c2.y) * s, 0.25f / s, (c0.y - c1.x) * s};
+  }
+  float len = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+  return {q.x / len, q.y / len, q.z / len, q.w / len};
+}
+
+void addTransformStepBinding(tsd::animation::Animation &anim,
+    LayerNodeRef target,
+    const std::vector<math::mat4> &frames,
+    const std::vector<float> &timeBase)
+{
+  size_t n = frames.size();
+  std::vector<tsd::core::math::float4> rotation(n);
+  std::vector<tsd::core::math::float3> translation(n);
+  std::vector<tsd::core::math::float3> scale(n);
+
+  for (size_t i = 0; i < n; i++) {
+    auto &m = frames[i];
+    math::float3 c0 = {m[0][0], m[0][1], m[0][2]};
+    math::float3 c1 = {m[1][0], m[1][1], m[1][2]};
+    math::float3 c2 = {m[2][0], m[2][1], m[2][2]};
+
+    scale[i] = {length(c0), length(c1), length(c2)};
+    if (scale[i].x > 0.f)
+      c0 = c0 / scale[i].x;
+    if (scale[i].y > 0.f)
+      c1 = c1 / scale[i].y;
+    if (scale[i].z > 0.f)
+      c2 = c2 / scale[i].z;
+
+    rotation[i] = mat3ToQuat(c0, c1, c2);
+    translation[i] = {m[3][0], m[3][1], m[3][2]};
+  }
+
+  anim.addTransformBinding(target,
+      timeBase.data(),
+      rotation.data(),
+      translation.data(),
+      scale.data(),
+      timeBase.size());
+}
 
 } // namespace tsd::io

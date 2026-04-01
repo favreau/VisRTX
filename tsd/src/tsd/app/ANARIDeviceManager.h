@@ -21,6 +21,17 @@ enum class RenderIndexKind : int
 
 using DeviceInitParam = std::pair<std::string, tsd::core::Any>;
 
+/*
+ * Manages the lifecycle of ANARI devices and their associated RenderIndex
+ * instances; loads libraries on demand, reference-counts render indices per
+ * device, and fans update delegate signals to all active render indices.
+ *
+ * Example:
+ *   ANARIDeviceManager mgr;
+ *   auto device = mgr.loadDevice("visrtx");
+ *   auto *idx = mgr.acquireRenderIndex(scene, deviceToken, device);
+ *   mgr.releaseRenderIndex(device);
+ */
 struct ANARIDeviceManager
 {
   ANARIDeviceManager(const bool *verboseFlag = nullptr);
@@ -33,11 +44,11 @@ struct ANARIDeviceManager
 
   const anari::Extensions *loadDeviceExtensions(const std::string &libName);
   tsd::rendering::RenderIndex *acquireRenderIndex(
-      tsd::core::Scene &c, tsd::core::Token deviceName, anari::Device device);
+      tsd::scene::Scene &c, tsd::core::Token deviceName, anari::Device device);
   void releaseRenderIndex(anari::Device device);
   void releaseAllDevices();
 
-  tsd::core::MultiUpdateDelegate &getUpdateDelegate();
+  tsd::scene::MultiUpdateDelegate &getUpdateDelegate();
 
   void setRenderIndexKind(RenderIndexKind k);
   RenderIndexKind renderIndexKind() const;
@@ -53,7 +64,7 @@ struct ANARIDeviceManager
     tsd::rendering::RenderIndex *idx{nullptr};
   };
   std::map<anari::Device, LiveAnariIndex> m_rIdxs;
-  tsd::core::MultiUpdateDelegate m_delegate;
+  tsd::scene::MultiUpdateDelegate m_delegate;
   std::map<std::string, anari::Device> m_loadedDevices;
   std::map<std::string, anari::Extensions> m_loadedDeviceExtensions;
   std::vector<std::string> m_libraryList;
@@ -69,7 +80,7 @@ struct ANARIDeviceManager
 void anariStatusFunc(const void *_core,
     ANARIDevice device,
     ANARIObject source,
-    ANARIDataType sourceType,
+    anari::DataType sourceType,
     ANARIStatusSeverity severity,
     ANARIStatusCode code,
     const char *message);

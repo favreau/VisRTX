@@ -19,7 +19,7 @@ RenderIndex::RenderIndex(
 RenderIndex::~RenderIndex()
 {
   auto d = device();
-  anari::release(d, m_world); // release before AnariObjectCache
+  anari::release(d, m_world); // release before AnariHandleCache
   anari::release(d, d);
 }
 
@@ -153,7 +153,7 @@ void RenderIndex::signalParameterRemoved(const Object *o, const Parameter *p)
 }
 
 void RenderIndex::signalParameterBatchUpdated(
-    const Object *o, const std::vector<Parameter *> &ps)
+    const Object *o, const std::vector<const Parameter *> &ps)
 {
   for (auto *p : ps)
     signalParameterUpdated(o, p);
@@ -225,11 +225,6 @@ void RenderIndex::signalInvalidateCachedObjects()
   signalRemoveAllObjects();
   populate(false); // always 'false' as this may already be the delegate
   updateWorld();
-}
-
-void RenderIndex::signalAnimationTimeChanged(float)
-{
-  // no-op
 }
 
 } // namespace tsd::rendering

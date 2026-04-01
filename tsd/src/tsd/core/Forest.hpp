@@ -4,6 +4,7 @@
 #pragma once
 
 #include "tsd/core/ObjectPool.hpp"
+#include "tsd/core/TypeMacros.hpp"
 // std
 #include <functional>
 #include <utility>
@@ -13,6 +14,15 @@ namespace tsd::core {
 template <typename T>
 struct Forest;
 
+/*
+ * Intrusive tree node that stores a value and maintains parent, sibling, and
+ * child references within an owning Forest; accessed via ObjectPoolRef handles.
+ *
+ * Example:
+ *   auto child = node->insert_last_child(MyValue{});
+ *   child->value().name = "leaf";
+ *   child->erase_self();
+ */
 template <typename T>
 struct ForestNode
 {
@@ -75,12 +85,26 @@ template <typename T>
 bool operator!=(const ForestNode<T> &a, const ForestNode<T> &b);
 
 // clang-format off
+/*
+ * Virtual visitor base for Forest traversal; override preChildren/postChildren
+ * to execute logic before and after descending into each node's children.
+ *
+ * Example:
+ *   struct Printer : ForestVisitor<int> {
+ *     bool preChildren(ForestNode<int> &n, int lvl) override {
+ *       std::cout << *n << '\n'; return true;
+ *     }
+ *   };
+ *   Printer p; forest.traverse(forest.root(), p);
+ */
 template <typename T>
 struct ForestVisitor
 {
   virtual ~ForestVisitor() = default;
   virtual bool preChildren(ForestNode<T> &n, int level) { return true; }
   virtual void postChildren(ForestNode<T> &n, int level) {}
+  virtual bool preChildren_const(const ForestNode<T> &n, int level) { return true; }
+  virtual void postChildren_const(const ForestNode<T> &n, int level) {}
 };
 // clang-format on
 
@@ -91,13 +115,23 @@ template <typename T>
 using ForestVisitorExitFunction =
     std::function<void(ForestNode<T> &n, int level)>;
 
-///////////////////////////////////////////////////////////////////////////////
-// Forest<> -- a tree-based hierarchy free of cycles
-//
-//     Data structure based off of the stlab::forest<> described here:
-//        https://stlab.cc/2020/12/01/forest-introduction.html
-///////////////////////////////////////////////////////////////////////////////
+template <typename T>
+using ConstForestVisitorEntryFunction =
+    std::function<bool(const ForestNode<T> &n, int level)>;
+template <typename T>
+using ConstForestVisitorExitFunction =
+    std::function<void(const ForestNode<T> &n, int level)>;
 
+/*
+ * Cycle-free tree container (based on stlab::forest) backed by an ObjectPool;
+ * supports multi-level traversal, subtree copy/move, and ancestor queries.
+ * See: https://stlab.cc/2020/12/01/forest-introduction.html
+ *
+ * Example:
+ *   Forest<std::string> f("root");
+ *   auto child = f.insert_last_child(f.root(), "child");
+ *   f.traverse(f.root(), [](auto &n, int){ std::cout << *n; return true; });
+ */
 template <typename T>
 struct Forest
 {
@@ -110,10 +144,8 @@ struct Forest
   Forest() = delete;
   ~Forest() = default;
 
-  Forest(const Forest &) = delete;
-  Forest &operator=(const Forest &) = delete;
-  Forest(Forest &&) = delete;
-  Forest &operator=(Forest &&) = delete;
+  TSD_NOT_COPYABLE(Forest)
+  TSD_NOT_MOVEABLE(Forest)
 
   void reserve(size_t size);
 
@@ -153,8 +185,17 @@ struct Forest
       ForestVisitorEntryFunction<T> &&onNodeEntry,
       ForestVisitorExitFunction<T> &&onNodeExit);
 
+  void traverse_const(NodeRef start, ForestVisitor<T> &visitor) const;
+  void traverse_const(
+      NodeRef start, ConstForestVisitorEntryFunction<T> &&f) const;
+  void traverse_const(NodeRef start,
+      ConstForestVisitorEntryFunction<T> &&onNodeEntry,
+      ConstForestVisitorExitFunction<T> &&onNodeExit) const;
+
  private:
   void traverse_impl(NodeRef n, ForestVisitor<T> &visitor, int level);
+  void traverse_impl_const(
+      NodeRef n, ForestVisitor<T> &visitor, int level) const;
   NodeRef make_ForestNode(T &&v);
 
   ObjectPool<ForestNode<T>> m_nodes;
@@ -604,11 +645,11 @@ inline void Forest<T>::traverse(Forest<T>::NodeRef start,
         ForestVisitorEntryFunction<T> &f1, ForestVisitorExitFunction<T> &f2)
         : onEntry(f1), onExit(f2)
     {}
-    bool preChildren(tsd::core::ForestNode<T> &node, int level) override
+    bool preChildren(ForestNode<T> &node, int level) override
     {
       return onEntry(node, level);
     }
-    void postChildren(tsd::core::ForestNode<T> &node, int level) override
+    void postChildren(ForestNode<T> &node, int level) override
     {
       onExit(node, level);
     }
@@ -621,6 +662,58 @@ inline void Forest<T>::traverse(Forest<T>::NodeRef start,
 }
 
 template <typename T>
+inline void Forest<T>::traverse_const(
+    Forest<T>::NodeRef start, ForestVisitor<T> &visitor) const
+{
+  traverse_impl_const(start, visitor, 0);
+}
+
+template <typename T>
+inline void Forest<T>::traverse_const(
+    Forest<T>::NodeRef start, ConstForestVisitorEntryFunction<T> &&f) const
+{
+  struct FcnVisitor : public ForestVisitor<T>
+  {
+    FcnVisitor(ConstForestVisitorEntryFunction<T> &f) : fcn(f) {}
+    bool preChildren_const(const ForestNode<T> &node, int level) override
+    {
+      return fcn(node, level);
+    }
+    ConstForestVisitorEntryFunction<T> &fcn;
+  };
+
+  FcnVisitor visitor(f);
+  traverse_impl_const(start, visitor, 0);
+}
+
+template <typename T>
+inline void Forest<T>::traverse_const(Forest<T>::NodeRef start,
+    ConstForestVisitorEntryFunction<T> &&onNodeEntry,
+    ConstForestVisitorExitFunction<T> &&onNodeExit) const
+{
+  struct FcnVisitor : public ForestVisitor<T>
+  {
+    FcnVisitor(ConstForestVisitorEntryFunction<T> &f1,
+        ConstForestVisitorExitFunction<T> &f2)
+        : onEntry(f1), onExit(f2)
+    {}
+    bool preChildren_const(const ForestNode<T> &node, int level) override
+    {
+      return onEntry(node, level);
+    }
+    void postChildren_const(const ForestNode<T> &node, int level) override
+    {
+      onExit(node, level);
+    }
+    ConstForestVisitorEntryFunction<T> &onEntry;
+    ConstForestVisitorExitFunction<T> &onExit;
+  };
+
+  FcnVisitor visitor(onNodeEntry, onNodeExit);
+  traverse_impl_const(start, visitor, 0);
+}
+
+template <typename T>
 inline void Forest<T>::traverse_impl(
     NodeRef n, ForestVisitor<T> &visitor, int level)
 {
@@ -630,6 +723,18 @@ inline void Forest<T>::traverse_impl(
       traverse_impl(s, visitor, level + 1);
   }
   visitor.postChildren(*n, level);
+}
+
+template <typename T>
+inline void Forest<T>::traverse_impl_const(
+    NodeRef n, ForestVisitor<T> &visitor, int level) const
+{
+  const bool traverseChildren = visitor.preChildren_const(*n, level);
+  if (traverseChildren && !n->isLeaf()) {
+    for (auto s = n->next(); s && s != n; s = s->sibling())
+      traverse_impl_const(s, visitor, level + 1);
+  }
+  visitor.postChildren_const(*n, level);
 }
 
 template <typename T>
@@ -657,10 +762,34 @@ inline void foreach_child(ForestNodeRef<T> node, FCN &&fcn)
 }
 
 template <typename T, typename FCN>
+inline void foreach_child_const(ForestNodeRef<T> node, FCN &&fcn)
+{
+  if (auto *forest = node->container(); forest != nullptr) {
+    forest->traverse_const(node, [&](const auto &v, int level) {
+      if (level != 0)
+        fcn(*v);
+      return level == 0;
+    });
+  }
+}
+
+template <typename T, typename FCN>
 inline void forall_children(ForestNodeRef<T> node, FCN &&fcn)
 {
   if (auto *forest = node->container(); forest != nullptr) {
     forest->traverse(node, [&](auto &v, int level) {
+      if (level != 0)
+        fcn(*v);
+      return true;
+    });
+  }
+}
+
+template <typename T, typename FCN>
+inline void forall_children_const(ForestNodeRef<T> node, FCN &&fcn)
+{
+  if (auto *forest = node->container(); forest != nullptr) {
+    forest->traverse_const(node, [&](const auto &v, int level) {
       if (level != 0)
         fcn(*v);
       return true;

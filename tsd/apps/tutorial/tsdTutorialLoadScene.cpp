@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // tsd_core
-#include <tsd/core/scene/Scene.hpp>
+#include <tsd/scene/Scene.hpp>
 // tsd_io
 #include <tsd/io/serialization.hpp>
 // std
@@ -15,15 +15,15 @@ int main(int argc, const char *argv[])
     return 0;
   }
 
-  tsd::core::Scene scene;
+  tsd::scene::Scene scene;
   tsd::io::load_Scene(scene, argv[1]);
   printf("-------------------TSD Scene Info---------------------\n\n");
-  printf("%s\n", tsd::core::objectDBInfo(scene.objectDB()).c_str());
+  printf("%s\n", tsd::scene::objectDBInfo(scene.objectDB()).c_str());
 
   printf("----------------------TSD Tree--------------------------\n\n");
 
   auto onNodeEntry = [&](auto &node, int level) {
-    tsd::core::Object *obj = node->getObject();
+    tsd::scene::Object *obj = node->getObject();
 
     const char *typeText = "[-]";
     switch (node->type()) {

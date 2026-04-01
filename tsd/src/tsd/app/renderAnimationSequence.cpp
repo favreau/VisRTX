@@ -4,13 +4,14 @@
 #include "tsd/app/renderAnimationSequence.h"
 // tsd_app
 #include "tsd/app/ANARIDeviceManager.h"
-#include "tsd/app/Core.h"
+#include "tsd/app/Context.h"
 // tsd_core
+#include "tsd/animation/Animation.hpp"
+#include "tsd/animation/AnimationManager.hpp"
 #include "tsd/core/Logging.hpp"
-#include "tsd/core/scene/Animation.hpp"
 // tsd_rendering
 #include "tsd/rendering/index/RenderIndexAllLayers.hpp"
-#include "tsd/rendering/pipeline/RenderPipeline.h"
+#include "tsd/rendering/pipeline/ImagePipeline.h"
 #include "tsd/rendering/pipeline/passes/VisualizeAOVPass.h"
 // std
 #include <filesystem>
@@ -20,13 +21,14 @@
 
 namespace tsd::app {
 
-void renderAnimationSequence(Core &core,
+void renderAnimationSequence(Context &ctx,
     const std::string &outputDir,
     const std::string &filePrefix,
     RenderSequenceCallback preFrameCallback)
 {
-  auto &config = core.offline;
-  auto &scene = core.tsd.scene;
+  auto &config = ctx.offline;
+  auto &scene = ctx.tsd.scene;
+  auto &animMgr = ctx.tsd.animationMgr;
 
   // Validate renderer config //
 
@@ -40,14 +42,12 @@ void renderAnimationSequence(Core &core,
   auto &ro = config.renderer.rendererObjects[config.renderer.activeRenderer];
   auto libName = config.renderer.libraryName;
 
-  tsd::core::logStatus(
-      "[renderAnimationSequence] Loading ANARI device '%s'...",
+  tsd::core::logStatus("[renderAnimationSequence] Loading ANARI device '%s'...",
       libName.c_str());
 
   // Create a fresh isolated device (not shared with viewport) //
 
-  auto library =
-      anari::loadLibrary(libName.c_str(), anariStatusFunc, nullptr);
+  auto library = anari::loadLibrary(libName.c_str(), anariStatusFunc, nullptr);
   if (!library) {
     tsd::core::logError(
         "[renderAnimationSequence] Failed to load ANARI library '%s'",
@@ -71,23 +71,10 @@ void renderAnimationSequence(Core &core,
   // Validate camera — resolve index //
 
   size_t camIdx = config.camera.cameraIndex;
-
-  // If no camera configured, find one from keyframe animations
-  if (camIdx == tsd::core::INVALID_INDEX) {
-    for (size_t i = 0; i < scene.numberOfAnimations(); i++) {
-      auto *anim = scene.animation(i);
-      if (anim->hasKeyframes() && anim->keyframeTargetObject()) {
-        camIdx = anim->keyframeTargetObject()->index();
-        break;
-      }
-    }
-  }
-
-  // Last resort: use camera 0
   if (camIdx == tsd::core::INVALID_INDEX)
     camIdx = 0;
 
-  auto cameraRef = scene.getObject<tsd::core::Camera>(camIdx);
+  auto cameraRef = scene.getObject<tsd::scene::Camera>(camIdx);
   if (!cameraRef) {
     tsd::core::logError(
         "[renderAnimationSequence] No camera at index %zu", camIdx);
@@ -103,7 +90,7 @@ void renderAnimationSequence(Core &core,
 
   // Setup render pipeline //
 
-  tsd::rendering::RenderPipeline pipeline;
+  tsd::rendering::ImagePipeline pipeline;
   pipeline.setDimensions(config.frame.width, config.frame.height);
 
   auto *anariPass =
@@ -118,11 +105,9 @@ void renderAnimationSequence(Core &core,
   // AOV pass //
 
   if (config.aov.aovType != tsd::rendering::AOVType::NONE) {
-    auto *aovPass =
-        pipeline.emplace_back<tsd::rendering::VisualizeAOVPass>();
+    auto *aovPass = pipeline.emplace_back<tsd::rendering::VisualizeAOVPass>();
     aovPass->setAOVType(config.aov.aovType);
     aovPass->setDepthRange(config.aov.depthMin, config.aov.depthMax);
-    aovPass->setEdgeThreshold(config.aov.edgeThreshold);
     aovPass->setEdgeInvert(config.aov.edgeInvert);
 
     if (config.aov.aovType == tsd::rendering::AOVType::ALBEDO)
@@ -157,22 +142,16 @@ void renderAnimationSequence(Core &core,
 
   // Determine frame range //
 
-  bool hasKeyframeAnimation = false;
-  for (size_t i = 0; i < scene.numberOfAnimations(); i++) {
-    if (scene.animation(i)->hasKeyframes()) {
-      hasKeyframeAnimation = true;
-      break;
-    }
-  }
-  int numFrames = hasKeyframeAnimation ? scene.getAnimationTotalFrames()
-                                       : config.frame.numFrames;
+  bool hasAnimations = !animMgr.animations().empty();
+  int numFrames = hasAnimations ? animMgr.getAnimationTotalFrames()
+                                : config.frame.numFrames;
 
   auto frameStart = config.frame.renderSubset ? config.frame.startFrame : 0;
   auto frameEnd =
       config.frame.renderSubset ? config.frame.endFrame : numFrames - 1;
   auto increment = config.frame.frameIncrement;
 
-  int savedFrame = scene.getAnimationFrame();
+  int savedFrame = animMgr.getAnimationFrame();
 
   tsd::core::logStatus(
       "[renderAnimationSequence] Rendering %d frames (%d spp) to '%s'...",
@@ -181,7 +160,7 @@ void renderAnimationSequence(Core &core,
       outputDir.c_str());
 
   for (int frameIndex = frameStart; frameIndex <= frameEnd;
-       frameIndex += increment) {
+      frameIndex += increment) {
     if (preFrameCallback) {
       if (!preFrameCallback(frameIndex, numFrames)) {
         tsd::core::logStatus(
@@ -191,7 +170,7 @@ void renderAnimationSequence(Core &core,
     }
 
     // Advance animation — updates TSD objects, render index commits to ANARI //
-    scene.setAnimationFrame(frameIndex);
+    animMgr.setAnimationFrame(frameIndex);
 
     // Output filename //
     std::ostringstream ss;
@@ -209,7 +188,7 @@ void renderAnimationSequence(Core &core,
   }
 
   // Restore animation state //
-  scene.setAnimationFrame(savedFrame);
+  animMgr.setAnimationFrame(savedFrame);
 }
 
 } // namespace tsd::app

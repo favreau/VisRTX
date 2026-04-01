@@ -7,6 +7,7 @@ project_add_library(STATIC)
 
 project_sources(
 PRIVATE
+  animation/SpatialFieldFileBinding.cpp
   importers/detail/HDRImage.cpp
   importers/detail/importer_common.cpp
   importers/detail/usd/MaterialCommon.cpp
@@ -27,7 +28,6 @@ PRIVATE
   importers/import_NVDB.cpp
   importers/import_OBJ.cpp
   importers/import_USD.cpp
-  importers/import_USD2.cpp
   importers/import_PDB.cpp
   importers/import_PLY.cpp
   importers/import_POINTSBIN.cpp
@@ -66,7 +66,7 @@ PUBLIC
 
 project_link_libraries(
 PUBLIC
-  tsd_core
+  tsd_animation tsd_scene
 PRIVATE
   $<BUILD_INTERFACE:tsd_ext_agx>
   $<BUILD_INTERFACE:tsd_ext_mikktspace>

@@ -11,8 +11,12 @@ namespace tsd::io {
 
 using namespace tsd::core;
 
-void import_HDRI(Scene &scene, const char *filepath, LayerNodeRef location)
+void import_HDRI(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filepath,
+    LayerNodeRef location)
 {
+  (void)animMgr;
   std::string hdriFilename = filepath;
   HDRImage img;
   if (img.import(hdriFilename)) {

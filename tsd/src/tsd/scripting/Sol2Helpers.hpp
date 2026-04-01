@@ -10,36 +10,50 @@
 //
 // Include this header AFTER the TSD headers and BEFORE <sol/sol.hpp>.
 
-#include "tsd/core/scene/Layer.hpp"
-#include "tsd/core/scene/objects/Array.hpp"
-#include "tsd/core/scene/objects/Camera.hpp"
-#include "tsd/core/scene/objects/Geometry.hpp"
-#include "tsd/core/scene/objects/Light.hpp"
-#include "tsd/core/scene/objects/Material.hpp"
-#include "tsd/core/scene/objects/Sampler.hpp"
-#include "tsd/core/scene/objects/SpatialField.hpp"
-#include "tsd/core/scene/objects/Surface.hpp"
-#include "tsd/core/scene/objects/Volume.hpp"
+#include "tsd/scene/Layer.hpp"
+#include "tsd/scene/objects/Array.hpp"
+#include "tsd/scene/objects/Camera.hpp"
+#include "tsd/scene/objects/Geometry.hpp"
+#include "tsd/scene/objects/Light.hpp"
+#include "tsd/scene/objects/Material.hpp"
+#include "tsd/scene/objects/Sampler.hpp"
+#include "tsd/scene/objects/SpatialField.hpp"
+#include "tsd/scene/objects/Surface.hpp"
+#include "tsd/scene/objects/Volume.hpp"
 
 #include <functional>
 
-namespace tsd::core {
+namespace tsd::scene {
 
 // Macro to generate all 6 comparison operators for a type.
 // These compare by pointer identity, which is what Sol2 needs for usertype
 // objects that don't have semantic comparison operators.
 // Ordering uses std::less to guarantee a total order across unrelated pointers.
-#define TSD_SOL2_COMPARISON_OPS(Type) \
-  inline bool operator==(const Type &a, const Type &b) { return &a == &b; } \
-  inline bool operator!=(const Type &a, const Type &b) { return &a != &b; } \
-  inline bool operator<(const Type &a, const Type &b) \
-  { return std::less<const Type *>{}(&a, &b); } \
-  inline bool operator<=(const Type &a, const Type &b) \
-  { return &a == &b || std::less<const Type *>{}(&a, &b); } \
-  inline bool operator>(const Type &a, const Type &b) \
-  { return std::less<const Type *>{}(&b, &a); } \
-  inline bool operator>=(const Type &a, const Type &b) \
-  { return &a == &b || std::less<const Type *>{}(&b, &a); }
+#define TSD_SOL2_COMPARISON_OPS(Type)                                          \
+  inline bool operator==(const Type &a, const Type &b)                         \
+  {                                                                            \
+    return &a == &b;                                                           \
+  }                                                                            \
+  inline bool operator!=(const Type &a, const Type &b)                         \
+  {                                                                            \
+    return &a != &b;                                                           \
+  }                                                                            \
+  inline bool operator<(const Type &a, const Type &b)                          \
+  {                                                                            \
+    return std::less<const Type *>{}(&a, &b);                                  \
+  }                                                                            \
+  inline bool operator<=(const Type &a, const Type &b)                         \
+  {                                                                            \
+    return &a == &b || std::less<const Type *>{}(&a, &b);                      \
+  }                                                                            \
+  inline bool operator>(const Type &a, const Type &b)                          \
+  {                                                                            \
+    return std::less<const Type *>{}(&b, &a);                                  \
+  }                                                                            \
+  inline bool operator>=(const Type &a, const Type &b)                         \
+  {                                                                            \
+    return &a == &b || std::less<const Type *>{}(&b, &a);                      \
+  }
 
 TSD_SOL2_COMPARISON_OPS(Array)
 TSD_SOL2_COMPARISON_OPS(Surface)
@@ -54,4 +68,4 @@ TSD_SOL2_COMPARISON_OPS(LayerNodeData)
 
 #undef TSD_SOL2_COMPARISON_OPS
 
-} // namespace tsd::core
+} // namespace tsd::scene

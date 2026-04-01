@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // tsd_core
-#include <tsd/core/scene/Scene.hpp>
+#include <tsd/scene/Scene.hpp>
 // tsd_io
 #include <tsd/io/procedural.hpp>
 // tsd_rendering
-#include <tsd/rendering/pipeline/RenderPipeline.h>
+#include <tsd/rendering/pipeline/ImagePipeline.h>
 #include <tsd/rendering/index/RenderIndexFlatRegistry.hpp>
 // std
 #include <cstdio>
@@ -41,18 +41,18 @@ int main()
 {
   // Create context //
 
-  tsd::core::Scene scene;
+  tsd::scene::Scene scene;
 
   // Populate spheres //
 
   tsd::io::generate_randomSpheres(scene);
 
-  auto light = scene.createObject<tsd::core::Light>("directional");
+  auto light = scene.createObject<tsd::scene::Light>("directional");
   light->setName("mainLight");
   light->setParameter("direction", tsd::math::float3(-1.f, 0.f, 0.f));
   light->setParameter("irradiance", 1.f);
 
-  printf("%s\n", tsd::core::objectDBInfo(scene.objectDB()).c_str());
+  printf("%s\n", tsd::scene::objectDBInfo(scene.objectDB()).c_str());
 
   // Setup ANARI device //
 
@@ -107,7 +107,7 @@ int main()
   printf("setup pipeline...");
   fflush(stdout);
 
-  tsd::rendering::RenderPipeline rpipe(imageSize.x, imageSize.y);
+  tsd::rendering::ImagePipeline rpipe(imageSize.x, imageSize.y);
 
   auto *arp = rpipe.emplace_back<tsd::rendering::AnariSceneRenderPass>(device);
   arp->setWorld(rIdx.world());

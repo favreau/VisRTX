@@ -6,8 +6,8 @@
 // tsd_ui_imgui
 #include <tsd/ui/imgui/windows/Window.h>
 // tsd_core
-#include <tsd/core/scene/objects/Array.hpp>
-#include <tsd/core/scene/objects/SpatialField.hpp>
+#include <tsd/scene/objects/Array.hpp>
+#include <tsd/scene/objects/SpatialField.hpp>
 // std
 #include <functional>
 
@@ -21,7 +21,7 @@ struct SolverControls : public tsd::ui::imgui::Window
       tsd::ui::imgui::Application *app, const char *name = "Solver Controls");
 
   void buildUI() override;
-  void setField(tsd::core::SpatialFieldRef f);
+  void setField(tsd::scene::SpatialFieldRef f);
   void setUpdateCallback(JacobiUpdateCallback cb);
 
  private:
@@ -30,10 +30,10 @@ struct SolverControls : public tsd::ui::imgui::Window
   void iterateSolver();
   void exportRAW();
 
-  tsd::core::ObjectUsePtr<tsd::core::SpatialField> m_field;
-  tsd::core::ObjectUsePtr<tsd::core::Array> m_dataHost;
-  tsd::core::ObjectUsePtr<tsd::core::Array> m_dataCUDA_1;
-  tsd::core::ObjectUsePtr<tsd::core::Array> m_dataCUDA_2;
+  tsd::scene::ObjectUsePtr<tsd::scene::SpatialField> m_field;
+  tsd::scene::ObjectUsePtr<tsd::scene::Array> m_dataHost;
+  tsd::scene::ObjectUsePtr<tsd::scene::Array> m_dataCUDA_1;
+  tsd::scene::ObjectUsePtr<tsd::scene::Array> m_dataCUDA_2;
   int m_iterationsPerCycle{2};
   tsd::math::int3 m_dims{256, 256, 256};
   int m_totalIterations{0};

@@ -3,16 +3,26 @@
 
 #pragma once
 
-#include "RenderPass.h"
+#include "ImagePass.h"
 // anari
 #include <anari/anari_cpp.hpp>
 
 namespace tsd::rendering {
 
-struct AnariAxesRenderPass : public RenderPass
+/*
+ * ImagePass that renders a small orientation-axes overlay into the corner of
+ * the frame using a dedicated ANARI frame; updates when the view direction
+ * changes.
+ *
+ * Example:
+ *   auto *pass = pipeline.emplace_back<AnariAxesRenderPass>(device,
+ * extensions); pass->setView(manipulator.dir(), manipulator.up());
+ */
+struct AnariAxesRenderPass : public ImagePass
 {
   AnariAxesRenderPass(anari::Device d, const anari::Extensions &e);
   ~AnariAxesRenderPass() override;
+  const char *name() const override { return "Axes Overlay"; }
 
   void setView(const tsd::math::float3 &dir, const tsd::math::float3 &up);
 
@@ -21,7 +31,7 @@ struct AnariAxesRenderPass : public RenderPass
   bool isValid() const;
   void setupWorld();
   void updateSize() override;
-  void render(RenderBuffers &b, int stageId) override;
+  void render(ImageBuffers &b, int stageId) override;
 
   bool m_deviceUsable{true};
   bool m_firstFrame{true};

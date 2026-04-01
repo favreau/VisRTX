@@ -362,6 +362,7 @@ void readPDBFile(Scene &scene, const char *filename, LayerNodeRef location)
 
   if (!location)
     location = scene.defaultLayer()->root();
+  auto *layer = (*location)->layer();
 
   // Generate spheres for each atom
   auto spheres = scene.createObject<Geometry>(tokens::geometry::sphere);
@@ -405,7 +406,7 @@ void readPDBFile(Scene &scene, const char *filename, LayerNodeRef location)
   auto sphereSurface = scene.createSurface(basename.c_str(), spheres, material);
 
   // Insert the surface reference into the layer tree
-  location->insert_last_child({sphereSurface});
+  location->insert_last_child({layer, sphereSurface});
 }
 
 /**
@@ -416,8 +417,12 @@ void readPDBFile(Scene &scene, const char *filename, LayerNodeRef location)
  * @param location Node in the scene graph where the 3D representation should be
  * added.
  */
-void import_PDB(Scene &scene, const char *filename, LayerNodeRef location)
+void import_PDB(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filename,
+    LayerNodeRef location)
 {
+  (void)animMgr;
   readPDBFile(scene, filename, location);
 }
 }; // namespace tsd::io

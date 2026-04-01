@@ -30,9 +30,9 @@ class Application : public TSDApplication
   {
     auto windows = TSDApplication::setupWindows();
 
-    auto *core = appCore();
-    auto &scene = core->tsd.scene;
-    auto *manipulator = &core->view.manipulator;
+    auto *ctx = appContext();
+    auto &scene = ctx->tsd.scene;
+    auto *manipulator = &ctx->view.manipulator;
 
     auto *log = new tsd_ui::Log(this);
     auto *viewport = new tsd_ui::Viewport(this, manipulator, "Viewport");
@@ -55,20 +55,20 @@ class Application : public TSDApplication
 
     setWindowArray(windows);
 
-    core->setupSceneFromCommandLine(true);
+    ctx->setupSceneFromCommandLine(true);
 
     // Populate scene data //
 
-    auto colorArray = core->tsd.scene.createArray(ANARI_FLOAT32_VEC4, 256);
+    auto colorArray = ctx->tsd.scene.createArray(ANARI_FLOAT32_VEC4, 256);
     colorArray->setData(
         tsd::core::makeDefaultColorMap(colorArray->size()).data());
 
-    auto field = scene.createObject<tsd::core::SpatialField>(
-        tsd::core::tokens::spatial_field::structuredRegular);
+    auto field = scene.createObject<tsd::scene::SpatialField>(
+        tsd::scene::tokens::spatial_field::structuredRegular);
     field->setName("jacobi_field");
 
-    auto volume = scene.createObject<tsd::core::Volume>(
-        tsd::core::tokens::volume::transferFunction1D);
+    auto volume = scene.createObject<tsd::scene::Volume>(
+        tsd::scene::tokens::volume::transferFunction1D);
     volume->setName("jacobi_volume");
 
     tsd::math::float2 valueRange{0.f, 1.f};
@@ -78,16 +78,16 @@ class Application : public TSDApplication
     volume->setParameterObject("value", *field);
     volume->setParameterObject("color", *colorArray);
 
-    auto volumeNode = scene.defaultLayer()->root()->insert_first_child(
-        {ANARI_VOLUME, volume.index(), &core->tsd.scene});
+    auto *layer = scene.defaultLayer();
+    auto volumeNode = layer->root()->insert_first_child({layer, volume});
 
     // Setup app //
 
-    core->setSelected(volumeNode);
+    ctx->setSelected(volumeNode);
 
     tsd::core::logStatus(
-        "%s", tsd::core::objectDBInfo(scene.objectDB()).c_str());
-    core->tsd.sceneLoadComplete = true;
+        "%s", tsd::scene::objectDBInfo(scene.objectDB()).c_str());
+    ctx->tsd.sceneLoadComplete = true;
 
     viewport->setLibraryToDefault();
 

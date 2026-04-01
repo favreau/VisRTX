@@ -5,8 +5,8 @@
 
 #include "tsd/core/ColorMapUtil.hpp"
 #include "tsd/core/Logging.hpp"
-#include "tsd/core/algorithms/computeScalarRange.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
+#include "tsd/scene/algorithms/computeScalarRange.hpp"
 // std
 #include <algorithm>
 #include <cstdio>
@@ -14,8 +14,12 @@
 
 namespace tsd::io {
 
-void import_XYZDP(Scene &scene, const char *filepath, LayerNodeRef location)
+void import_XYZDP(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filepath,
+    LayerNodeRef location)
 {
+  (void)animMgr;
   std::string file = fileOf(filepath);
   if (file.empty())
     return;
@@ -81,7 +85,8 @@ void import_XYZDP(Scene &scene, const char *filepath, LayerNodeRef location)
   auto dRange = computeScalarRange(*dArray);
   logInfo("[import_XYZ] ...range(d)  : %f, %f", dRange.x, dRange.y);
 
-  mat->setParameterObject("color", *makeDefaultColorMapSampler(scene, phiRange));
+  mat->setParameterObject(
+      "color", *makeDefaultColorMapSampler(scene, phiRange));
 
   // surface
 

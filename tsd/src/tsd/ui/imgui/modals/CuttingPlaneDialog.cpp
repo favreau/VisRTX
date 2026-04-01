@@ -4,7 +4,7 @@
 #include "CuttingPlaneDialog.h"
 // tsd_core
 #include "tsd/core/ObjectPool.hpp"
-#include "tsd/core/scene/objects/Renderer.hpp"
+#include "tsd/scene/objects/Renderer.hpp"
 // tsd_ui_imgui
 #include "tsd/ui/imgui/Application.h"
 // imgui
@@ -69,8 +69,8 @@ void CuttingPlaneDialog::buildUI()
       plane[3] = -1e30f; // disabled sentinel
     }
 
-    auto &scene = appCore()->tsd.scene;
-    foreach_item_const(scene.objectDB().renderer, [&](tsd::core::Renderer *r) {
+    auto &scene = appContext()->tsd.scene;
+    foreach_item_const(scene.objectDB().renderer, [&](tsd::scene::Renderer *r) {
       if (r)
         r->setParameter(tsd::core::Token("cutPlane"),
                         ANARI_FLOAT32_VEC4, plane);

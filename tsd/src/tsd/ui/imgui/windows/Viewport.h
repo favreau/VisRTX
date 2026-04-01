@@ -5,24 +5,28 @@
 
 #include "BaseViewport.h"
 
-#include "tsd/ui/imgui/tsd_ui_imgui.h"
 // tsd_core
-#include "tsd/core/scene/Object.hpp"
-#include "tsd/core/scene/UpdateDelegate.hpp"
-#include "tsd/core/scene/objects/Camera.hpp"
+#include "tsd/scene/objects/Camera.hpp"
 // tsd_rendering
 #include "tsd/rendering/index/RenderIndex.hpp"
-#include "tsd/rendering/pipeline/RenderPipeline.h"
-#include "tsd/rendering/view/CameraUpdateDelegate.hpp"
+#include "tsd/rendering/pipeline/ImagePipeline.h"
+#include "tsd/rendering/pipeline/passes/AnariSceneRenderPass.h"
+#include "tsd/rendering/pipeline/passes/AutoExposurePass.h"
+#include "tsd/rendering/pipeline/passes/CopyToSDLTexturePass.h"
+#include "tsd/rendering/pipeline/passes/OutlineRenderPass.h"
+#include "tsd/rendering/pipeline/passes/OutputTransformPass.h"
+#include "tsd/rendering/pipeline/passes/PickPass.h"
+#include "tsd/rendering/pipeline/passes/SaveToFilePass.h"
+#include "tsd/rendering/pipeline/passes/ToneMapPass.h"
+#include "tsd/rendering/pipeline/passes/VisualizeAOVPass.h"
 #include "tsd/rendering/view/Manipulator.hpp"
+// anari
+#include <anari/frontend/anari_enums.h>
 // std
-#include <array>
 #include <functional>
 #include <future>
 #include <limits>
-#include <memory>
 #include <string>
-#include <vector>
 
 namespace tsd::ui::imgui {
 
@@ -47,7 +51,7 @@ struct Viewport : public BaseViewport
   void saveSettings(tsd::core::DataNode &thisWindowRoot) override;
   void loadSettings(tsd::core::DataNode &thisWindowRoot) override;
 
-  void imagePipeline_populate(tsd::rendering::RenderPipeline &p) override;
+  void imagePipeline_populate(tsd::rendering::ImagePipeline &p) override;
 
   void camera_resetView(bool resetAzEl = true) override;
   void camera_centerView() override;
@@ -60,7 +64,7 @@ struct Viewport : public BaseViewport
 
   void updateFrame();
   void updateImage();
-  void updateAxes();
+  void updateDisplayPassState();
 
   void ui_menubar();
   void ui_menubar_Device();
@@ -73,6 +77,8 @@ struct Viewport : public BaseViewport
 
   // Data /////////////////////////////////////////////////////////////////////
 
+  size_t m_defragToken{0};
+
   ViewportDeviceChangeCb m_deviceChangeCb;
   float m_timeToLoadDevice{0.f};
   std::future<void> m_initFuture;
@@ -81,8 +87,8 @@ struct Viewport : public BaseViewport
   tsd::app::RenderIndexKind m_lastIndexKind{
       tsd::app::RenderIndexKind::ALL_LAYERS};
 
+  bool m_refreshDeviceNextFrame{false};
   bool m_showOverlay{true};
-  bool m_showAxes{true};
   bool m_highlightSelection{true};
   bool m_showOnlySelected{false};
   int m_frameSamples{0};
@@ -90,8 +96,15 @@ struct Viewport : public BaseViewport
   tsd::rendering::AOVType m_visualizeAOV{tsd::rendering::AOVType::NONE};
   float m_depthVisualMinimum{0.f};
   float m_depthVisualMaximum{1.f};
-  float m_edgeThreshold{0.5f};
   bool m_edgeInvert{false};
+  anari::DataType m_colorFormat{ANARI_UFIXED8_RGBA_SRGB};
+
+  tsd::rendering::ToneMapOperator m_toneMapOperator{
+      tsd::rendering::ToneMapOperator::ACES};
+  bool m_autoExposureEnabled{false};
+  float m_toneMapExposure{0.f};
+  float m_toneMapGamma{2.2f};
+  float m_currentAutoExposure{0.f};
 
   // Picking state //
 
@@ -102,18 +115,19 @@ struct Viewport : public BaseViewport
   // ANARI objects //
 
   anari::Device m_device{nullptr};
-  tsd::core::RendererAppRef m_prevRenderer;
-  tsd::core::CameraAppRef m_prevCamera;
+  tsd::scene::RendererAppRef m_prevRenderer;
+  tsd::scene::CameraAppRef m_prevCamera;
   tsd::core::ObjectVersion m_lastCameraChange{};
 
   // Display //
 
-  tsd::rendering::RenderPipeline m_pipeline;
   tsd::rendering::AnariSceneRenderPass *m_anariPass{nullptr};
   tsd::rendering::PickPass *m_pickPass{nullptr};
   tsd::rendering::VisualizeAOVPass *m_visualizeAOVPass{nullptr};
+  tsd::rendering::AutoExposurePass *m_autoExposurePass{nullptr};
+  tsd::rendering::ToneMapPass *m_toneMapPass{nullptr};
+  tsd::rendering::OutputTransformPass *m_outputTransformPass{nullptr};
   tsd::rendering::OutlineRenderPass *m_outlinePass{nullptr};
-  tsd::rendering::AnariAxesRenderPass *m_axesPass{nullptr};
   tsd::rendering::CopyToSDLTexturePass *m_outputPass{nullptr};
   tsd::rendering::SaveToFilePass *m_saveToFilePass{nullptr};
 

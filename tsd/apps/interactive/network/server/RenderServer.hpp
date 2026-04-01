@@ -9,9 +9,9 @@
 // tsd_network
 #include "tsd/network/NetworkChannel.hpp"
 // tsd_app
-#include "tsd/app/Core.h"
+#include "tsd/app/Context.h"
 // tsd_rendering
-#include "tsd/rendering/pipeline/RenderPipeline.h"
+#include "tsd/rendering/pipeline/ImagePipeline.h"
 #include "tsd/rendering/view/ManipulatorToAnari.hpp"
 
 #include "../RenderSession.hpp"
@@ -38,7 +38,7 @@ struct RenderServer
   void setup_Scene();
   void setup_ANARIDevice();
   void setup_Camera();
-  void setup_RenderPipeline();
+  void setup_ImagePipeline();
   void setup_Messaging();
   void update_FrameConfig();
   void send_FrameBuffer();
@@ -49,19 +49,19 @@ struct RenderServer
   short m_port{12345};
 
   RenderSession m_session;
-  tsd::app::Core m_core;
+  tsd::app::Context m_ctx;
 
   std::shared_ptr<NetworkServer> m_server;
   MessageFuture m_lastSentFrame;
 
   std::string m_libName;
   anari::Device m_device{nullptr};
-  tsd::core::CameraAppRef m_camera;
-  std::vector<tsd::core::RendererAppRef> m_renderers;
-  tsd::core::RendererAppRef m_currentRenderer;
+  tsd::scene::CameraAppRef m_camera;
+  std::vector<tsd::scene::RendererAppRef> m_renderers;
+  tsd::scene::RendererAppRef m_currentRenderer;
   tsd::rendering::RenderIndex *m_renderIndex{nullptr};
-  tsd::rendering::RenderPipeline m_renderPipeline;
-  tsd::rendering::AnariSceneRenderPass *m_sceneRenderPass{nullptr};
+  tsd::rendering::ImagePipeline m_renderPipeline;
+  tsd::rendering::AnariSceneRenderPass *m_sceneImagePass{nullptr};
   ServerMode m_currentMode{ServerMode::DISCONNECTED};
   ServerMode m_nextMode{ServerMode::DISCONNECTED};
   ServerMode m_previousMode{ServerMode::DISCONNECTED};

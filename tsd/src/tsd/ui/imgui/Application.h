@@ -13,7 +13,7 @@
 #include "modals/CuttingPlaneDialog.h"
 #include "modals/VorticityDialog.h"
 // tsd_app
-#include "tsd/app/Core.h"
+#include "tsd/app/Context.h"
 // tsd_core
 #include "tsd/core/Logging.hpp"
 #include "tsd/core/TaskQueue.hpp"
@@ -27,7 +27,7 @@ struct Window;
 struct UIConfig
 {
   float fontScale{1.f};
-  float rounding{9.f};
+  float rounding{4.f};
 };
 
 struct CommandLineOptions
@@ -43,7 +43,7 @@ class Application : public anari_viewer::Application
   Application(int argc = 0, const char **argv = nullptr);
   ~Application() override;
 
-  tsd::app::Core *appCore();
+  tsd::app::Context *appContext();
   UIConfig *uiConfig();
   CommandLineOptions *commandLineOptions();
 
@@ -62,13 +62,8 @@ class Application : public anari_viewer::Application
 
   ExtensionManager *extensionManager() const;
 
-  ///////////////////////////////////////////////////////
-  //// Application is not a movable or copyable type ////
-  Application(const Application &) = delete;
-  Application &operator=(const Application &) = delete;
-  Application(Application &&) = delete;
-  Application &operator=(Application &&) = delete;
-  ///////////////////////////////////////////////////////
+  TSD_NOT_COPYABLE(Application)
+  TSD_NOT_MOVEABLE(Application)
 
  protected:
   void parseCommandLine(std::vector<std::string> &args);
@@ -80,6 +75,8 @@ class Application : public anari_viewer::Application
   virtual void teardown() override;
 
   // Internal API //
+
+  virtual void setupImGuiStyle();
 
   virtual void uiMainMenuBar();
 
@@ -132,7 +129,7 @@ class Application : public anari_viewer::Application
 
   // Data //
 
-  tsd::app::Core m_core;
+  tsd::app::Context m_ctx;
 
   tsd::core::TaskQueue m_jobs{10};
 

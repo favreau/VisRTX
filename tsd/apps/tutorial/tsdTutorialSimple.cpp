@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // tsd_core
-#include <tsd/core/scene/Scene.hpp>
+#include <tsd/scene/Scene.hpp>
 // tsd_io
 #include <tsd/io/procedural.hpp>
 
 int main()
 {
-  tsd::core::Scene scene;
+  tsd::scene::Scene scene;
   tsd::io::generate_randomSpheres(scene);
-  auto geom = scene.getObject<tsd::core::Geometry>(0);
+  auto geom = scene.getObject<tsd::scene::Geometry>(0);
   geom->setName("main geom");
-  tsd::core::print(*geom);
+  tsd::scene::print(*geom);
   return 0;
 }

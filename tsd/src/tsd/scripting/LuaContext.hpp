@@ -12,8 +12,12 @@ namespace sol {
 class state;
 }
 
-namespace tsd::core {
+namespace tsd::scene {
 struct Scene;
+}
+
+namespace tsd::animation {
+struct AnimationManager;
 }
 
 namespace tsd::scripting {
@@ -42,12 +46,15 @@ class LuaContext
   ExecutionResult executeString(const std::string &script);
 
   // Scene is NOT owned by LuaContext
-  void bindScene(core::Scene *scene, const std::string &varName = "scene");
+  void bindScene(scene::Scene *scene, const std::string &varName = "scene");
 
   // Scene IS owned by LuaContext
-  core::Scene *createOwnedScene(const std::string &varName = "scene");
+  scene::Scene *createOwnedScene(const std::string &varName = "scene");
 
-  core::Scene *boundScene() const;
+  void bindAnimationManager(tsd::animation::AnimationManager *sa,
+      const std::string &varName = "animationMgr");
+
+  scene::Scene *boundScene() const;
 
   // Adds paths to Lua's package.path and executes any init.lua found in them.
   // Returns errors encountered (empty on success).

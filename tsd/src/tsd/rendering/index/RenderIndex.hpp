@@ -4,9 +4,9 @@
 #pragma once
 
 // tsd_core
-#include "tsd/core/AnariObjectCache.hpp"
-#include "tsd/core/scene/Scene.hpp"
-#include "tsd/core/scene/UpdateDelegate.hpp"
+#include "tsd/scene/AnariHandleCache.hpp"
+#include "tsd/scene/Scene.hpp"
+#include "tsd/scene/UpdateDelegate.hpp"
 // tsd_rendering
 #include "tsd/rendering/index/RenderIndexFilterFcn.hpp"
 #include "tsd/rendering/view/Manipulator.hpp"
@@ -14,9 +14,20 @@
 namespace tsd::rendering {
 
 using namespace tsd::core;
+using namespace tsd::scene;
 
 struct RenderToAnariObjectsVisitor;
 
+/*
+ * Abstract BaseUpdateDelegate that maintains an ANARI world and handle cache
+ * for one device, translating Scene mutation signals into ANARI API calls;
+ * subclasses decide how layers are mapped to world instances.
+ *
+ * Example:
+ *   auto idx = std::make_unique<RenderIndexAllLayers>(scene, device);
+ *   idx->populate();
+ *   anari::World world = idx->world();
+ */
 struct RenderIndex : public BaseUpdateDelegate
 {
   RenderIndex(Scene &scene, tsd::core::Token deviceName, anari::Device d);
@@ -45,7 +56,7 @@ struct RenderIndex : public BaseUpdateDelegate
   void signalParameterUpdated(const Object *o, const Parameter *p) override;
   void signalParameterRemoved(const Object *o, const Parameter *p) override;
   void signalParameterBatchUpdated(
-      const Object *o, const std::vector<Parameter *> &ps) override;
+      const Object *o, const std::vector<const Parameter *> &ps) override;
   void signalArrayMapped(const Array *a) override;
   void signalArrayUnmapped(const Array *a) override;
   void signalLayerAdded(const Layer *l) override;
@@ -57,13 +68,12 @@ struct RenderIndex : public BaseUpdateDelegate
   void signalObjectRemoved(const Object *o) override;
   void signalRemoveAllObjects() override;
   void signalInvalidateCachedObjects() override;
-  void signalAnimationTimeChanged(float time) override;
 
  protected:
   virtual void updateWorld() = 0;
 
   Scene *m_ctx{nullptr};
-  AnariObjectCache m_cache;
+  AnariHandleCache m_cache;
 
   anari::World m_world{nullptr};
   std::vector<anari::Instance> m_externalInstances;
@@ -72,7 +82,7 @@ struct RenderIndex : public BaseUpdateDelegate
   friend struct RenderToAnariObjectsVisitor;
 };
 
-using MultiRenderIndex = tsd::core::MultiUpdateDelegate;
+using MultiRenderIndex = tsd::scene::MultiUpdateDelegate;
 
 // Inlined definitions ////////////////////////////////////////////////////////
 
