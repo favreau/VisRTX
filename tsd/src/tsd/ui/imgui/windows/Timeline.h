@@ -4,7 +4,7 @@
 #pragma once
 
 // tsd_app
-#include "tsd/app/Core.h"
+#include "tsd/app/Context.h"
 // tsd_ui_imgui
 #include "tsd/ui/imgui/windows/Window.h"
 // std
@@ -22,10 +22,6 @@ struct Timeline : public Window
  private:
   void buildUI_transport();
   void buildUI_canvas();
-
-  // Transport state //
-  bool m_playing{false};
-  bool m_loop{true};
 
   // Canvas state //
   float m_pixelsPerFrame{8.f};

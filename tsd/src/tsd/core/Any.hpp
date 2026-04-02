@@ -13,6 +13,16 @@
 
 namespace tsd::core {
 
+/*
+ * Type-erasure container that stores any ANARI data type value, including
+ * scalars, vectors, and strings, using fixed-size local storage where possible.
+ *
+ * Example:
+ *   Any a(ANARI_FLOAT32, &myFloat);
+ *   float v = a.get<float>();
+ *   a = std::string("hello");
+ *   bool isStr = a.is<std::string>();
+ */
 struct Any
 {
   static constexpr size_t INVALID_INDEX = ~size_t(0);
@@ -26,8 +36,8 @@ struct Any
   Any(bool value);
   explicit Any(size_t value);
 
-  Any(ANARIDataType type, const void *v);
-  Any(ANARIDataType type, size_t v = INVALID_INDEX); // only use for objects
+  Any(anari::DataType type, const void *v);
+  Any(anari::DataType type, size_t v = INVALID_INDEX); // only use for objects
 
   ~Any();
 
@@ -60,9 +70,9 @@ struct Any
 
   template <typename T>
   bool is() const;
-  bool is(ANARIDataType t) const;
+  bool is(anari::DataType t) const;
 
-  ANARIDataType type() const;
+  anari::DataType type() const;
   bool holdsObject() const;
 
   bool valid() const;
@@ -77,7 +87,7 @@ struct Any
 
   std::array<uint8_t, MAX_LOCAL_STORAGE> m_storage;
   std::string m_string;
-  ANARIDataType m_type{ANARI_UNKNOWN};
+  anari::DataType m_type{ANARI_UNKNOWN};
 };
 
 // Inlined definitions ////////////////////////////////////////////////////////
@@ -128,7 +138,7 @@ inline Any::Any(size_t value)
   *this = Any(ANARI_UINT64, &v);
 }
 
-inline Any::Any(ANARIDataType type, const void *v) : Any()
+inline Any::Any(anari::DataType type, const void *v) : Any()
 {
   m_type = type;
   if (v != nullptr) {
@@ -138,10 +148,13 @@ inline Any::Any(ANARIDataType type, const void *v) : Any()
       std::memcpy(m_storage.data(), &v, anari::sizeOf(type));
     else
       std::memcpy(m_storage.data(), v, anari::sizeOf(type));
+  } else if (anari::isObject(type)) {
+    size_t idx = INVALID_INDEX;
+    std::memcpy(m_storage.data(), &idx, anari::sizeOf(idx));
   }
 }
 
-inline Any::Any(ANARIDataType type, size_t v) : Any()
+inline Any::Any(anari::DataType type, size_t v) : Any()
 {
   if (anari::isObject(type)) {
     m_type = type;
@@ -212,7 +225,7 @@ inline T Any::get() const
 template <typename T>
 inline T Any::getAs(anari::DataType expectedType) const
 {
-  constexpr ANARIDataType type = anari::ANARITypeFor<T>::value;
+  constexpr anari::DataType type = anari::ANARITypeFor<T>::value;
   static_assert(
       !anari::isObject(type), "use Any::getObject() for getting objects");
   static_assert(
@@ -248,7 +261,7 @@ inline void *Any::data()
 
 inline size_t Any::getAsObjectIndex() const
 {
-  return holdsObject() ? storageAs<size_t>() : ~size_t(0);
+  return holdsObject() ? storageAs<size_t>() : INVALID_INDEX;
 }
 
 template <typename T>
@@ -263,7 +276,7 @@ inline bool Any::is<bool>() const
   return is(ANARI_BOOL);
 }
 
-inline bool Any::is(ANARIDataType t) const
+inline bool Any::is(anari::DataType t) const
 {
   return type() == t;
 }
@@ -273,7 +286,7 @@ inline bool Any::holdsObject() const
   return anari::isObject(this->type());
 }
 
-inline ANARIDataType Any::type() const
+inline anari::DataType Any::type() const
 {
   return m_type;
 }

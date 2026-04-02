@@ -23,18 +23,18 @@ namespace tsd::ui::imgui {
 Application::Application(int argc, const char **argv)
 {
   std::vector<std::string> args(argv, argv + argc);
-  auto *core = appCore();
+  auto *ctx = appContext();
   parseCommandLine(args);
-  core->parseCommandLine(args);
-  if (!core->commandLine.stateFile.empty())
-    m_filenameToLoadNextFrame = core->commandLine.stateFile;
+  ctx->parseCommandLine(args);
+  if (!ctx->commandLine.stateFile.empty())
+    m_filenameToLoadNextFrame = ctx->commandLine.stateFile;
 }
 
 Application::~Application() = default;
 
-tsd::app::Core *Application::appCore()
+tsd::app::Context *Application::appContext()
 {
-  return &m_core;
+  return &m_ctx;
 }
 
 UIConfig *Application::uiConfig()
@@ -120,6 +120,12 @@ anari_viewer::WindowArray Application::setupWindows()
   io.Fonts->ConfigData[0].FontDataOwnedByAtlas = false;
   io.FontDefault = font;
 
+  auto *window = sdlWindow();
+  SDL_MaximizeWindow(window);
+  m_uiConfig.fontScale = SDL_GetWindowDisplayScale(window);
+
+  setupImGuiStyle();
+
   if (commandLineOptions()->useDefaultLayout)
     ImGui::LoadIniSettingsFromMemory(getDefaultLayout());
 
@@ -139,13 +145,15 @@ anari_viewer::WindowArray Application::setupWindows()
   SDL_SetRenderVSync(sdlRenderer(), 1);
 
   m_extensionManager = std::make_unique<ExtensionManager>();
-  m_extensionManager->initialize(appCore());
+  m_extensionManager->initialize(appContext());
 
   return {};
 }
 
 void Application::uiFrameStart()
 {
+  m_ctx.tsd.animationMgr.tick();
+
   if (!m_filenameToSaveNextFrame.empty()) {
     saveApplicationState(m_filenameToSaveNextFrame.c_str());
     m_filenameToSaveNextFrame.clear();
@@ -199,6 +207,9 @@ void Application::uiFrameStart()
     modalActive = true;
   }
 
+  if (ImGui::IsKeyPressed(ImGuiKey_Space))
+    m_ctx.tsd.animationMgr.togglePlay();
+
   if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S))
     this->getFilenameFromDialog(m_filenameToSaveNextFrame, true);
   else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiKey_S))
@@ -206,15 +217,149 @@ void Application::uiFrameStart()
   else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S))
     doSave();
 
+  if (ImGui::IsKeyPressed(ImGuiKey_F1, false))
+    printf("%s\n", ImGui::SaveIniSettingsToMemory());
+
   if (!modalActive && ImGui::IsKeyChordPressed(ImGuiKey_Escape))
-    m_core.clearSelected();
+    m_ctx.clearSelected();
 }
 
 void Application::teardown()
 {
   teardownUsdDevice();
   teardownTsdDevice();
+  appContext()->anari.releaseAllDevices();
   anari_viewer::ui::shutdown();
+}
+
+void Application::setupImGuiStyle()
+{
+  ImGuiStyle &style = ImGui::GetStyle();
+
+  style.Alpha = 1.0f;
+  style.DisabledAlpha = 0.6f;
+  style.WindowPadding = ImVec2(8.0f, 8.0f);
+  style.WindowRounding = 4.0f;
+  style.WindowBorderSize = 1.0f;
+  style.WindowMinSize = ImVec2(32.0f, 32.0f);
+  style.WindowTitleAlign = ImVec2(0.0f, 0.5f);
+  style.WindowMenuButtonPosition = ImGuiDir_None;
+  style.ChildRounding = 4.0f;
+  style.ChildBorderSize = 1.0f;
+  style.PopupRounding = 4.0f;
+  style.PopupBorderSize = 1.0f;
+  style.FramePadding = ImVec2(8.0f, 4.0f);
+  style.FrameRounding = 4.0f;
+  style.FrameBorderSize = 1.0f;
+  style.ItemSpacing = ImVec2(8.0f, 4.0f);
+  style.ItemInnerSpacing = ImVec2(8.0f, 4.0f);
+  style.CellPadding = ImVec2(4.0f, 4.0f);
+  style.IndentSpacing = 21.0f;
+  style.ColumnsMinSpacing = 6.0f;
+  style.ScrollbarSize = 20.0f;
+  style.ScrollbarRounding = 4.0f;
+  style.GrabMinSize = 10.0f;
+  style.GrabRounding = 20.0f;
+  style.TabRounding = 4.0f;
+  style.TabBorderSize = 1.0f;
+  style.TabMinWidthForCloseButton = 0.0f;
+  style.ColorButtonPosition = ImGuiDir_Right;
+  style.ButtonTextAlign = ImVec2(0.5f, 0.5f);
+  style.SelectableTextAlign = ImVec2(0.0f, 0.0f);
+
+  style.Colors[ImGuiCol_Text] = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+  style.Colors[ImGuiCol_TextDisabled] =
+      ImVec4(0.49803922f, 0.49803922f, 0.49803922f, 1.0f);
+  style.Colors[ImGuiCol_WindowBg] =
+      ImVec4(0.11372549f, 0.11372549f, 0.11372549f, 1.0f);
+  style.Colors[ImGuiCol_ChildBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+  style.Colors[ImGuiCol_PopupBg] =
+      ImVec4(0.078431375f, 0.078431375f, 0.078431375f, 0.94f);
+  style.Colors[ImGuiCol_Border] = ImVec4(1.0f, 1.0f, 1.0f, 0.16309011f);
+  style.Colors[ImGuiCol_BorderShadow] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+  style.Colors[ImGuiCol_FrameBg] =
+      ImVec4(0.08627451f, 0.08627451f, 0.08627451f, 1.0f);
+  style.Colors[ImGuiCol_FrameBgHovered] =
+      ImVec4(0.15294118f, 0.15294118f, 0.15294118f, 1.0f);
+  style.Colors[ImGuiCol_FrameBgActive] =
+      ImVec4(0.1882353f, 0.1882353f, 0.1882353f, 1.0f);
+  style.Colors[ImGuiCol_TitleBg] =
+      ImVec4(0.11372549f, 0.11372549f, 0.11372549f, 1.0f);
+  style.Colors[ImGuiCol_TitleBgActive] =
+      ImVec4(0.105882354f, 0.105882354f, 0.105882354f, 1.0f);
+  style.Colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.0f, 0.0f, 0.0f, 0.51f);
+  style.Colors[ImGuiCol_MenuBarBg] =
+      ImVec4(0.11372549f, 0.11372549f, 0.11372549f, 1.0f);
+  style.Colors[ImGuiCol_ScrollbarBg] =
+      ImVec4(0.019607844f, 0.019607844f, 0.019607844f, 0.53f);
+  style.Colors[ImGuiCol_ScrollbarGrab] =
+      ImVec4(0.30980393f, 0.30980393f, 0.30980393f, 1.0f);
+  style.Colors[ImGuiCol_ScrollbarGrabHovered] =
+      ImVec4(0.40784314f, 0.40784314f, 0.40784314f, 1.0f);
+  style.Colors[ImGuiCol_ScrollbarGrabActive] =
+      ImVec4(0.50980395f, 0.50980395f, 0.50980395f, 1.0f);
+  style.Colors[ImGuiCol_CheckMark] = ImVec4(0.4627451f, 0.7254902f, 0.0f, 1.0f);
+  style.Colors[ImGuiCol_SliderGrab] =
+      ImVec4(0.8784314f, 0.8784314f, 0.8784314f, 1.0f);
+  style.Colors[ImGuiCol_SliderGrabActive] =
+      ImVec4(0.8784314f, 0.8784314f, 0.8784314f, 1.0f);
+  style.Colors[ImGuiCol_Button] =
+      ImVec4(0.14901812f, 0.14901961f, 0.14901817f, 1.0f);
+  style.Colors[ImGuiCol_ButtonHovered] =
+      ImVec4(0.30386257f, 0.47639483f, 0.0f, 1.0f);
+  style.Colors[ImGuiCol_ButtonActive] =
+      ImVec4(0.4627451f, 0.7254902f, 0.0f, 1.0f);
+  style.Colors[ImGuiCol_Header] =
+      ImVec4(0.9764706f, 0.9764706f, 0.9764706f, 0.30980393f);
+  style.Colors[ImGuiCol_HeaderHovered] =
+      ImVec4(0.9764706f, 0.9764706f, 0.9764706f, 0.49803922f);
+  style.Colors[ImGuiCol_HeaderActive] =
+      ImVec4(0.9764706f, 0.9764706f, 0.9764706f, 1.0f);
+  style.Colors[ImGuiCol_Separator] =
+      ImVec4(0.42745098f, 0.42745098f, 0.49803922f, 0.5f);
+  style.Colors[ImGuiCol_SeparatorHovered] =
+      ImVec4(0.7490196f, 0.7490196f, 0.7490196f, 0.78039217f);
+  style.Colors[ImGuiCol_SeparatorActive] =
+      ImVec4(0.7490196f, 0.7490196f, 0.7490196f, 1.0f);
+  style.Colors[ImGuiCol_ResizeGrip] =
+      ImVec4(0.9764706f, 0.9764706f, 0.9764706f, 0.2f);
+  style.Colors[ImGuiCol_ResizeGripHovered] =
+      ImVec4(0.9372549f, 0.9372549f, 0.9372549f, 0.67058825f);
+  style.Colors[ImGuiCol_ResizeGripActive] =
+      ImVec4(0.9764706f, 0.9764706f, 0.9764706f, 0.9490196f);
+  style.Colors[ImGuiCol_Tab] =
+      ImVec4(0.22352941f, 0.22352941f, 0.22352941f, 0.8627451f);
+  style.Colors[ImGuiCol_TabHovered] =
+      ImVec4(0.32156864f, 0.32156864f, 0.32156864f, 0.8f);
+  style.Colors[ImGuiCol_TabActive] =
+      ImVec4(0.27450982f, 0.27450982f, 0.27450982f, 1.0f);
+  style.Colors[ImGuiCol_TabUnfocused] =
+      ImVec4(0.14509805f, 0.14509805f, 0.14509805f, 0.972549f);
+  style.Colors[ImGuiCol_TabUnfocusedActive] =
+      ImVec4(0.42352942f, 0.42352942f, 0.42352942f, 1.0f);
+  style.Colors[ImGuiCol_PlotLines] =
+      ImVec4(0.60784316f, 0.60784316f, 0.60784316f, 1.0f);
+  style.Colors[ImGuiCol_PlotLinesHovered] =
+      ImVec4(1.0f, 0.42745098f, 0.34901962f, 1.0f);
+  style.Colors[ImGuiCol_PlotHistogram] =
+      ImVec4(0.8980392f, 0.69803923f, 0.0f, 1.0f);
+  style.Colors[ImGuiCol_PlotHistogramHovered] = ImVec4(1.0f, 0.6f, 0.0f, 1.0f);
+  style.Colors[ImGuiCol_TableHeaderBg] =
+      ImVec4(0.1882353f, 0.1882353f, 0.2f, 1.0f);
+  style.Colors[ImGuiCol_TableBorderStrong] =
+      ImVec4(0.30980393f, 0.30980393f, 0.34901962f, 1.0f);
+  style.Colors[ImGuiCol_TableBorderLight] =
+      ImVec4(0.22745098f, 0.22745098f, 0.24705882f, 1.0f);
+  style.Colors[ImGuiCol_TableRowBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+  style.Colors[ImGuiCol_TableRowBgAlt] = ImVec4(1.0f, 1.0f, 1.0f, 0.06f);
+  style.Colors[ImGuiCol_TextSelectedBg] =
+      ImVec4(0.25882354f, 0.5882353f, 0.9764706f, 0.35f);
+  style.Colors[ImGuiCol_DragDropTarget] = ImVec4(1.0f, 1.0f, 0.0f, 0.9f);
+  style.Colors[ImGuiCol_NavHighlight] =
+      ImVec4(0.4627451f, 0.7254902f, 0.0f, 1.0f);
+  style.Colors[ImGuiCol_NavWindowingHighlight] = ImVec4(1.0f, 1.0f, 1.0f, 0.7f);
+  style.Colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.8f, 0.8f, 0.8f, 0.2f);
+  style.Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
 }
 
 void Application::uiMainMenuBar()
@@ -263,9 +408,9 @@ void Application::uiMainMenuBar_File()
     ImGui::Separator();
 
     if (ImGui::MenuItem("Export as USD...")) {
-      io::export_SceneToUSD(m_core.tsd.scene,
+      io::export_SceneToUSD(m_ctx.tsd.scene,
           "scene.usda",
-          m_core.view.pathSettings.framesPerSecond);
+          m_ctx.view.pathSettings.framesPerSecond);
     }
 
     ImGui::Separator();
@@ -301,22 +446,22 @@ void Application::uiMainMenuBar_Edit()
 
     if (ImGui::BeginMenu("Scene")) {
       if (ImGui::MenuItem("Cleanup Unused Objects"))
-        m_core.tsd.scene.removeUnusedObjects(false);
+        m_ctx.tsd.scene.removeUnusedObjects(false);
 
       if (ImGui::MenuItem("Cleanup Unused Objects + Renderers"))
-        m_core.tsd.scene.removeUnusedObjects(true);
+        m_ctx.tsd.scene.removeUnusedObjects(true);
 
       if (ImGui::MenuItem("Defragment Scene Storage"))
-        m_core.tsd.scene.defragmentObjectStorage();
+        m_ctx.tsd.scene.defragmentObjectStorage();
 
       if (ImGui::MenuItem("Cleanup Unused Objects + Defragment")) {
-        m_core.tsd.scene.removeUnusedObjects(false);
-        m_core.tsd.scene.defragmentObjectStorage();
+        m_ctx.tsd.scene.removeUnusedObjects(false);
+        m_ctx.tsd.scene.defragmentObjectStorage();
       }
 
       if (ImGui::MenuItem("Cleanup Unused + Defragment All")) {
-        m_core.tsd.scene.removeUnusedObjects(true);
-        m_core.tsd.scene.defragmentObjectStorage();
+        m_ctx.tsd.scene.removeUnusedObjects(true);
+        m_ctx.tsd.scene.defragmentObjectStorage();
       }
 
       ImGui::EndMenu();
@@ -447,7 +592,7 @@ void Application::saveApplicationState(const char *_filename)
   auto doSave = [&, filename = f_str]() {
     tsd::core::logStatus("clearing old settings tree...");
 
-    auto &core = *appCore();
+    auto &ctx = *appContext();
     auto &root = m_settings.root();
     root.reset();
 
@@ -461,28 +606,29 @@ void Application::saveApplicationState(const char *_filename)
     root["layout"] = ImGui::SaveIniSettingsToMemory();
 
     // ANARIDeviceManager settings
-    core.anari.saveSettings(root["ANARIDeviceManager"]);
+    ctx.anari.saveSettings(root["ANARIDeviceManager"]);
 
     // Offline rendering settings
     auto &offlineSettings = root["offlineRendering"];
-    core.offline.saveSettings(offlineSettings);
+    ctx.offline.saveSettings(offlineSettings);
 
     // General application settings
     auto &settings = root["settings"];
-    settings["logVerbose"] = core.logVerbose();
-    settings["logEchoOutput"] = core.logEchoOutput();
+    settings["logVerbose"] = ctx.logVerbose();
+    settings["logEchoOutput"] = ctx.logEchoOutput();
     settings["fontScale"] = m_uiConfig.fontScale;
     settings["uiRounding"] = m_uiConfig.rounding;
 
     // Camera poses
     auto &cameraPoses = root["cameraPoses"];
-    for (auto &p : core.view.poses)
+    for (auto &p : ctx.view.poses)
       tsd::io::cameraPoseToNode(p, cameraPoses.append());
 
     // Serialize TSD context
     tsd::core::logStatus("serializing TSD context...");
     root["context"].reset();
-    tsd::io::save_Scene(core.tsd.scene, root["context"], false);
+    tsd::io::save_Scene(
+        ctx.tsd.scene, root["context"], false, &ctx.tsd.animationMgr);
 
     // Save to file
     tsd::core::logStatus("writing state file '%s'...", filename.c_str());
@@ -508,14 +654,14 @@ void Application::loadApplicationState(const char *filename)
     return;
   }
 
-  auto &core = *appCore();
+  auto &ctx = *appContext();
   auto &root = m_settings.root();
 
   // TSD context from app state file, or context-only file
   if (auto *c = root.child("context"); c != nullptr)
-    tsd::io::load_Scene(core.tsd.scene, *c);
+    tsd::io::load_Scene(ctx.tsd.scene, *c, &ctx.tsd.animationMgr);
   else
-    tsd::io::load_Scene(core.tsd.scene, root);
+    tsd::io::load_Scene(ctx.tsd.scene, root, &ctx.tsd.animationMgr);
 
   // Clear out context tree
   root["context"].reset();
@@ -531,33 +677,33 @@ void Application::loadApplicationState(const char *filename)
 
   // ANARIDeviceManager settings
   if (auto *c = root.child("ANARIDeviceManager"); c != nullptr)
-    core.anari.loadSettings(*c);
+    ctx.anari.loadSettings(*c);
 
   // Offline rendering settings
   auto &offlineSettings = root["offlineRendering"];
-  core.offline.loadSettings(offlineSettings);
+  ctx.offline.loadSettings(offlineSettings);
 
   // General application settings
   if (auto *c = root.child("settings"); c != nullptr) {
     auto &settings = *c;
 
-    bool logVerbose = core.logVerbose();
+    bool logVerbose = ctx.logVerbose();
     settings["logVerbose"].getValue(ANARI_BOOL, &logVerbose);
-    core.setLogVerbose(logVerbose);
-    bool logEchoOutput = core.logEchoOutput();
+    ctx.setLogVerbose(logVerbose);
+    bool logEchoOutput = ctx.logEchoOutput();
     settings["logEchoOutput"].getValue(ANARI_BOOL, &logEchoOutput);
-    core.setLogEchoOutput(logEchoOutput);
+    ctx.setLogEchoOutput(logEchoOutput);
 
     settings["fontScale"].getValue(ANARI_FLOAT32, &m_uiConfig.fontScale);
     settings["uiRounding"].getValue(ANARI_FLOAT32, &m_uiConfig.rounding);
   }
 
-  core.view.poses.clear();
+  ctx.view.poses.clear();
   if (auto *c = root.child("cameraPoses"); c != nullptr) {
     c->foreach_child([&](auto &p) {
       tsd::rendering::CameraPose pose;
       tsd::io::nodeToCameraPose(p, pose);
-      core.view.poses.push_back(std::move(pose));
+      ctx.view.poses.push_back(std::move(pose));
     });
   }
 
@@ -573,7 +719,7 @@ void Application::loadStateForNextFrame()
 {
   if (m_filenameToLoadNextFrame.empty())
     return;
-  m_core.clearSelected();
+  m_ctx.clearSelected();
   loadApplicationState(m_filenameToLoadNextFrame.c_str());
   m_filenameToLoadNextFrame.clear();
 }
@@ -586,7 +732,7 @@ void Application::setupUsdDevice()
   auto d = m_usdDevice.device;
 
   if (d == nullptr) {
-    d = m_core.anari.loadDevice("usd");
+    d = m_ctx.anari.loadDevice("usd");
     if (!d) {
       tsd::core::logWarning("USD device failed to load");
       return;
@@ -596,7 +742,7 @@ void Application::setupUsdDevice()
   }
 
   m_usdDevice.renderIndex =
-      m_core.anari.acquireRenderIndex(m_core.tsd.scene, "usd", d);
+      m_ctx.anari.acquireRenderIndex(m_ctx.tsd.scene, "usd", d);
   m_usdDevice.frame = anari::newObject<anari::Frame>(d);
   anari::setParameter(
       d, m_usdDevice.frame, "world", m_usdDevice.renderIndex->world());
@@ -628,7 +774,7 @@ void Application::teardownUsdDevice()
     return;
   tsd::core::logStatus("tearing down USD device...");
   auto d = m_usdDevice.device;
-  m_core.anari.releaseRenderIndex(d);
+  m_ctx.anari.releaseRenderIndex(d);
   anari::release(d, m_usdDevice.frame);
   anari::release(d, d);
   m_usdDevice.device = nullptr;
@@ -643,7 +789,7 @@ void Application::setupTsdDevice()
   auto d = m_tsdDevice.device;
 
   if (d == nullptr) {
-    d = m_core.anari.loadDevice("tsd");
+    d = m_ctx.anari.loadDevice("tsd");
     if (!d) {
       tsd::core::logWarning("TSD device failed to load");
       return;
@@ -653,7 +799,7 @@ void Application::setupTsdDevice()
   }
 
   m_tsdDevice.renderIndex =
-      m_core.anari.acquireRenderIndex(m_core.tsd.scene, "tsd", d);
+      m_ctx.anari.acquireRenderIndex(m_ctx.tsd.scene, "tsd", d);
   m_tsdDevice.frame = anari::newObject<anari::Frame>(d);
   anari::setParameter(
       d, m_tsdDevice.frame, "world", m_tsdDevice.renderIndex->world());
@@ -687,7 +833,7 @@ void Application::teardownTsdDevice()
     return;
   tsd::core::logStatus("tearing down TSD device...");
   auto d = m_tsdDevice.device;
-  m_core.anari.releaseRenderIndex(d);
+  m_ctx.anari.releaseRenderIndex(d);
   anari::release(d, m_tsdDevice.frame);
   anari::release(d, d);
   m_tsdDevice.device = nullptr;

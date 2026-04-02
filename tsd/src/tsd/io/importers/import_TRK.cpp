@@ -207,8 +207,8 @@ void readTrkFile(
       std::filesystem::path(filename).filename().string();
 
   // Create transform node for the streamlines
-  auto trackLocation = scene.insertChildTransformNode(location);
-  (*trackLocation)->name() = "xfm";
+  auto trackLocation =
+      scene.insertChildTransformNode(location, math::IDENTITY_MAT4, "xfm");
 
   // Create curve geometry
   auto curves = scene.createObject<Geometry>(tokens::geometry::curve);
@@ -249,8 +249,12 @@ void readTrkFile(
  * @param location Node in the scene graph where the streamlines should be
  * imported.
  */
-void import_TRK(Scene &scene, const char *filename, LayerNodeRef location)
+void import_TRK(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filename,
+    LayerNodeRef location)
 {
+  (void)animMgr;
   readTrkFile(scene, filename, location);
 }
 

@@ -4,11 +4,11 @@
 // catch
 #include "catch.hpp"
 // tsd
-#include "tsd/core/scene/objects/Material.hpp"
+#include "tsd/scene/objects/Material.hpp"
 
-using tsd::core::Material;
+using tsd::scene::Material;
 
-SCENARIO("tsd::core::Material interface", "[Material]")
+SCENARIO("tsd::scene::Material interface", "[Material]")
 {
   GIVEN("A default constructed Material")
   {

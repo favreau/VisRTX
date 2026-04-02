@@ -10,7 +10,7 @@
 #include "tsd/io/importers/detail/importer_common.hpp"
 // tsd_core
 #include "tsd/core/Logging.hpp"
-#include "tsd/core/algorithms/computeScalarRange.hpp"
+#include "tsd/scene/algorithms/computeScalarRange.hpp"
 #if TSD_USE_VTK
 // vtk
 #include <vtkAbstractArray.h>
@@ -30,8 +30,12 @@
 namespace tsd::io {
 
 #if TSD_USE_VTK
-void import_VTP(Scene &scene, const char *filepath, LayerNodeRef location)
+void import_VTP(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filepath,
+    LayerNodeRef location)
 {
+  (void)animMgr;
   auto filename = fileOf(filepath);
 
   auto reader = vtkSmartPointer<vtkXMLPolyDataReader>::New();
@@ -110,7 +114,7 @@ void import_VTP(Scene &scene, const char *filepath, LayerNodeRef location)
 
   // --- Point data: serialize arrays as raw bytes --- //
 
-  std::vector<tsd::core::ArrayRef> pointDataArrays;
+  std::vector<tsd::scene::ArrayRef> pointDataArrays;
 
   vtkPointData *pointData = triangleMesh->GetPointData();
   const int numPointArrays = pointData->GetNumberOfArrays();
@@ -134,7 +138,7 @@ void import_VTP(Scene &scene, const char *filepath, LayerNodeRef location)
 
   // --- Cell data: serialize arrays as raw bytes --- //
 
-  std::vector<tsd::core::ArrayRef> cellDataArrays;
+  std::vector<tsd::scene::ArrayRef> cellDataArrays;
 
   vtkCellData *cellData = triangleMesh->GetCellData();
   const int numCellArrays = cellData->GetNumberOfArrays();
@@ -176,7 +180,7 @@ void import_VTP(Scene &scene, const char *filepath, LayerNodeRef location)
 
   // color map + material
 
-  auto mat = scene.createObject<tsd::core::Material>(
+  auto mat = scene.createObject<tsd::scene::Material>(
       tokens::material::physicallyBased);
 
   mat->setName("vtp_material | " + std::string(filename));
@@ -202,8 +206,12 @@ void import_VTP(Scene &scene, const char *filepath, LayerNodeRef location)
           ("vtp_surface | " + std::string(filename)).c_str(), mesh, mat));
 }
 #else
-void import_VTP(Scene &scene, const char *filepath, LayerNodeRef location)
+void import_VTP(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filepath,
+    LayerNodeRef location)
 {
+  (void)animMgr;
   logError("[import_VTP] VTK not enabled in TSD build.");
 }
 #endif

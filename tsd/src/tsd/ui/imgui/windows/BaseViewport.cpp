@@ -5,6 +5,7 @@
 // tsd_rendering
 #include "tsd/rendering/view/ManipulatorToTSD.hpp"
 // tsd_ui_imgui
+#include "tsd/ui/imgui/Application.h"
 #include "tsd/ui/imgui/tsd_ui_imgui.h"
 
 namespace tsd::ui::imgui {
@@ -39,6 +40,8 @@ void BaseViewport::saveSettings(tsd::core::DataNode &root)
   // Viewport settings //
 
   root["viewport.scale"] = m_viewport.resolutionScale;
+  root["viewport.showTimeSlider"] = m_showAnimationSlider;
+  root["viewport.showOrientationWidget"] = m_showOrientationWidget;
 
   // Gizmo settings //
 
@@ -52,6 +55,9 @@ void BaseViewport::loadSettings(tsd::core::DataNode &root)
   // Viewport settings //
 
   root["viewport.scale"].getValue(ANARI_FLOAT32, &m_viewport.resolutionScale);
+  root["viewport.showTimeSlider"].getValue(ANARI_BOOL, &m_showAnimationSlider);
+  root["viewport.showOrientationWidget"].getValue(
+      ANARI_BOOL, &m_showOrientationWidget);
 
   // Gizmo settings //
 
@@ -109,6 +115,11 @@ void BaseViewport::imagePipeline_render()
   m_pipeline.render();
 }
 
+const tsd::rendering::ImagePipeline &BaseViewport::imagePipeline() const
+{
+  return m_pipeline;
+}
+
 void BaseViewport::imagePipeline_teardown()
 {
   m_pipeline.clear();
@@ -120,7 +131,7 @@ void BaseViewport::camera_update(bool force)
     return;
 
   if (!m_camera.current)
-    camera_setCurrent(appCore()->tsd.scene.defaultCamera());
+    camera_setCurrent(appContext()->tsd.scene.defaultCamera());
 
   if (!force && !m_camera.arcball->hasChanged(m_camera.arcballToken))
     return;
@@ -128,7 +139,7 @@ void BaseViewport::camera_update(bool force)
   tsd::rendering::updateCameraObject(*m_camera.current, *m_camera.arcball);
 }
 
-void BaseViewport::camera_setCurrent(tsd::core::CameraAppRef c)
+void BaseViewport::camera_setCurrent(tsd::scene::CameraAppRef c)
 {
   m_camera.current = c;
 }
@@ -139,7 +150,7 @@ bool BaseViewport::gizmo_canShow() const
     return false;
 
   // Check if we have a selected node with a transform
-  auto selectedNode = appCore()->getFirstSelected();
+  auto selectedNode = appContext()->getFirstSelected();
   if (selectedNode.valid()) {
     return (*selectedNode)->isTransform();
   }
@@ -262,7 +273,7 @@ void BaseViewport::ui_gizmo()
   if (!gizmo_canShow())
     return;
 
-  auto computeWorldTransform = [](tsd::core::LayerNodeRef node) -> math::mat4 {
+  auto computeWorldTransform = [](tsd::scene::LayerNodeRef node) -> math::mat4 {
     auto world = math::IDENTITY_MAT4;
     for (; node; node = node->parent())
       world = mul((*node)->getTransform(), world);
@@ -270,7 +281,7 @@ void BaseViewport::ui_gizmo()
     return world;
   };
 
-  auto selectedNodeRef = appCore()->getFirstSelected();
+  auto selectedNodeRef = appContext()->getFirstSelected();
   auto parentNodeRef = selectedNodeRef->parent();
 
   auto localTransform = (*selectedNodeRef)->getTransform();
@@ -278,7 +289,7 @@ void BaseViewport::ui_gizmo()
   auto worldTransform = mul(parentWorldTransform, localTransform);
 
   ImGuizmo::SetOrthographic(
-      m_camera.current->subtype() == core::tokens::camera::orthographic);
+      m_camera.current->subtype() == scene::tokens::camera::orthographic);
   ImGuizmo::BeginFrame();
 
   // Setup ImGuizmo with window and relative viewport information
@@ -312,7 +323,7 @@ void BaseViewport::ui_gizmo()
   float near = std::max(1e-8f, distanceToSelectedObject * 1e-2f);
   float far = std::max(1e-6f, distanceToSelectedObject * 1e2f);
 
-  if (m_camera.current->subtype() == core::tokens::camera::perspective) {
+  if (m_camera.current->subtype() == scene::tokens::camera::perspective) {
     const float fovRadians =
         m_camera.current->parameterValueAs<float>("fovy").value_or(
             math::radians(40.f));
@@ -324,7 +335,7 @@ void BaseViewport::ui_gizmo()
         {0.0f, 0.0f, -2.0f * far * near / (far - near), 0.0f},
     };
   } else if (m_camera.current->subtype()
-      == core::tokens::camera::orthographic) {
+      == scene::tokens::camera::orthographic) {
     // The 0.75 factor is to match updateCameraParametersOrthographic
     const float height = m_camera.arcball->distance() * 0.75f;
     const float halfHeight = height * 0.5f;
@@ -356,9 +367,93 @@ void BaseViewport::ui_gizmo()
     auto invParent = linalg::inverse(parentWorldTransform);
     localTransform = mul(invParent, worldTransform);
     (*selectedNodeRef)->setAsTransform(localTransform);
-    appCore()->tsd.scene.signalLayerTransformChanged(
-        selectedNodeRef->container());
+    appContext()->tsd.scene.signalLayerTransformChanged(
+        (*selectedNodeRef)->layer());
   }
+}
+
+bool BaseViewport::ui_orientationWidget()
+{
+  if (!m_showOrientationWidget || !m_camera.arcball)
+    return false;
+
+  auto *uiConfig = m_app->uiConfig();
+
+  // Position widget in the bottom-right corner of the window
+  const float size = 150.f * uiConfig->fontScale;
+  const ImVec2 winPos = ImGui::GetWindowPos();
+  const ImVec2 winSize = ImGui::GetWindowSize();
+  const float x = winPos.x + winSize.x - size - 5.f;
+  const float y = size * 0.6f;
+  ImOGuizmo::SetRect(x, y, size);
+
+  // Build view matrix from arcball (same approach as ui_gizmo())
+  const auto eye = m_camera.arcball->eye();
+  const auto at = m_camera.arcball->at();
+  const auto up = m_camera.arcball->up();
+  const auto view = linalg::lookat_matrix(eye, at, up);
+  float viewMat[16];
+  std::memcpy(viewMat, &view[0].x, sizeof(viewMat));
+
+  // Simple fixed perspective projection for the widget (fov=90deg, aspect=1)
+  const float near = 0.1f, far = 100.f;
+  const float f = 1.f; // 1/tan(45 deg)
+  // clang-format off
+  const float projMat[16] = {
+      f, 0, 0, 0,
+      0, f, 0, 0,
+      0, 0, -(far + near) / (far - near), -1.f,
+      0, 0, -2.f * far * near / (far - near), 0};
+  // clang-format on
+
+  // Block arcball input when the mouse is inside the widget circle
+  const ImVec2 center{x + size * 0.5f, y + size * 0.5f};
+  const ImVec2 mousePos = ImGui::GetIO().MousePos;
+  const float dx = mousePos.x - center.x;
+  const float dy = mousePos.y - center.y;
+  const bool mouseInWidget = (dx * dx + dy * dy) <= (size * 0.5f * size * 0.5f);
+
+  ImOGuizmo::SetDrawList(ImGui::GetWindowDrawList());
+  const float pivotDist = m_camera.arcball->distance();
+  const bool snapped = ImOGuizmo::DrawGizmo(viewMat, projMat, pivotDist);
+  if (snapped)
+    applyViewMatrixToArcball(viewMat);
+
+  return snapped || mouseInWidget;
+}
+
+void BaseViewport::ui_animationSlider()
+{
+  if (!m_showAnimationSlider)
+    return;
+
+  auto &animMgr = appContext()->tsd.animationMgr;
+
+  const ImVec2 contentStart = ImGui::GetCursorStartPos();
+  const float vpW = static_cast<float>(m_viewport.size.x);
+  const float vpH = static_cast<float>(m_viewport.size.y);
+  const float sliderW = vpW * 0.8f;
+  const float itemH = ImGui::GetFrameHeight();
+  const float padBottom = vpH * 0.05f;
+
+  const float x = contentStart.x + (vpW - sliderW) * 0.5f;
+  const float y = contentStart.y + vpH - padBottom - itemH;
+  ImGui::SetCursorPos(ImVec2(x, y));
+
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.5f));
+  const ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+  if (ImGui::BeginChild("##animSlider",
+          ImVec2(sliderW, itemH),
+          ImGuiChildFlags_None,
+          flags)) {
+    ImGui::SetNextItemWidth(-1.f);
+    float time = animMgr.getAnimationTime();
+    if (ImGui::SliderFloat("##animTime", &time, 0.f, 1.f))
+      animMgr.setAnimationTime(time);
+  }
+  ImGui::EndChild();
+  ImGui::PopStyleColor();
 }
 
 void BaseViewport::ui_menubar_Renderer()
@@ -382,7 +477,8 @@ void BaseViewport::ui_menubar_Renderer()
       ImGui::Text("Parameters:");
       ImGui::Indent(INDENT_AMOUNT);
 
-      tsd::ui::buildUI_object(*m_renderers.current, appCore()->tsd.scene, true);
+      tsd::ui::buildUI_object(
+          *m_renderers.current, appContext()->tsd.scene, true);
 
       ImGui::Unindent(INDENT_AMOUNT);
       ImGui::Separator();
@@ -404,7 +500,7 @@ void BaseViewport::ui_menubar_Renderer()
 void BaseViewport::ui_menubar_Camera()
 {
   if (ImGui::BeginMenu("Camera")) {
-    auto &scene = appCore()->tsd.scene;
+    auto &scene = appContext()->tsd.scene;
 
     ImGui::Text("Manipulator:");
     {
@@ -424,7 +520,7 @@ void BaseViewport::ui_menubar_Camera()
       update |= ImGui::DragFloat("Distance", &dist);
       update |= ImGui::DragFloat3("At", &at.x);
       ImGui::BeginDisabled(
-          m_camera.current->subtype() != core::tokens::camera::orthographic);
+          m_camera.current->subtype() != scene::tokens::camera::orthographic);
       update |= ImGui::DragFloat("Near", &fixedDist);
       if (ImGui::IsItemHovered())
         ImGui::SetTooltip("near plane distance for orthographic camera");
@@ -458,18 +554,18 @@ void BaseViewport::ui_menubar_Camera()
 
       if (ImGui::BeginMenu("Select Camera")) {
         if (ImGui::BeginMenu("New")) {
-          tsd::core::CameraRef newCam;
+          tsd::scene::CameraRef newCam;
           if (ImGui::MenuItem("Perspective")) {
-            newCam = scene.createObject<tsd::core::Camera>(
-                tsd::core::tokens::camera::perspective);
+            newCam = scene.createObject<tsd::scene::Camera>(
+                tsd::scene::tokens::camera::perspective);
           }
           if (ImGui::MenuItem("Orthographic")) {
-            newCam = scene.createObject<tsd::core::Camera>(
-                tsd::core::tokens::camera::orthographic);
+            newCam = scene.createObject<tsd::scene::Camera>(
+                tsd::scene::tokens::camera::orthographic);
           }
           if (ImGui::MenuItem("Omnidirectional")) {
-            newCam = scene.createObject<tsd::core::Camera>(
-                tsd::core::tokens::camera::omnidirectional);
+            newCam = scene.createObject<tsd::scene::Camera>(
+                tsd::scene::tokens::camera::omnidirectional);
           }
 
           if (newCam) {
@@ -486,7 +582,7 @@ void BaseViewport::ui_menubar_Camera()
         auto t = ANARI_CAMERA;
         if (auto i = tsd::ui::buildUI_objects_menulist(scene, t);
             i != TSD_INVALID_INDEX) {
-          camera_setCurrent(scene.getObject<tsd::core::Camera>(i));
+          camera_setCurrent(scene.getObject<tsd::scene::Camera>(i));
           tsd::rendering::updateManipulatorFromCamera(
               *m_camera.arcball, *m_camera.current);
         }
@@ -536,6 +632,71 @@ void BaseViewport::ui_menubar_TransformManipulator()
 int BaseViewport::windowFlags() const
 {
   return ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar;
+}
+
+void BaseViewport::applyViewMatrixToArcball(const float *viewMat)
+{
+  // Extract forward direction from column-major view matrix produced by
+  // imoguizmo's lookAt: col2 = {r[2], u[2], -f[2], 0}, so f = {-[2],-[6],-[10]}
+  const tsd::math::float3 forward{-viewMat[2], -viewMat[6], -viewMat[10]};
+
+  // d = direction from 'at' toward new 'eye' = -forward
+  const tsd::math::float3 d = -forward;
+
+  // Invert azelToDirection for the current up axis to recover azel.
+  // Manipulator::update() uses: az = radians(-m_azel.x), el =
+  // radians(-m_azel.y) so we store: m_azel.x = -degrees(az), m_azel.y =
+  // -degrees(el)
+  float az_rad = 0.f, el_rad = 0.f;
+  switch (m_camera.arcball->axis()) {
+  case tsd::rendering::UpAxis::POS_Y: {
+    // azelToDirection = -normalize({sin(az)*cos(el), sin(el), cos(az)*cos(el)})
+    const tsd::math::float3 D = -d;
+    el_rad = std::asin(D.y);
+    az_rad = std::atan2(D.x, D.z);
+    break;
+  }
+  case tsd::rendering::UpAxis::NEG_Y: {
+    // azelToDirection = normalize({sin(az)*cos(el), sin(el), cos(az)*cos(el)})
+    const tsd::math::float3 D = d;
+    el_rad = std::asin(D.y);
+    az_rad = std::atan2(D.x, D.z);
+    break;
+  }
+  case tsd::rendering::UpAxis::POS_Z: {
+    // azelToDirection = -normalize({sin(az)*cos(el), cos(az)*cos(el), sin(el)})
+    const tsd::math::float3 D = -d;
+    el_rad = std::asin(D.z);
+    az_rad = std::atan2(D.x, D.y);
+    break;
+  }
+  case tsd::rendering::UpAxis::NEG_Z: {
+    // azelToDirection = normalize({sin(az)*cos(el), cos(az)*cos(el), sin(el)})
+    const tsd::math::float3 D = d;
+    el_rad = std::asin(D.z);
+    az_rad = std::atan2(D.x, D.y);
+    break;
+  }
+  case tsd::rendering::UpAxis::POS_X: {
+    // azelToDirection = -normalize({sin(el), cos(az)*cos(el), sin(az)*cos(el)})
+    const tsd::math::float3 D = -d;
+    el_rad = std::asin(D.x);
+    az_rad = std::atan2(D.z, D.y);
+    break;
+  }
+  case tsd::rendering::UpAxis::NEG_X: {
+    // azelToDirection = normalize({sin(el), cos(az)*cos(el), sin(az)*cos(el)})
+    const tsd::math::float3 D = d;
+    el_rad = std::asin(D.x);
+    az_rad = std::atan2(D.z, D.y);
+    break;
+  }
+  }
+
+  const tsd::math::float2 newAzel{
+      -tsd::math::degrees(az_rad), -tsd::math::degrees(el_rad)};
+  m_camera.arcball->setConfig(
+      m_camera.arcball->at(), m_camera.arcball->distance(), newAzel);
 }
 
 } // namespace tsd::ui::imgui

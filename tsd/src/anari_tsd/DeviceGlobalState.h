@@ -4,7 +4,7 @@
 #pragma once
 
 // tsd_app
-#include "tsd/app/Core.h"
+#include "tsd/app/Context.h"
 // tsd_core
 #include "tsd/core/ObjectVersion.hpp"
 // helium
@@ -21,8 +21,8 @@ struct DeviceGlobalState : public helium::BaseGlobalDeviceState
 
   bool usingExternalScene() const;
 
-  tsd::core::Scene *scene{nullptr};
-  tsd::core::Scene localScene;
+  tsd::scene::Scene *scene{nullptr};
+  tsd::scene::Scene localScene;
   tsd::app::ANARIDeviceManager anari;
 
   anari::Device device{nullptr};

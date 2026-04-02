@@ -6,8 +6,9 @@ macro(define_tutorial TUTORIAL_NAME)
   project_add_executable(${TUTORIAL_NAME}.cpp)
   project_link_libraries(
     tsd_core
-    tsd_rendering
+    tsd_scene
     tsd_io
+    tsd_rendering
     stb_image
     tsd_ext_flip
   )

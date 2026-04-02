@@ -79,12 +79,12 @@ void MultiDeviceViewport::centerView()
 
 void MultiDeviceViewport::setLibrary(const std::string &libName)
 {
-  auto *core = appCore();
-  auto &adm = core->anari;
-  auto &scene = core->tsd.scene;
+  auto *ctx = appContext();
+  auto &adm = ctx->anari;
+  auto &scene = ctx->tsd.scene;
 
   auto library =
-      anari::loadLibrary(libName.c_str(), tsd::app::anariStatusFunc, core);
+      anari::loadLibrary(libName.c_str(), tsd::app::anariStatusFunc, ctx);
   if (!library) {
     tsd::core::logError(
         "[multi-viewport] failed to load ANARI library '%s'", libName.c_str());
@@ -120,7 +120,7 @@ void MultiDeviceViewport::setLibrary(const std::string &libName)
 
   tsd::core::logStatus("[multi-viewport] setting up render pipeline...");
 
-  setupRenderPipeline(devices);
+  setupImagePipeline(devices);
 
   tsd::core::logStatus("[multi-viewport] creating cameras and renderers...");
 
@@ -147,14 +147,14 @@ void MultiDeviceViewport::setLibrary(const std::string &libName)
   updateAllRendererParameters();
 
   static bool firstFrame = true;
-  if (firstFrame && core->commandLine.loadedFromStateFile)
+  if (firstFrame && ctx->commandLine.loadedFromStateFile)
     firstFrame = false;
 
   if (firstFrame || m_arcball->distance() == tsd::math::inf) {
     resetView(true);
-    if (core->view.poses.empty()) {
+    if (ctx->view.poses.empty()) {
       tsd::core::logStatus("[multi-viewport] adding 'default' camera pose");
-      core->addCurrentViewToCameraPoses("default");
+      ctx->addCurrentViewToCameraPoses("default");
     }
     firstFrame = false;
   }
@@ -199,7 +199,7 @@ void MultiDeviceViewport::loadSettings(tsd::core::DataNode &root)
 tsd::rendering::RenderIndexAllLayers *MultiDeviceViewport::getRenderIndex(
     size_t i) const
 {
-  auto &delegate = appCore()->anari.getUpdateDelegate();
+  auto &delegate = appContext()->anari.getUpdateDelegate();
   return (tsd::rendering::RenderIndexAllLayers *)delegate.get(i);
 }
 
@@ -226,7 +226,7 @@ void MultiDeviceViewport::getSceneBounds(tsd::math::float3 boundsOut[2]) const
   std::memcpy(boundsOut, bounds, sizeof(tsd::math::float3) * 2);
 }
 
-void MultiDeviceViewport::setupRenderPipeline(
+void MultiDeviceViewport::setupImagePipeline(
     const std::vector<anari::Device> &devices)
 {
   m_pipeline.clear();
@@ -236,7 +236,7 @@ void MultiDeviceViewport::setupRenderPipeline(
           devices);
 
   {
-    auto &adm = appCore()->anari;
+    auto &adm = appContext()->anari;
     auto d = adm.loadDevice("helide");
     auto e = adm.loadDeviceExtensions("helide");
 
@@ -293,9 +293,9 @@ void MultiDeviceViewport::updateCamera(bool force)
 void MultiDeviceViewport::loadANARIRendererParameters()
 {
   auto d = m_rud.devices[0];
-  for (auto &name : tsd::core::getANARIObjectSubtypes(d, ANARI_RENDERER)) {
+  for (auto &name : tsd::scene::getANARIObjectSubtypes(d, ANARI_RENDERER)) {
     auto &o = m_rendererObject;
-    o = tsd::core::parseANARIObjectInfo(d, ANARI_RENDERER, name.c_str());
+    o = tsd::scene::parseANARIObjectInfo(d, ANARI_RENDERER, name.c_str());
     o.setName(name.c_str());
     o.setUpdateDelegate(&m_rud);
     break;
@@ -322,7 +322,7 @@ void MultiDeviceViewport::ui_menubar()
       ImGui::Text("Parameters:");
       ImGui::Indent(INDENT_AMOUNT);
 
-      tsd::ui::buildUI_object(m_rendererObject, appCore()->tsd.scene, false);
+      tsd::ui::buildUI_object(m_rendererObject, appContext()->tsd.scene, false);
 
       ImGui::Unindent(INDENT_AMOUNT);
       ImGui::Separator();
@@ -504,7 +504,7 @@ int MultiDeviceViewport::windowFlags() const
 }
 
 void MultiDeviceViewport::RendererUpdateDelegate::signalParameterUpdated(
-    const tsd::core::Object *o, const tsd::core::Parameter *p)
+    const tsd::scene::Object *o, const tsd::scene::Parameter *p)
 {
   for (size_t i = 0; i < devices.size(); i++) {
     auto d = devices[i];

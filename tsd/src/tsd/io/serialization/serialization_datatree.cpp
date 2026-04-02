@@ -5,8 +5,12 @@
 #define TSD_USE_CUDA 1
 #endif
 
+#include "tsd/animation/Animation.hpp"
+#include "tsd/animation/AnimationManager.hpp"
 #include "tsd/core/DataTree.hpp"
 #include "tsd/core/Logging.hpp"
+#include "tsd/io/animation/SpatialFieldFileBinding.hpp"
+#include "tsd/io/importers.hpp"
 #include "tsd/io/serialization.hpp"
 // std
 #include <stack>
@@ -304,13 +308,13 @@ void nodeToCameraPose(core::DataNode &node, rendering::CameraPose &pose)
 
 // Layers /////////////////////////////////////////////////////////////////////
 
-void layerToNode(Layer &layer, core::DataNode &node)
+void layerToNode(const Layer &layer, core::DataNode &node)
 {
   std::stack<core::DataNode *> nodes;
   core::DataNode *currentParentNode = nullptr;
   core::DataNode *currentNode = &node;
   int currentLevel = -1;
-  layer.traverse(layer.root(), [&](LayerNode &tsdNode, int level) {
+  layer.traverse_const(layer.root(), [&](const LayerNode &tsdNode, int level) {
     if (currentLevel < level) {
       nodes.push(currentNode);
       currentParentNode = currentNode;
@@ -365,16 +369,127 @@ void nodeToLayer(core::DataNode &rootNode, Layer &layer, Scene &scene)
     if (level == 0)
       currentNode = layer.root();
     else {
-      currentNode = layer.insert_last_child(currentParentNode, {});
+      currentNode = currentParentNode->insert_last_child({&layer});
       if (auto *c = node.child("transformSRT"); c != nullptr)
         (*currentNode)->setAsTransform(c->getValueAs<math::mat3>());
       else
-        (*currentNode)->setValueRaw(node["value"].getValue(), &scene);
+        (*currentNode)->setValueRaw(node["value"].getValue());
       (*currentNode)->setEnabled(node["enabled"].getValueOr(true));
       (*currentNode)->name() = node["name"].getValueAs<std::string>();
     }
 
     return true;
+  });
+}
+
+// Animations /////////////////////////////////////////////////////////////////
+
+void animationToNode(const animation::Animation &anim, core::DataNode &node)
+{
+  node["name"] = anim.name();
+
+  auto &bindingsNode = node["objectBindings"];
+  for (const auto &b : anim.objectParameterBindings())
+    b.toDataNode(bindingsNode.append());
+
+  auto &transformsNode = node["transformBindings"];
+  for (const auto &tb : anim.transformBindings())
+    tb.toDataNode(transformsNode.append());
+
+  auto &fileBindingsNode = node["fileBindings"];
+  for (const auto &fb : anim.fileBindings()) {
+    auto &fbNode = fileBindingsNode.append();
+    fbNode["kind"] = fb->kind();
+    fb->toDataNode(fbNode);
+  }
+}
+
+void nodeToAnimation(
+    core::DataNode &node, animation::Animation &anim, Scene &scene)
+{
+  anim.editableName() = node["name"].getValueAs<std::string>();
+
+  if (auto *bindingsNode = node.child("objectBindings")) {
+    bindingsNode->foreach_child([&](core::DataNode &bn) {
+      auto &b = anim.addEmptyObjectParameterBinding();
+      b.fromDataNode(bn);
+    });
+  }
+
+  if (auto *transformsNode = node.child("transformBindings")) {
+    transformsNode->foreach_child([&](core::DataNode &tn) {
+      auto &b = anim.addEmptyTransformBinding();
+      b.fromDataNode(tn);
+    });
+  }
+
+  if (auto *fileBindingsNode = node.child("fileBindings")) {
+    fileBindingsNode->foreach_child([&](core::DataNode &fbNode) {
+      auto kind = fbNode["kind"].getValueAs<std::string>();
+      if (kind == "spatialField") {
+        auto targetIndex = fbNode["targetIndex"].getValueAs<size_t>();
+        auto *vol = static_cast<scene::Volume *>(
+            scene.getObject(ANARI_VOLUME, targetIndex));
+        if (!vol) {
+          logWarning(
+              "[nodeToAnimation] spatialField binding: volume index %zu not"
+              " found; skipping",
+              targetIndex);
+          return;
+        }
+
+        std::vector<std::string> files;
+        if (auto *filesNode = fbNode.child("files")) {
+          filesNode->foreach_child([&](core::DataNode &fn) {
+            files.push_back(fn.getValueAs<std::string>());
+          });
+        }
+
+        // The volume's current "value" param is the initial field (frame 0)
+        scene::SpatialFieldRef initialField;
+        if (auto *sf =
+                vol->parameterValueAsObject<scene::SpatialField>("value")) {
+          initialField = sf->self();
+        }
+
+        anim.emplaceFileBinding<SpatialFieldFileBinding>(
+            &scene, vol, initialField, std::move(files));
+      }
+    });
+  }
+}
+
+void animationManagerToNode(
+    const animation::AnimationManager &mgr, core::DataNode &node)
+{
+  node["time"] = mgr.getAnimationTime();
+  node["increment"] = mgr.getAnimationIncrement();
+  node["totalFrames"] = mgr.getAnimationTotalFrames();
+
+  auto &animationsNode = node["objects"];
+  for (const auto &anim : mgr.animations()) {
+    animationToNode(anim, animationsNode.append());
+  }
+}
+
+void nodeToAnimationManager(
+    core::DataNode &node, animation::AnimationManager &mgr, Scene &scene)
+{
+  float time = mgr.getAnimationTime();
+  float increment = mgr.getAnimationIncrement();
+  int totalFrames = mgr.getAnimationTotalFrames();
+
+  time = node["time"].getValueOr<float>(time);
+  increment = node["increment"].getValueOr<float>(increment);
+  totalFrames = node["totalFrames"].getValueOr<int>(totalFrames);
+
+  mgr.setAnimationTime(time);
+  mgr.setAnimationIncrement(increment);
+  mgr.setAnimationTotalFrames(totalFrames);
+
+  node["objects"].foreach_child([&](core::DataNode &animNode) {
+    auto &anim = mgr.addAnimation();
+    nodeToAnimation(animNode, anim, scene);
   });
 }
 
@@ -393,8 +508,13 @@ void save_Scene(Scene &scene, const char *filename)
   tsd::core::logStatus("  ...done!");
 }
 
-void save_Scene(Scene &scene, core::DataNode &root, bool forceProxyArrays)
+void save_Scene(Scene &scene,
+    core::DataNode &root,
+    bool forceProxyArrays,
+    tsd::animation::AnimationManager *animMgr)
 {
+  scene.defragmentObjectStorage(); // ensure contiguous object indices
+
   // Layers //
 
   tsd::core::logStatus("    ...serializing %zu layers", scene.numberOfLayers());
@@ -407,23 +527,6 @@ void save_Scene(Scene &scene, core::DataNode &root, bool forceProxyArrays)
       layerRoot["isActive"] = l.second.active;
     }
   }
-
-  // Animations //
-
-  tsd::core::logStatus(
-      "    ...serializing %zu animations", scene.numberOfAnimations());
-
-  auto &animationsRoot = root["animation"];
-
-  auto &animationObjects = animationsRoot["objects"];
-  for (size_t i = 0; i < scene.numberOfAnimations(); i++)
-    scene.animation(i)->serialize(animationObjects.append());
-
-  auto &animationSettings = animationsRoot["settings"];
-  animationSettings["time"] = scene.getAnimationTime();
-  animationSettings["increment"] = scene.getAnimationIncrement();
-  animationSettings["totalFrames"] = scene.getAnimationTotalFrames();
-  animationSettings["fps"] = scene.getAnimationFPS();
 
   // ObjectDB //
 
@@ -456,9 +559,16 @@ void save_Scene(Scene &scene, core::DataNode &root, bool forceProxyArrays)
   objectPoolToNode(objectDB, scene.m_db.camera, "camera");
   objectPoolToNode(objectDB, scene.m_db.renderer, "renderer");
   objectPoolToNode(objectDB, scene.m_db.array, "array");
+
+  // Animations //
+
+  if (animMgr)
+    animationManagerToNode(*animMgr, root["animations"]);
 }
 
-void load_Scene(Scene &scene, const char *filename)
+void load_Scene(Scene &scene,
+    const char *filename,
+    tsd::animation::AnimationManager *animMgr)
 {
   tsd::core::logStatus("Loading context from file: %s", filename);
   tsd::core::logStatus("  ...loading file");
@@ -466,12 +576,14 @@ void load_Scene(Scene &scene, const char *filename)
   tree.load(filename);
   auto &root = tree.root();
   if (auto *c = root.child("context"); c != nullptr)
-    load_Scene(scene, *c);
+    load_Scene(scene, *c, animMgr);
   else
-    load_Scene(scene, root);
+    load_Scene(scene, root, animMgr);
 }
 
-void load_Scene(Scene &scene, core::DataNode &root)
+void load_Scene(Scene &scene,
+    core::DataNode &root,
+    tsd::animation::AnimationManager *animMgr)
 {
   // Clear out any existing context contents //
 
@@ -528,26 +640,8 @@ void load_Scene(Scene &scene, core::DataNode &root)
 
   // Animations
 
-  if (auto *c = root.child("animation"); c != nullptr) {
-    tsd::core::logStatus("  ...converting animations");
-
-    auto &animationRoot = *c;
-    auto &animationObjects = animationRoot["objects"];
-    animationObjects.foreach_child([&](auto &animationNode) {
-      scene.addAnimation()->deserialize(animationNode);
-    });
-
-    auto &animationSettings = animationRoot["settings"];
-    scene.setAnimationTime(animationSettings["time"].getValueAs<float>());
-    scene.setAnimationIncrement(
-        animationSettings["increment"].getValueAs<float>());
-    if (auto *tf = animationSettings.child("totalFrames"); tf != nullptr)
-      scene.setAnimationTotalFrames(tf->getValueAs<int>());
-    if (auto *fp = animationSettings.child("fps"); fp != nullptr)
-      scene.setAnimationFPS(fp->getValueAs<float>());
-  } else {
-    tsd::core::logStatus("  ...no animations found!");
-  }
+  if (animMgr)
+    nodeToAnimationManager(root["animations"], *animMgr, scene);
 
   tsd::core::logStatus("  ...done!");
 }

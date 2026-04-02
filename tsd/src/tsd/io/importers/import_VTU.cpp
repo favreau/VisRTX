@@ -6,9 +6,9 @@
 #endif
 
 #include "tsd/core/Logging.hpp"
-#include "tsd/core/algorithms/computeScalarRange.hpp"
 #include "tsd/io/importers.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
+#include "tsd/scene/algorithms/computeScalarRange.hpp"
 #if TSD_USE_VTK
 // vtk
 #include <vtkCell.h>
@@ -195,7 +195,7 @@ static void createSurfaceFromGrid(Scene &scene,
   indexArray->setData(triangleIndices.data());
 
   // Vertex data
-  std::vector<tsd::core::ArrayRef> vertexDataArrays;
+  std::vector<tsd::scene::ArrayRef> vertexDataArrays;
   vtkPointData *ptData = triangleMesh->GetPointData();
   for (int i = 0; i < ptData->GetNumberOfArrays(); ++i) {
     vtkDataArray *arr = ptData->GetArray(i);
@@ -208,7 +208,7 @@ static void createSurfaceFromGrid(Scene &scene,
   }
 
   // Face data
-  std::vector<tsd::core::ArrayRef> faceDataArrays;
+  std::vector<tsd::scene::ArrayRef> faceDataArrays;
   vtkCellData *clData = triangleMesh->GetCellData();
   for (int i = 0; i < clData->GetNumberOfArrays(); ++i) {
     vtkDataArray *arr = clData->GetArray(i);
@@ -222,7 +222,7 @@ static void createSurfaceFromGrid(Scene &scene,
 
   // Assemble ANARI surfaces
   auto mesh =
-      scene.createObject<tsd::core::Geometry>(tokens::geometry::triangle);
+      scene.createObject<tsd::scene::Geometry>(tokens::geometry::triangle);
   mesh->setName(("vtu_mesh | " + std::string(filename)).c_str());
   mesh->setParameterObject("vertex.position", *vertexArray);
   mesh->setParameterObject("primitive.index", *indexArray);
@@ -235,16 +235,16 @@ static void createSurfaceFromGrid(Scene &scene,
     mesh->setParameterObject(
         "primitive.attribute" + std::to_string(i), *faceDataArrays[i]);
 
-  auto mat = scene.createObject<tsd::core::Material>(
+  auto mat = scene.createObject<tsd::scene::Material>(
       tokens::material::physicallyBased);
   mat->setName(("vtu_material | " + std::string(filename)).c_str());
 
   if (auto colorArray = firstScalarArray(vertexDataArrays); colorArray) {
-    auto colorRange = tsd::core::computeScalarRange(*colorArray);
+    auto colorRange = tsd::scene::computeScalarRange(*colorArray);
     mat->setParameterObject(
         "baseColor", *makeDefaultColorMapSampler(scene, colorRange));
   } else if (auto colorArray = firstScalarArray(faceDataArrays); colorArray) {
-    auto colorRange = tsd::core::computeScalarRange(*colorArray);
+    auto colorRange = tsd::scene::computeScalarRange(*colorArray);
     mat->setParameterObject(
         "baseColor", *makeDefaultColorMapSampler(scene, colorRange));
   } else if (!vertexDataArrays.empty() || !faceDataArrays.empty()) {
@@ -331,7 +331,7 @@ static SpatialFieldRef createFieldFromVolumeCells(
 
   // Helper: create a new unstructured SpatialField with shared topology
   auto makeTopoField = [&](const std::string &name) -> SpatialFieldRef {
-    auto f = scene.createObject<tsd::core::SpatialField>(
+    auto f = scene.createObject<tsd::scene::SpatialField>(
         tokens::spatial_field::unstructured);
     f->setName(name.c_str());
     f->setParameterObject("vertex.position", *vertexArray);
@@ -423,8 +423,12 @@ static SpatialFieldRef createFieldFromVolumeCells(
 }
 
 // Full-scene importer: surfaces + volumes
-void import_VTU(Scene &scene, const char *filepath, LayerNodeRef location)
+void import_VTU(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filepath,
+    LayerNodeRef location)
 {
+  (void)animMgr;
   auto grid = loadVTUGrid(filepath);
   if (!grid)
     return;
@@ -451,7 +455,7 @@ void import_VTU(Scene &scene, const char *filepath, LayerNodeRef location)
 
   auto root = scene.insertChildTransformNode(
       location ? location : scene.defaultLayer()->root(),
-      tsd::math::mat4(tsd::math::identity),
+      math::IDENTITY_MAT4,
       fileOf(filepath).c_str());
 
   if (hasSurface)
@@ -461,7 +465,7 @@ void import_VTU(Scene &scene, const char *filepath, LayerNodeRef location)
     auto field = createFieldFromVolumeCells(scene, grid, filepath);
     if (field) {
       tsd::math::float2 valueRange = field->computeValueRange();
-      auto [inst, volume] = scene.insertNewChildObjectNode<tsd::core::Volume>(
+      auto [inst, volume] = scene.insertNewChildObjectNode<tsd::scene::Volume>(
           root, tokens::volume::transferFunction1D);
       volume->setName(fileOf(filepath).c_str());
       volume->setParameterObject("value", *field);
@@ -485,8 +489,12 @@ SpatialFieldRef import_VTU(Scene &scene, const char *filepath)
 
 #else
 
-void import_VTU(Scene &scene, const char *filepath, LayerNodeRef location)
+void import_VTU(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filepath,
+    LayerNodeRef location)
 {
+  (void)animMgr;
   logError("[import_VTU] VTK not enabled in TSD build.");
 }
 

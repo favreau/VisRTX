@@ -5,7 +5,7 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <stack>
+#include <utility>
 #include <vector>
 
 namespace tsd::core {
@@ -16,13 +16,25 @@ constexpr size_t INVALID_INDEX = ~size_t(0);
 template <typename T>
 struct ObjectPoolRef;
 
+using ObjectPoolRemapping = std::pair<size_t, size_t>; // old index -> new index
+
+/*
+ * Sparse object store with O(1) insert and erase; slots are tracked by a
+ * bool marker array and recycled via a free-index stack.
+ *
+ * Example:
+ *   ObjectPool<MyObj> pool;
+ *   auto ref = pool.emplace(args...);
+ *   ref->doSomething();
+ *   pool.erase(ref.index());
+ */
 template <typename T>
 struct ObjectPool
 {
   using element_t = T;
   using storage_t = std::vector<element_t>;
   using marker_t = std::vector<bool>;
-  using index_pool_t = std::stack<size_t>;
+  using index_pool_t = std::vector<size_t>;
 
   ObjectPool() = default;
   ObjectPool(size_t reserveSize);
@@ -37,6 +49,7 @@ struct ObjectPool
 
   bool slot_empty(size_t i) const;
   float density() const;
+  bool is_dense() const;
 
   ObjectPoolRef<T> insert(T &&v);
   template <typename... Args>
@@ -46,7 +59,7 @@ struct ObjectPool
   void clear();
   void reserve(size_t size);
 
-  bool defragment();
+  std::vector<ObjectPoolRemapping> defragment();
 
   template <typename U>
   void sync_slots(const ObjectPool<U> &o);
@@ -60,6 +73,15 @@ struct ObjectPool
   index_pool_t m_freeIndices;
 };
 
+/*
+ * Nullable reference into an ObjectPool that validates slot occupancy on
+ * every dereference; acts as a safe handle to a pool-managed object.
+ *
+ * Example:
+ *   ObjectPoolRef<MyObj> ref = pool.at(idx);
+ *   if (ref) ref->update();
+ *   size_t i = ref.index();
+ */
 template <typename T>
 struct ObjectPoolRef
 {
@@ -186,6 +208,12 @@ inline float ObjectPool<T>::density() const
 }
 
 template <typename T>
+inline bool ObjectPool<T>::is_dense() const
+{
+  return density() == 1.f;
+}
+
+template <typename T>
 inline ObjectPoolRef<T> ObjectPool<T>::insert(T &&v)
 {
   if (m_freeIndices.empty()) {
@@ -193,8 +221,8 @@ inline ObjectPoolRef<T> ObjectPool<T>::insert(T &&v)
     m_slots.push_back(true);
     return at(m_values.size() - 1);
   } else {
-    size_t i = m_freeIndices.top();
-    m_freeIndices.pop();
+    size_t i = m_freeIndices.back();
+    m_freeIndices.pop_back();
     m_values[i] = std::move(v);
     m_slots[i] = true;
     return at(i);
@@ -216,7 +244,7 @@ inline bool ObjectPool<T>::erase(size_t i)
 
   m_values[i] = {};
   m_slots[i] = false;
-  m_freeIndices.push(i);
+  m_freeIndices.push_back(i);
 
   return true;
 }
@@ -237,23 +265,50 @@ inline void ObjectPool<T>::reserve(size_t size)
 }
 
 template <typename T>
-inline bool ObjectPool<T>::defragment()
+inline std::vector<ObjectPoolRemapping> ObjectPool<T>::defragment()
 {
-  if (density() == 1.f)
-    return false;
+  if (is_dense())
+    return {};
 
-  auto p =
-      std::stable_partition(m_values.begin(), m_values.end(), [&](auto &v) {
-        size_t i = std::distance(&m_values[0], &v);
-        return m_slots[i];
-      });
-  m_values.erase(p, m_values.end());
-  m_slots.resize(m_values.size());
+  std::vector<ObjectPoolRemapping> retval;
+  retval.reserve(m_freeIndices.size());
+
+  const size_t finalSize = size();
+  if (finalSize == 0) {
+    clear();
+    return {};
+  }
+
+  auto findLastOccupiedIdx = [&](size_t current) -> size_t {
+    if (!slot_empty(current))
+      return current;
+    while (current > 0 && slot_empty(current - 1))
+      current--;
+    return current > 0 ? current - 1 : INVALID_INDEX;
+  };
+
+  std::sort(m_freeIndices.begin(), m_freeIndices.end(), std::greater<size_t>());
+
+  size_t lastOccupied = capacity() - 1;
+  while (!m_freeIndices.empty()) {
+    size_t freeIdx = m_freeIndices.back();
+    lastOccupied = findLastOccupiedIdx(lastOccupied);
+    if (lastOccupied == INVALID_INDEX)
+      break;
+    if (freeIdx >= lastOccupied)
+      break;
+    m_values[freeIdx] = std::move(m_values[lastOccupied]);
+    m_slots[lastOccupied] = false;
+    retval.push_back({lastOccupied, freeIdx});
+    m_freeIndices.pop_back();
+  }
+
+  m_freeIndices = {};
+  m_values.resize(finalSize);
+  m_slots.resize(finalSize);
   std::fill(m_slots.begin(), m_slots.end(), true);
-  while (!m_freeIndices.empty())
-    m_freeIndices.pop();
 
-  return true;
+  return retval;
 }
 
 template <typename T>

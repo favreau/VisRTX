@@ -43,14 +43,11 @@ void RemoteViewport::buildUI()
 {
   BaseViewport::buildUI();
 
-  ImVec2 _viewportSize = ImGui::GetContentRegionAvail();
-  tsd::math::int2 viewportSize(_viewportSize.x, _viewportSize.y);
-
   bool isConnected = m_channel && m_channel->isConnected();
   BaseViewport::viewport_setActive(isConnected);
 
-  if (m_viewport.size != viewportSize || m_wasConnected != isConnected)
-    reshape(viewportSize);
+  if (m_wasConnected != isConnected)
+    viewport_reshape(m_viewport.size);
 
   if (!m_wasConnected && isConnected) {
     m_receivedCameraIdx = TSD_INVALID_INDEX;
@@ -80,11 +77,14 @@ void RemoteViewport::buildUI()
   }
 
   BaseViewport::ui_gizmo();
-  BaseViewport::ui_handleInput();
+  const bool widgetActive = BaseViewport::ui_orientationWidget();
+  if (!widgetActive)
+    BaseViewport::ui_handleInput();
 
   // Render the overlay after input handling so it does not interfere.
   if (m_showOverlay)
     ui_overlay();
+  BaseViewport::ui_animationSlider();
 }
 
 void RemoteViewport::setManipulator(tsd::rendering::Manipulator *m)
@@ -142,7 +142,7 @@ void RemoteViewport::disconnect()
   m_prevCamera = {};
 }
 
-void RemoteViewport::imagePipeline_populate(tsd::rendering::RenderPipeline &p)
+void RemoteViewport::imagePipeline_populate(tsd::rendering::ImagePipeline &p)
 {
   m_clearPass = p.emplace_back<tsd::rendering::ClearBuffersPass>();
   m_incomingFramePass = p.emplace_back<tsd::rendering::CopyToColorBufferPass>();
@@ -152,7 +152,7 @@ void RemoteViewport::imagePipeline_populate(tsd::rendering::RenderPipeline &p)
   m_clearPass->setClearColor(tsd::math::float4(1.f, 0.f, 0.f, 1.f));
   m_incomingFramePass->setExternalBuffer(m_incomingColorBuffer);
 
-  reshape(m_viewport.size);
+  viewport_reshape(m_viewport.size);
 }
 
 void RemoteViewport::camera_resetView(bool /*resetAzEl*/)
@@ -176,19 +176,20 @@ void RemoteViewport::renderer_resetParameterDefaults()
       "Renderer parameter reset is not currently supported in RemoteViewport.");
 }
 
-void RemoteViewport::reshape(tsd::math::int2 newSize)
+void RemoteViewport::viewport_reshape(tsd::math::int2 newSize)
 {
   if (newSize.x <= 0 || newSize.y <= 0)
     return;
 
+  BaseViewport::viewport_reshape(newSize);
+
   m_incomingColorBuffer.resize(newSize.x * newSize.y * 4);
   std::fill(m_incomingColorBuffer.begin(), m_incomingColorBuffer.end(), 0);
 
-  if (m_channel && m_channel->isConnected()) {
-    tsd::network::RenderSession::Frame::Config frameConfig;
-    frameConfig.size = tsd::math::uint2(newSize.x, newSize.y);
-    m_channel->send(MessageType::SERVER_SET_FRAME_CONFIG, &frameConfig);
-  }
+  m_frameConfig.size = tsd::math::uint2(newSize.x, newSize.y);
+
+  if (m_channel && m_channel->isConnected())
+    m_channel->send(MessageType::SERVER_SET_FRAME_CONFIG, &m_frameConfig);
 }
 
 void RemoteViewport::updateRenderer()
@@ -196,11 +197,11 @@ void RemoteViewport::updateRenderer()
   if (!m_channel || !m_channel->isConnected())
     return;
 
-  auto *core = appCore();
-  auto &scene = core->tsd.scene;
+  auto *ctx = appContext();
+  auto &scene = ctx->tsd.scene;
   if (m_renderers.objects.empty()
       && scene.numberOfObjects(ANARI_RENDERER) != 0) {
-    auto fr = scene.getObject<tsd::core::Renderer>(0);
+    auto fr = scene.getObject<tsd::scene::Renderer>(0);
     m_renderers.objects = scene.renderersOfDevice(fr->rendererDeviceName());
   } else if (m_renderers.objects.empty()) {
     // We only update when we have the list of renderers from the server
@@ -213,7 +214,7 @@ void RemoteViewport::updateRenderer()
 
   if (rendererFromServer) {
     m_renderers.current = m_receivedRendererIdx >= m_renderers.objects.size()
-        ? tsd::core::RendererAppRef{}
+        ? tsd::scene::RendererAppRef{}
         : m_renderers.objects[m_receivedRendererIdx];
     m_prevRenderer = m_renderers.current;
   } else if (rendererChanged) {
@@ -236,9 +237,9 @@ void RemoteViewport::updateCamera()
       m_camera.current && m_camera.current != m_prevCamera;
 
   if (cameraFromServer) {
-    auto *core = appCore();
-    auto &scene = core->tsd.scene;
-    camera_setCurrent(scene.getObject<tsd::core::Camera>(m_receivedCameraIdx));
+    auto *ctx = appContext();
+    auto &scene = ctx->tsd.scene;
+    camera_setCurrent(scene.getObject<tsd::scene::Camera>(m_receivedCameraIdx));
     m_camera.arcballToken = {};
     m_manipulatorSynchronized = false;
     return;

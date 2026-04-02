@@ -3,16 +3,26 @@
 
 #pragma once
 
-#include "RenderPass.h"
+#include "ImagePass.h"
 // anari
 #include <anari/anari_cpp.hpp>
 
 namespace tsd::rendering {
 
-struct AnariSceneRenderPass : public RenderPass
+/*
+ * ImagePass that drives a single ANARI Frame with a configurable camera,
+ * renderer, and world; optionally captures auxiliary AOV buffers
+ * (depth, normals, albedo, object/primitive/instance IDs).
+ *
+ * Example:
+ *   auto *pass = pipeline.emplace_back<AnariSceneRenderPass>(device);
+ *   pass->setCamera(cam); pass->setRenderer(rend); pass->setWorld(world);
+ */
+struct AnariSceneRenderPass : public ImagePass
 {
   AnariSceneRenderPass(anari::Device d);
   ~AnariSceneRenderPass() override;
+  const char *name() const override { return "ANARI Scene"; }
 
   void setCamera(anari::Camera c);
   void setRenderer(anari::Renderer r);
@@ -27,20 +37,16 @@ struct AnariSceneRenderPass : public RenderPass
   // default' true', if 'false', then anari::wait() on each pass
   void setRunAsync(bool on);
 
-  anari::DataType getColorFormat() const;
-  // NOTE(jda): these do not increase ref count, no need to release
-  anari::Device getDevice() const;
   anari::Frame getFrame() const;
-  anari::Camera getCamera() const;
 
  private:
   void updateSize() override;
-  void render(RenderBuffers &b, int stageId) override;
+  void render(ImageBuffers &b, int stageId) override;
   void copyFrameData();
-  void composite(RenderBuffers &b, int stageId);
+  void composite(ImageBuffers &b, int stageId);
   void cleanup();
 
-  RenderBuffers m_buffers;
+  ImageBuffers m_buffers;
 
   bool m_firstFrame{true};
   bool m_deviceSupportsCUDAFrames{false};

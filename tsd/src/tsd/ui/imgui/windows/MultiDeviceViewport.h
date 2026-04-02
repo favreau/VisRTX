@@ -6,7 +6,7 @@
 // tsd_ui_imgui
 #include <tsd/ui/imgui/windows/Window.h>
 // tsd_rendering
-#include <tsd/rendering/pipeline/RenderPipeline.h>
+#include <tsd/rendering/pipeline/ImagePipeline.h>
 #include <tsd/rendering/index/RenderIndexAllLayers.hpp>
 #include <tsd/rendering/view/Manipulator.hpp>
 // std
@@ -33,7 +33,7 @@ struct MultiDeviceViewport : public Window
 
   void getSceneBounds(tsd::math::float3 bounds[2]) const;
   tsd::rendering::RenderIndexAllLayers *getRenderIndex(size_t i = 0) const;
-  void setupRenderPipeline(const std::vector<anari::Device> &devices);
+  void setupImagePipeline(const std::vector<anari::Device> &devices);
   void reshape(tsd::math::int2 newWindowSize);
   void updateCamera(bool force = false);
 
@@ -55,12 +55,12 @@ struct MultiDeviceViewport : public Window
 
   anari::DataType m_format{ANARI_UFIXED8_RGBA_SRGB};
   std::vector<anari::Camera> m_cameras;
-  tsd::core::Object m_rendererObject;
+  tsd::scene::Object m_rendererObject;
 
-  struct RendererUpdateDelegate : public tsd::core::EmptyUpdateDelegate
+  struct RendererUpdateDelegate : public tsd::scene::EmptyUpdateDelegate
   {
     void signalParameterUpdated(
-        const tsd::core::Object *o, const tsd::core::Parameter *p) override;
+        const tsd::scene::Object *o, const tsd::scene::Parameter *p) override;
     std::vector<anari::Device> devices;
     std::vector<anari::Renderer> renderers;
   } m_rud;
@@ -79,7 +79,7 @@ struct MultiDeviceViewport : public Window
 
   bool m_showAxes{true};
 
-  tsd::rendering::RenderPipeline m_pipeline;
+  tsd::rendering::ImagePipeline m_pipeline;
   tsd::rendering::MultiDeviceSceneRenderPass *m_anariPass{nullptr};
   tsd::rendering::AnariAxesRenderPass *m_axesPass{nullptr};
   tsd::rendering::CopyToSDLTexturePass *m_outputPass{nullptr};

@@ -12,18 +12,20 @@ PRIVATE
   index/RenderIndexAllLayers.cpp
   pipeline/passes/AnariAxesRenderPass.cpp
   pipeline/passes/AnariSceneRenderPass.cpp
+  pipeline/passes/AutoExposurePass.cpp
   pipeline/passes/ClearBuffersPass.cpp
   pipeline/passes/CopyFromColorBufferPass.cpp
   pipeline/passes/CopyToColorBufferPass.cpp
   pipeline/passes/CopyToSDLTexturePass.cpp
   pipeline/passes/MultiDeviceSceneRenderPass.cpp
   pipeline/passes/OutlineRenderPass.cpp
+  pipeline/passes/OutputTransformPass.cpp
   pipeline/passes/PickPass.cpp
-  pipeline/passes/RenderPass.cpp
+  pipeline/passes/ImagePass.cpp
   pipeline/passes/SaveToFilePass.cpp
+  pipeline/passes/ToneMapPass.cpp
   pipeline/passes/VisualizeAOVPass.cpp
-  pipeline/RenderPipeline.cpp
-  view/CameraUpdateDelegate.cpp
+  pipeline/ImagePipeline.cpp
   view/ManipulatorToAnari.cpp
   view/ManipulatorToTSD.cpp
 )
@@ -33,7 +35,7 @@ PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/../..>
 )
 
-project_link_libraries(PUBLIC tsd_core PRIVATE $<BUILD_INTERFACE:stb_image>)
+project_link_libraries(PUBLIC tsd_scene tsd_algorithms PRIVATE $<BUILD_INTERFACE:stb_image>)
 
 if (TSD_USE_CUDA)
   find_package(thrust REQUIRED HINTS ${CUDAToolkit_LIBRARY_DIR}/cmake)
@@ -41,8 +43,12 @@ if (TSD_USE_CUDA)
   set_source_files_properties(
     pipeline/passes/AnariAxesRenderPass.cpp
     pipeline/passes/AnariSceneRenderPass.cpp
+    pipeline/passes/AutoExposurePass.cpp
+    pipeline/passes/ClearBuffersPass.cpp
+    pipeline/passes/ImagePass.cpp
     pipeline/passes/OutlineRenderPass.cpp
-    pipeline/passes/RenderPass.cpp
+    pipeline/passes/OutputTransformPass.cpp
+    pipeline/passes/ToneMapPass.cpp
     pipeline/passes/VisualizeAOVPass.cpp
     PROPERTIES
       COMPILE_OPTIONS "--extended-lambda;--expt-relaxed-constexpr;-Xcudafe=--diag_suppress=20012;-Wno-deprecated-gpu-targets"

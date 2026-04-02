@@ -5,23 +5,23 @@
 
 #include "tsd/network/Message.hpp"
 // tsd_core
-#include "tsd/core/scene/Scene.hpp"
+#include "tsd/scene/Scene.hpp"
 
 namespace tsd::network::messages {
 
 struct TransferLayer : public StructuredMessage
 {
   // Sender -- will serialize the scene into the message on construction
-  TransferLayer(tsd::core::Scene *scene, tsd::core::Layer *layer);
+  TransferLayer(tsd::scene::Scene *scene, const tsd::scene::Layer *layer);
 
   // Receiver -- will setup deserialization on execute()
-  TransferLayer(const Message &msg, tsd::core::Scene *scene);
+  TransferLayer(const Message &msg, tsd::scene::Scene *scene);
 
   // Receiver behavior
   void execute() override;
 
  private:
-  tsd::core::Scene *m_scene{nullptr};
+  tsd::scene::Scene *m_scene{nullptr};
 };
 
 } // namespace tsd::network::messages

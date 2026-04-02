@@ -5,9 +5,11 @@
 
 #include "Window.h"
 // tsd_rendering
-#include "tsd/rendering/pipeline/RenderPipeline.h"
+#include "tsd/rendering/pipeline/ImagePipeline.h"
 // ImGuizmo
 #include <ImGuizmo.h>
+// imoguizmo
+#include <imoguizmo.hpp>
 
 namespace tsd::ui::imgui {
 
@@ -38,15 +40,16 @@ struct BaseViewport : public Window
   bool viewport_isActive() const;
   virtual void viewport_reshape(tsd::math::int2 newWindowSize);
 
-  virtual void imagePipeline_populate(tsd::rendering::RenderPipeline &p) = 0;
+  virtual void imagePipeline_populate(tsd::rendering::ImagePipeline &p) = 0;
   void imagePipeline_setup();
   bool imagePipeline_isSetup() const;
   void imagePipeline_setDimensions(uint32_t width, uint32_t height);
   void imagePipeline_render();
   void imagePipeline_teardown();
+  const tsd::rendering::ImagePipeline &imagePipeline() const;
 
   void camera_update(bool force = false);
-  void camera_setCurrent(tsd::core::CameraAppRef c);
+  void camera_setCurrent(tsd::scene::CameraAppRef c);
   virtual void camera_resetView(bool resetAzEl = true) = 0;
   virtual void camera_centerView() = 0;
 
@@ -56,6 +59,8 @@ struct BaseViewport : public Window
 
   void ui_handleInput();
   void ui_gizmo();
+  bool ui_orientationWidget(); // returns true if widget consumed mouse input
+  void ui_animationSlider();
   void ui_menubar_Renderer();
   void ui_menubar_Camera();
   void ui_menubar_TransformManipulator();
@@ -63,7 +68,7 @@ struct BaseViewport : public Window
 
   struct CameraState
   {
-    tsd::core::CameraAppRef current;
+    tsd::scene::CameraAppRef current;
     tsd::rendering::Manipulator localArcball;
     tsd::rendering::Manipulator *arcball{nullptr};
     tsd::rendering::UpdateToken arcballToken{0};
@@ -79,14 +84,18 @@ struct BaseViewport : public Window
 
   struct RendererState
   {
-    std::vector<tsd::core::RendererAppRef> objects;
-    tsd::core::RendererAppRef current;
+    std::vector<tsd::scene::RendererAppRef> objects;
+    tsd::scene::RendererAppRef current;
   } m_renderers;
+
+  bool m_showOrientationWidget{true};
+  bool m_showAnimationSlider{true};
 
  private:
   int windowFlags() const override; // anari_viewer::Window
+  void applyViewMatrixToArcball(const float *viewMat);
 
-  tsd::rendering::RenderPipeline m_pipeline;
+  tsd::rendering::ImagePipeline m_pipeline;
 
   struct InputState
   {

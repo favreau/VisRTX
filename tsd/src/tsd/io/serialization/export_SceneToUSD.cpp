@@ -5,6 +5,7 @@
 #endif
 
 // tsd
+#include "tsd/animation/AnimationManager.hpp"
 #include "tsd/core/Logging.hpp"
 #include "tsd/io/serialization.hpp"
 
@@ -13,12 +14,12 @@
 #include <anari/frontend/anari_enums.h>
 #include <anari/frontend/type_utility.h>
 
-#include "tsd/core/scene/Scene.hpp"
-#include "tsd/core/scene/objects/Array.hpp"
-#include "tsd/core/scene/objects/Camera.hpp"
-#include "tsd/core/scene/objects/Material.hpp"
-#include "tsd/core/scene/objects/Sampler.hpp"
-#include "tsd/core/scene/objects/Surface.hpp"
+#include "tsd/scene/Scene.hpp"
+#include "tsd/scene/objects/Array.hpp"
+#include "tsd/scene/objects/Camera.hpp"
+#include "tsd/scene/objects/Material.hpp"
+#include "tsd/scene/objects/Sampler.hpp"
+#include "tsd/scene/objects/Surface.hpp"
 
 #if TSD_USE_USD
 // stb and tinyexr
@@ -52,6 +53,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <stack>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -220,7 +222,7 @@ static pxr::TfToken tsdSamplertoScalarOutputToken(const Sampler *sampler)
 {
   assert(sampler);
   auto transform = sampler->parameterValueAs<math::mat4>("outTransform")
-                       .value_or(mat4(math::identity));
+                       .value_or(math::IDENTITY_MAT4);
   auto x = transform.row(0);
   switch (argmax(x)) {
   case 0:
@@ -741,7 +743,10 @@ static pxr::SdfPath tsdSurfaceToUSD(
   return surfacePath;
 }
 
-void export_SceneToUSD(Scene &scene, const char *filename, int framesPerSecond)
+void export_SceneToUSD(Scene &scene,
+    const char *filename,
+    int framesPerSecond,
+    tsd::animation::AnimationManager *animMgr)
 {
   // Clear some global state (!!!)
   usedTextureFileNames.clear();
@@ -759,7 +764,7 @@ void export_SceneToUSD(Scene &scene, const char *filename, int framesPerSecond)
     return;
   }
 
-  const float originalTime = scene.getAnimationTime();
+  const float originalTime = animMgr ? animMgr->getAnimationTime() : 0.f;
   const int exportFps = std::max(1, framesPerSecond);
 
   pxr::SdfPath currentPath = allLayersPath;
@@ -776,7 +781,7 @@ void export_SceneToUSD(Scene &scene, const char *filename, int framesPerSecond)
           // special case for root -- output UsdGeomScope
           currentPath = currentPath.AppendChild(pxr::TfToken(l.first.c_str()));
           pxr::UsdGeomScope::Define(stage, currentPath);
-          transformStack.push(math::mat4(math::identity));
+          transformStack.push(math::IDENTITY_MAT4);
 
           return true;
         }
@@ -820,11 +825,16 @@ void export_SceneToUSD(Scene &scene, const char *filename, int framesPerSecond)
             auto usdCamera = pxr::UsdGeomCamera::Define(stage, objectPath);
 
             size_t cameraSampleCount = 0;
-            for (size_t i = 0; i < scene.numberOfAnimations(); ++i) {
-              if (auto *anim = scene.animation(i);
-                  anim && anim->targetsObject(camera)) {
-                cameraSampleCount = anim->timeStepCount();
-                break;
+            if (animMgr) {
+              for (auto &anim : animMgr->animations()) {
+                for (const auto &b : anim.objectParameterBindings()) {
+                  if (b.target() == camera) {
+                    cameraSampleCount = b.timeBase().size();
+                    break;
+                  }
+                }
+                if (cameraSampleCount > 0)
+                  break;
               }
             }
 
@@ -928,10 +938,10 @@ void export_SceneToUSD(Scene &scene, const char *filename, int framesPerSecond)
               for (size_t i = 0; i < cameraSampleCount; ++i) {
                 const double tNorm = static_cast<double>(i)
                     / static_cast<double>(cameraSampleCount - 1);
-                scene.setAnimationTime(static_cast<float>(tNorm));
+                animMgr->setAnimationTime(static_cast<float>(tNorm));
                 setCameraSample(static_cast<double>(i), true);
               }
-              scene.setAnimationTime(originalTime);
+              animMgr->setAnimationTime(originalTime);
             } else {
               setCameraSample(0.0, false);
             }
@@ -1001,13 +1011,19 @@ void export_SceneToUSD(Scene &scene, const char *filename, int framesPerSecond)
 
   tsd::core::logStatus("...done exporting USD scene to file: %s", filename);
 }
+
+} // namespace tsd::io
+
 #else
 
 namespace tsd::io {
-void export_SceneToUSD(Scene &, const char *, int)
+
+void export_SceneToUSD(
+    Scene &, const char *, int, tsd::animation::AnimationManager *)
 {
   tsd::core::logError("[export_USD] USD not enabled in TSD build.");
 }
-#endif
 
 } // namespace tsd::io
+
+#endif

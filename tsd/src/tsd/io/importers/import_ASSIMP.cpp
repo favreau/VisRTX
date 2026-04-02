@@ -260,7 +260,8 @@ static std::vector<MaterialRef> importASSIMPMaterials(
           m->setParameterObject("baseColor", *sampler);
         }
       } else if (aiColor3D baseColor;
-          assimpMat->Get(AI_MATKEY_BASE_COLOR, baseColor) == AI_SUCCESS) {
+                 assimpMat->Get(AI_MATKEY_BASE_COLOR, baseColor)
+                 == AI_SUCCESS) {
         m->setParameter("baseColor", ANARI_FLOAT32_VEC3, &baseColor);
       }
 
@@ -278,8 +279,8 @@ static std::vector<MaterialRef> importASSIMPMaterials(
           m->setParameterObject("metallic", *sampler);
         }
       } else if (ai_real metallicFactor;
-          assimpMat->Get(AI_MATKEY_METALLIC_FACTOR, metallicFactor)
-          == AI_SUCCESS) {
+                 assimpMat->Get(AI_MATKEY_METALLIC_FACTOR, metallicFactor)
+                 == AI_SUCCESS) {
         m->setParameter("metallic", ANARI_FLOAT32, &metallicFactor);
       }
 
@@ -297,8 +298,8 @@ static std::vector<MaterialRef> importASSIMPMaterials(
           m->setParameterObject("roughness", *sampler);
         }
       } else if (ai_real roughnessFactor;
-          assimpMat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughnessFactor)
-          == AI_SUCCESS) {
+                 assimpMat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughnessFactor)
+                 == AI_SUCCESS) {
         m->setParameter("roughness", ANARI_FLOAT32, &roughnessFactor);
       }
 
@@ -336,8 +337,7 @@ static std::vector<MaterialRef> importASSIMPMaterials(
           if (ai_real anisotropyFactor;
               assimpMat->Get(AI_MATKEY_ANISOTROPY_FACTOR, anisotropyFactor)
               == AI_SUCCESS) {
-        m->setParameter(
-            "anisotropyStrength", ANARI_FLOAT32, &anisotropyFactor);
+        m->setParameter("anisotropyStrength", ANARI_FLOAT32, &anisotropyFactor);
       }
 
 #ifdef AI_MATKEY_ANISOTROPY_ROTATION
@@ -374,8 +374,8 @@ static std::vector<MaterialRef> importASSIMPMaterials(
           m->setParameterObject("sheenColor", *sampler);
         }
       } else if (aiColor3D sheenColor;
-          assimpMat->Get(AI_MATKEY_SHEEN_COLOR_FACTOR, sheenColor)
-          == AI_SUCCESS) {
+                 assimpMat->Get(AI_MATKEY_SHEEN_COLOR_FACTOR, sheenColor)
+                 == AI_SUCCESS) {
         m->setParameter("sheenColor", ANARI_FLOAT32_VEC3, &sheenColor);
       }
 
@@ -390,10 +390,10 @@ static std::vector<MaterialRef> importASSIMPMaterials(
           m->setParameterObject("sheenRoughness", *sampler);
         }
       } else if (ai_real sheenRoughnessFactor;
-          assimpMat->Get(AI_MATKEY_SHEEN_ROUGHNESS_FACTOR, sheenRoughnessFactor)
-          == AI_SUCCESS) {
-        m->setParameter(
-            "sheenRoughness", ANARI_FLOAT32, &sheenRoughnessFactor);
+                 assimpMat->Get(
+                     AI_MATKEY_SHEEN_ROUGHNESS_FACTOR, sheenRoughnessFactor)
+                 == AI_SUCCESS) {
+        m->setParameter("sheenRoughness", ANARI_FLOAT32, &sheenRoughnessFactor);
       }
 
       // Clearcoat handling
@@ -407,8 +407,8 @@ static std::vector<MaterialRef> importASSIMPMaterials(
           m->setParameterObject("clearcoat", *sampler);
         }
       } else if (ai_real clearcoatFactor;
-          assimpMat->Get(AI_MATKEY_CLEARCOAT_FACTOR, clearcoatFactor)
-          == AI_SUCCESS) {
+                 assimpMat->Get(AI_MATKEY_CLEARCOAT_FACTOR, clearcoatFactor)
+                 == AI_SUCCESS) {
         m->setParameter("clearcoat", ANARI_FLOAT32, &clearcoatFactor);
       }
 
@@ -424,9 +424,9 @@ static std::vector<MaterialRef> importASSIMPMaterials(
           m->setParameterObject("clearcoatRoughness", *sampler);
         }
       } else if (ai_real clearcoatRoughnessFactor;
-          assimpMat->Get(
-              AI_MATKEY_CLEARCOAT_ROUGHNESS_FACTOR, clearcoatRoughnessFactor)
-          == AI_SUCCESS) {
+                 assimpMat->Get(AI_MATKEY_CLEARCOAT_ROUGHNESS_FACTOR,
+                     clearcoatRoughnessFactor)
+                 == AI_SUCCESS) {
         m->setParameter(
             "clearcoatRoughness", ANARI_FLOAT32, &clearcoatRoughnessFactor);
       }
@@ -454,8 +454,8 @@ static std::vector<MaterialRef> importASSIMPMaterials(
           m->setParameterObject("emissive", *sampler);
         }
       } else if (aiColor3D emissiveColor;
-          assimpMat->Get(AI_MATKEY_COLOR_EMISSIVE, emissiveColor)
-          == AI_SUCCESS) {
+                 assimpMat->Get(AI_MATKEY_COLOR_EMISSIVE, emissiveColor)
+                 == AI_SUCCESS) {
         m->setParameter("emissive", ANARI_FLOAT32_VEC3, &emissiveColor);
       }
 
@@ -609,11 +609,12 @@ static void populateASSIMPLayer(Scene &scene,
   tsd::math::mat4 mat;
   std::memcpy(&mat, &node->mTransformation, sizeof(mat));
   mat = tsd::math::transpose(mat);
-  auto tr = tsdLayerRef->insert_last_child({mat, node->mName.C_Str()});
+  auto tr =
+      scene.insertChildTransformNode(tsdLayerRef, mat, node->mName.C_Str());
 
   for (unsigned int i = 0; i < node->mNumMeshes; i++) {
     auto mesh = surfaces.at(node->mMeshes[i]);
-    tr->insert_last_child({mesh, mesh->name().c_str()});
+    scene.insertChildObjectNode(tr, mesh, mesh->name().c_str());
   }
 
   // https://github.com/assimp/assimp/issues/1168#issuecomment-278673292
@@ -625,7 +626,7 @@ static void populateASSIMPLayer(Scene &scene,
       [name](const LightRef &lightRef) { return lightRef->name() == name; });
 
   if (it != lights.end())
-    tr->insert_first_child({ANARI_LIGHT, (*it)->index(), &scene});
+    scene.insertChildObjectNode(tr, *it, (*it)->name().c_str());
 
   for (unsigned int i = 0; i < node->mNumChildren; i++)
     populateASSIMPLayer(scene, tr, surfaces, lights, node->mChildren[i]);
@@ -635,9 +636,13 @@ static void populateASSIMPLayer(Scene &scene,
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
-void import_ASSIMP(
-    Scene &scene, const char *filename, LayerNodeRef location, bool flatten)
+void import_ASSIMP(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filename,
+    LayerNodeRef location,
+    bool flatten)
 {
+  (void)animMgr;
   Assimp::DefaultLogger::create("", Assimp::Logger::VERBOSE);
 
   Assimp::Importer importer;
@@ -658,16 +663,22 @@ void import_ASSIMP(
   auto materials = importASSIMPMaterials(scene, a_scene, filename);
   auto meshes = importASSIMPSurfaces(scene, materials, a_scene);
 
+  scene.beginLayerEditBatch();
   populateASSIMPLayer(scene,
       location ? location : scene.defaultLayer()->root(),
       meshes,
       lights,
       a_scene->mRootNode);
+  scene.endLayerEditBatch();
 }
 #else
-void import_ASSIMP(
-    Scene &scene, const char *filename, LayerNodeRef location, bool flatten)
+void import_ASSIMP(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filename,
+    LayerNodeRef location,
+    bool flatten)
 {
+  (void)animMgr;
   logError("[import_ASSIMP] ASSIMP not enabled in TSD build.");
 }
 #endif

@@ -8,7 +8,7 @@
 #include "tsd/ui/imgui/tsd_ui_imgui.h"
 // tsd_core
 #include "tsd/core/Logging.hpp"
-#include "tsd/core/scene/objects/Camera.hpp"
+#include "tsd/scene/objects/Camera.hpp"
 // tsd_io
 #include "tsd/io/serialization.hpp"
 // tsd_rendering
@@ -30,13 +30,16 @@ Viewport::Viewport(
     Application *app, tsd::rendering::Manipulator *m, const char *name)
     : BaseViewport(app, name)
 {
+  m_viewport.resolutionScale = 0.75f;
   BaseViewport::setManipulator(m);
-  setLibrary("");
+  m_defragToken = appContext()->tsd.scene.addDefragCallback(
+      [this](const auto &) { m_refreshDeviceNextFrame = true; });
 }
 
 Viewport::~Viewport()
 {
   teardownDevice();
+  appContext()->tsd.scene.removeDefragCallback(m_defragToken);
 }
 
 void Viewport::buildUI()
@@ -45,6 +48,14 @@ void Viewport::buildUI()
       && !BaseViewport::imagePipeline_isSetup();
   if (setupPipeline)
     BaseViewport::imagePipeline_setup();
+
+  if (m_refreshDeviceNextFrame) {
+    if (!m_libName.empty()) {
+      auto lib = m_libName; // setLibrary() clears m_libName
+      setLibrary(lib);
+    }
+    m_refreshDeviceNextFrame = false;
+  }
 
   BaseViewport::buildUI();
 
@@ -55,7 +66,6 @@ void Viewport::buildUI()
 
   updateImage();
   BaseViewport::camera_update();
-  updateAxes();
 
   ui_menubar();
 
@@ -69,31 +79,32 @@ void Viewport::buildUI()
   }
 
   BaseViewport::ui_gizmo();
-  BaseViewport::ui_handleInput();
+  const bool widgetActive = BaseViewport::ui_orientationWidget();
+  if (!widgetActive)
+    BaseViewport::ui_handleInput();
   bool didPick = ui_picking(); // Needs to happen before ui_menubar
 
   // Render the overlay after input handling so it does not interfere.
   if (m_showOverlay)
     ui_overlay();
 
+  BaseViewport::ui_animationSlider();
+
   ImGui::EndDisabled();
 
   if (m_anariPass && !didPick) {
-    bool needIDs = appCore()->getFirstSelected().valid()
+    bool needIDs = appContext()->getFirstSelected().valid()
         || m_visualizeAOV == tsd::rendering::AOVType::EDGES
         || m_visualizeAOV == tsd::rendering::AOVType::OBJECT_ID;
     m_anariPass->setEnableIDs(needIDs);
   }
 
   if (m_rIdx) {
-    auto kind = appCore()->anari.renderIndexKind();
+    auto kind = appContext()->anari.renderIndexKind();
     if (kind != m_lastIndexKind) {
-      tsd::core::logWarning(
-          "render index setting changed: resetting viewport");
+      tsd::core::logWarning("render index setting changed: resetting viewport");
       m_lastIndexKind = kind;
-      auto lib = m_libName;
-      setLibrary("");
-      setLibrary(lib);
+      m_refreshDeviceNextFrame = true;
     }
   }
 }
@@ -109,8 +120,8 @@ void Viewport::setLibrary(const std::string &libName, bool doAsync)
   }
 
   auto updateLibrary = [&, libName = libName]() {
-    auto &adm = appCore()->anari;
-    auto &scene = appCore()->tsd.scene;
+    auto &adm = appContext()->anari;
+    auto &scene = appContext()->tsd.scene;
 
     auto start = std::chrono::steady_clock::now();
     auto d = adm.loadDevice(libName);
@@ -140,7 +151,7 @@ void Viewport::setLibrary(const std::string &libName, bool doAsync)
       viewport_setActive(true);
 
       static bool firstFrame = true;
-      if (firstFrame && appCore()->commandLine.loadedFromStateFile)
+      if (firstFrame && appContext()->commandLine.loadedFromStateFile)
         firstFrame = false;
 
       if (!m_camera.current)
@@ -151,9 +162,9 @@ void Viewport::setLibrary(const std::string &libName, bool doAsync)
 
       if (firstFrame || m_camera.arcball->distance() == tsd::math::inf) {
         camera_resetView(true);
-        if (appCore()->view.poses.empty()) {
+        if (appContext()->view.poses.empty()) {
           tsd::core::logStatus("[viewport] adding 'default' camera pose");
-          appCore()->addCurrentViewToCameraPoses("default");
+          appContext()->addCurrentViewToCameraPoses("default");
         }
         firstFrame = false;
       }
@@ -176,11 +187,11 @@ void Viewport::setLibrary(const std::string &libName, bool doAsync)
 
 void Viewport::setLibraryToDefault()
 {
-  if (appCore()->commandLine.loadedFromStateFile)
+  if (appContext()->commandLine.loadedFromStateFile)
     return;
 
   setLibrary(m_app->commandLineOptions()->useDefaultRenderer
-          ? appCore()->anari.libraryList()[0]
+          ? appContext()->anari.libraryList()[0]
           : "");
 }
 
@@ -206,10 +217,9 @@ void Viewport::setCustomFrameParameter(
     return;
   }
 
-  auto d = m_anariPass->getDevice();
   auto f = m_anariPass->getFrame();
-  anari::setParameter(d, f, name, value.type(), value.data());
-  anari::commitParameters(d, f);
+  anari::setParameter(m_device, f, name, value.type(), value.data());
+  anari::commitParameters(m_device, f);
 }
 
 void Viewport::saveSettings(tsd::core::DataNode &root)
@@ -225,9 +235,11 @@ void Viewport::saveSettings(tsd::core::DataNode &root)
   root["visualizeAOV"] = static_cast<int>(m_visualizeAOV);
   root["depthVisualMinimum"] = m_depthVisualMinimum;
   root["depthVisualMaximum"] = m_depthVisualMaximum;
-  root["edgeThreshold"] = m_edgeThreshold;
   root["edgeInvert"] = m_edgeInvert;
-  root["showAxes"] = m_showAxes;
+  root["autoExposureEnabled"] = m_autoExposureEnabled;
+  root["toneMapExposure"] = m_toneMapExposure;
+  root["toneMapGamma"] = m_toneMapGamma;
+  root["toneMapOperator"] = static_cast<int>(m_toneMapOperator);
 
   // Database Camera //
 
@@ -254,21 +266,27 @@ void Viewport::loadSettings(tsd::core::DataNode &root)
   m_visualizeAOV = static_cast<tsd::rendering::AOVType>(aovType);
   root["depthVisualMinimum"].getValue(ANARI_FLOAT32, &m_depthVisualMinimum);
   root["depthVisualMaximum"].getValue(ANARI_FLOAT32, &m_depthVisualMaximum);
-  root["edgeThreshold"].getValue(ANARI_FLOAT32, &m_edgeThreshold);
   root["edgeInvert"].getValue(ANARI_BOOL, &m_edgeInvert);
-  root["showAxes"].getValue(ANARI_BOOL, &m_showAxes);
+  root["autoExposureEnabled"].getValue(ANARI_BOOL, &m_autoExposureEnabled);
+  root["toneMapExposure"].getValue(ANARI_FLOAT32, &m_toneMapExposure);
+  root["toneMapGamma"].getValue(ANARI_FLOAT32, &m_toneMapGamma);
+  int toneMapOperator = static_cast<int>(m_toneMapOperator);
+  root["toneMapOperator"].getValue(ANARI_INT32, &toneMapOperator);
+  m_toneMapOperator =
+      static_cast<tsd::rendering::ToneMapOperator>(toneMapOperator);
 
   // Database Camera //
 
   if (auto *c = root.child("currentCamera"); c) {
     uint64_t idx = 0;
     c->getValue(ANARI_UINT64, &idx);
-    m_camera.current = appCore()->tsd.scene.getObject<tsd::core::Camera>(idx);
+    m_camera.current =
+        appContext()->tsd.scene.getObject<tsd::scene::Camera>(idx);
   }
 
   // Setup library //
 
-  auto *core = appCore();
+  auto *ctx = appContext();
   if (m_app->commandLineOptions()->useDefaultRenderer) {
     std::string libraryName;
     root["anariLibrary"].getValue(ANARI_STRING, &libraryName);
@@ -276,7 +294,7 @@ void Viewport::loadSettings(tsd::core::DataNode &root)
   }
 }
 
-void Viewport::imagePipeline_populate(tsd::rendering::RenderPipeline &p)
+void Viewport::imagePipeline_populate(tsd::rendering::ImagePipeline &p)
 {
   tsd::core::logStatus("[viewport] initialized scene for '%s' device in %.2fs",
       m_libName.c_str(),
@@ -290,7 +308,7 @@ void Viewport::imagePipeline_populate(tsd::rendering::RenderPipeline &p)
 
   m_pickPass = p.emplace_back<tsd::rendering::PickPass>();
   m_pickPass->setEnabled(false);
-  m_pickPass->setPickOperation([&](tsd::rendering::RenderBuffers &b) {
+  m_pickPass->setPickOperation([&](tsd::rendering::ImageBuffers &b) {
     // Get depth //
 
     auto [width, height] = m_pickPass->getDimensions();
@@ -369,29 +387,31 @@ void Viewport::imagePipeline_populate(tsd::rendering::RenderPipeline &p)
         id &= 0x7FFFFFFF;
       }
 
-      auto *obj = (id == ~0u) ? nullptr
-                              : appCore()->tsd.scene.getObject(objectType, id);
-      appCore()->setSelected(obj);
+      auto *obj = (id == ~0u)
+          ? nullptr
+          : appContext()->tsd.scene.getObject(objectType, id);
+      appContext()->setSelected(obj);
     }
 
     m_pickPass->setEnabled(false);
   });
 
+  m_autoExposurePass = p.emplace_back<tsd::rendering::AutoExposurePass>();
+
+  m_toneMapPass = p.emplace_back<tsd::rendering::ToneMapPass>();
+  m_toneMapPass->setOperator(m_toneMapOperator);
+  m_toneMapPass->setAutoExposureEnabled(m_autoExposureEnabled);
+  m_toneMapPass->setExposure(m_toneMapExposure);
+
+  m_outputTransformPass = p.emplace_back<tsd::rendering::OutputTransformPass>();
+  m_outputTransformPass->setGamma(m_toneMapGamma);
+
   m_visualizeAOVPass = p.emplace_back<tsd::rendering::VisualizeAOVPass>();
   m_visualizeAOVPass->setEnabled(false);
-  m_visualizeAOVPass->setEdgeThreshold(m_edgeThreshold);
   m_visualizeAOVPass->setEdgeInvert(m_edgeInvert);
+  updateDisplayPassState();
 
   m_outlinePass = p.emplace_back<tsd::rendering::OutlineRenderPass>();
-
-  anari::Extensions extensions{};
-  auto &adm = appCore()->anari;
-  if (auto *exts = adm.loadDeviceExtensions(m_libName); exts != nullptr)
-    extensions = *exts;
-
-  m_axesPass =
-      p.emplace_back<tsd::rendering::AnariAxesRenderPass>(m_device, extensions);
-  m_axesPass->setEnabled(m_showAxes);
 
   m_outputPass = p.emplace_back<tsd::rendering::CopyToSDLTexturePass>(
       m_app->sdlRenderer());
@@ -433,7 +453,7 @@ void Viewport::renderer_resetParameterDefaults()
 
   m_renderers.current->removeAllParameters();
   m_renderers.current->setCommonParameterDefaults();
-  tsd::core::parseANARIObjectInfo(*m_renderers.current,
+  tsd::scene::parseANARIObjectInfo(*m_renderers.current,
       m_device,
       ANARI_RENDERER,
       m_renderers.current->subtype().c_str());
@@ -450,11 +470,16 @@ void Viewport::teardownDevice()
   BaseViewport::imagePipeline_teardown();
 
   m_anariPass = nullptr;
+  m_pickPass = nullptr;
+  m_visualizeAOVPass = nullptr;
+  m_autoExposurePass = nullptr;
+  m_toneMapPass = nullptr;
+  m_outputTransformPass = nullptr;
   m_outlinePass = nullptr;
   m_outputPass = nullptr;
   m_saveToFilePass = nullptr;
 
-  appCore()->anari.releaseRenderIndex(m_device);
+  appContext()->anari.releaseRenderIndex(m_device);
   m_rIdx = nullptr;
   m_libName.clear();
 
@@ -485,8 +510,8 @@ void Viewport::setSelectionVisibilityFilterEnabled(bool enabled)
   if (!enabled)
     m_rIdx->setFilterFunction({});
   else {
-    m_rIdx->setFilterFunction([this](const tsd::core::Object *obj) {
-      auto selectedNode = appCore()->getFirstSelected();
+    m_rIdx->setFilterFunction([this](const tsd::scene::Object *obj) {
+      auto selectedNode = appContext()->getFirstSelected();
       if (!selectedNode.valid())
         return true;
       auto *selectedObject = (*selectedNode)->getObject();
@@ -501,7 +526,7 @@ void Viewport::updateFrame()
     return;
 
   if (!m_camera.current)
-    m_camera.current = appCore()->tsd.scene.defaultCamera();
+    m_camera.current = appContext()->tsd.scene.defaultCamera();
 
   m_anariPass->setWorld(m_rIdx->world());
   if (m_camera.current)
@@ -521,7 +546,7 @@ void Viewport::updateImage()
   anari::getProperty(
       m_device, frame, "numSamples", m_frameSamples, ANARI_NO_WAIT);
 
-  auto selectedNode = appCore()->getFirstSelected();
+  auto selectedNode = appContext()->getFirstSelected();
   const auto *selectedObject =
       selectedNode.valid() ? (*selectedNode)->getObject() : nullptr;
   const bool doHighlight = !m_showOnlySelected && m_highlightSelection
@@ -538,6 +563,8 @@ void Viewport::updateImage()
 
   auto start = std::chrono::steady_clock::now();
   BaseViewport::imagePipeline_render();
+  if (m_autoExposurePass)
+    m_currentAutoExposure = m_autoExposurePass->currentExposure();
   auto end = std::chrono::steady_clock::now();
   m_latestFL = std::chrono::duration<float>(end - start).count() * 1000;
 
@@ -549,28 +576,23 @@ void Viewport::updateImage()
   m_maxFL = std::max(m_maxFL, m_latestAnariFL);
 }
 
-void Viewport::updateAxes()
+void Viewport::updateDisplayPassState()
 {
-  if (!m_axesPass || !m_camera.current)
+  if (!m_toneMapPass || !m_outputTransformPass)
     return;
 
-  const bool doUpdate = m_camera.current != m_prevCamera
-      || m_camera.current->lastParameterChange() > m_lastCameraChange;
-
-  if (!doUpdate)
-    return;
-
-  m_prevCamera = m_camera.current;
-  m_lastCameraChange = m_camera.current->lastParameterChange();
-
-  // Get compass information
-  auto axesDir =
-      m_camera.current->parameterValueAs<tsd::math::float3>("direction")
-          .value_or(tsd::math::float3(0.0f, 0.0f, -1.0f));
-  auto axesUp =
-      m_camera.current->parameterValueAs<tsd::math::float3>("up").value_or(
-          tsd::math::float3(0.0f, 1.0f, 0.0f));
-  m_axesPass->setView(axesDir, axesUp);
+  const bool showBeauty = m_visualizeAOV == tsd::rendering::AOVType::NONE;
+  if (m_autoExposurePass) {
+    m_autoExposurePass->setEnabled(showBeauty && m_autoExposureEnabled);
+    m_autoExposurePass->setHDREnabled(
+        showBeauty && m_colorFormat == ANARI_FLOAT32_VEC4);
+  }
+  m_toneMapPass->setEnabled(showBeauty);
+  m_outputTransformPass->setEnabled(showBeauty);
+  m_toneMapPass->setAutoExposureEnabled(showBeauty && m_autoExposureEnabled);
+  m_toneMapPass->setHDREnabled(
+      showBeauty && m_colorFormat == ANARI_FLOAT32_VEC4);
+  m_outputTransformPass->setColorFormat(m_colorFormat);
 }
 
 void Viewport::ui_menubar()
@@ -591,17 +613,15 @@ void Viewport::ui_menubar()
 void Viewport::ui_menubar_Device()
 {
   if (ImGui::BeginMenu("Device")) {
-    const auto &libraryList = appCore()->anari.libraryList();
+    const auto &libraryList = appContext()->anari.libraryList();
     for (auto &libName : libraryList) {
       const bool isThisLibrary = m_libName == libName;
       if (ImGui::RadioButton(libName.c_str(), isThisLibrary))
         setLibrary(libName);
     }
     ImGui::Separator();
-    if (ImGui::MenuItem("Reload Current Device")) {
-      auto lib = m_libName; // setLibrary() clears m_libName
-      setLibrary(lib);
-    }
+    if (ImGui::MenuItem("Reload Current Device"))
+      m_refreshDeviceNextFrame = true;
     ImGui::EndMenu();
   }
 }
@@ -612,7 +632,7 @@ void Viewport::ui_menubar_Viewport()
     {
       ImGui::Text("Format:");
       ImGui::Indent(INDENT_AMOUNT);
-      anari::DataType format = m_anariPass->getColorFormat();
+      anari::DataType format = m_colorFormat;
       if (ImGui::RadioButton(
               "UFIXED8_RGBA_SRGB", format == ANARI_UFIXED8_RGBA_SRGB))
         format = ANARI_UFIXED8_RGBA_SRGB;
@@ -621,8 +641,11 @@ void Viewport::ui_menubar_Viewport()
       if (ImGui::RadioButton("FLOAT32_VEC4", format == ANARI_FLOAT32_VEC4))
         format = ANARI_FLOAT32_VEC4;
 
-      if (format != m_anariPass->getColorFormat())
+      if (format != m_colorFormat) {
         m_anariPass->setColorFormat(format);
+        m_colorFormat = format;
+        updateDisplayPassState();
+      }
       ImGui::Unindent(INDENT_AMOUNT);
     }
 
@@ -644,8 +667,21 @@ void Viewport::ui_menubar_Viewport()
       if (ImGui::RadioButton("12.5%", current == 0.125f))
         m_viewport.resolutionScale = 0.125f;
 
-      if (current != m_viewport.resolutionScale)
+      if (ImGui::BeginMenu("Custom")) {
+        ImGui::DragFloat("##customRes",
+            &m_viewport.resolutionScale,
+            0.01f,
+            0.1f,
+            2.f,
+            "%.2f");
+        ImGui::EndMenu();
+      }
+
+      if (current != m_viewport.resolutionScale) {
+        if (m_viewport.resolutionScale < 0.05f)
+          m_viewport.resolutionScale = 0.05f;
         viewport_reshape(m_viewport.size);
+      }
 
       ImGui::Unindent(INDENT_AMOUNT);
     }
@@ -669,6 +705,7 @@ void Viewport::ui_menubar_Viewport()
         if (aov != int(m_visualizeAOV)) {
           m_visualizeAOV = static_cast<tsd::rendering::AOVType>(aov);
           m_visualizeAOVPass->setAOVType(m_visualizeAOV);
+          updateDisplayPassState();
           m_anariPass->setEnableAlbedo(
               m_visualizeAOV == tsd::rendering::AOVType::ALBEDO);
           m_anariPass->setEnableNormals(
@@ -702,11 +739,8 @@ void Viewport::ui_menubar_Viewport()
 
       ImGui::BeginDisabled(m_visualizeAOV != tsd::rendering::AOVType::EDGES);
       bool edgeSettingsChanged = false;
-      edgeSettingsChanged |=
-          ImGui::DragFloat("Edge Threshold", &m_edgeThreshold, 0.01f, 0.f, 1.f);
       edgeSettingsChanged |= ImGui::Checkbox("Invert Edges", &m_edgeInvert);
       if (edgeSettingsChanged) {
-        m_visualizeAOVPass->setEdgeThreshold(m_edgeThreshold);
         m_visualizeAOVPass->setEdgeInvert(m_edgeInvert);
       }
       ImGui::EndDisabled();
@@ -715,6 +749,71 @@ void Viewport::ui_menubar_Viewport()
     }
 
     ImGui::Separator();
+
+    {
+      ImGui::Text("Exposure:");
+      ImGui::Indent(INDENT_AMOUNT);
+
+      ImGui::BeginDisabled(m_colorFormat != ANARI_FLOAT32_VEC4
+          || m_visualizeAOV != tsd::rendering::AOVType::NONE);
+
+      if (ImGui::Checkbox("Auto Exposure", &m_autoExposureEnabled))
+        updateDisplayPassState();
+
+      if (m_autoExposureEnabled) {
+        if (ImGui::DragFloat(
+                "Compensation", &m_toneMapExposure, 0.05f, -10.f, 10.f))
+          m_toneMapPass->setExposure(m_toneMapExposure);
+        ImGui::Text("Current EV: %.2f", m_currentAutoExposure);
+      } else if (ImGui::DragFloat(
+                     "Exposure", &m_toneMapExposure, 0.05f, -10.f, 10.f)) {
+        m_toneMapPass->setExposure(m_toneMapExposure);
+      }
+
+      ImGui::EndDisabled();
+      ImGui::Unindent(INDENT_AMOUNT);
+    }
+
+    ImGui::Separator();
+
+    {
+      ImGui::Text("Tonemapping:");
+      ImGui::Indent(INDENT_AMOUNT);
+
+      ImGui::BeginDisabled(m_colorFormat != ANARI_FLOAT32_VEC4
+          || m_visualizeAOV != tsd::rendering::AOVType::NONE);
+
+      const char *toneMapItems[] = {"None",
+          "Reinhard",
+          "ACES Filmic",
+          "Hable",
+          "Khronos PBR Neutral",
+          "AgX"};
+      if (int op = int(m_toneMapOperator); ImGui::Combo(
+              "Operator", &op, toneMapItems, IM_ARRAYSIZE(toneMapItems))) {
+        m_toneMapOperator = static_cast<tsd::rendering::ToneMapOperator>(op);
+        m_toneMapPass->setOperator(m_toneMapOperator);
+      }
+
+      ImGui::EndDisabled();
+      ImGui::Unindent(INDENT_AMOUNT);
+    }
+
+    ImGui::Separator();
+
+    {
+      ImGui::Text("Output Transform:");
+      ImGui::Indent(INDENT_AMOUNT);
+
+      ImGui::BeginDisabled(m_colorFormat == ANARI_UFIXED8_RGBA_SRGB
+          || m_visualizeAOV != tsd::rendering::AOVType::NONE);
+
+      if (ImGui::DragFloat("Gamma", &m_toneMapGamma, 0.01f, 0.1f, 5.f))
+        m_outputTransformPass->setGamma(m_toneMapGamma);
+
+      ImGui::EndDisabled();
+      ImGui::Unindent(INDENT_AMOUNT);
+    }
 
     {
       ImGui::Text("Display:");
@@ -736,9 +835,8 @@ void Viewport::ui_menubar_Viewport()
       ImGui::Text("Overlay:");
       ImGui::Indent(INDENT_AMOUNT);
 
-      if (ImGui::Checkbox("Axes", &m_showAxes))
-        m_axesPass->setEnabled(m_showAxes);
-
+      ImGui::Checkbox("Axes", &m_showOrientationWidget);
+      ImGui::Checkbox("Animation Time Slider", &m_showAnimationSlider);
       ImGui::Checkbox("Info Window", &m_showOverlay);
       if (ImGui::MenuItem("Reset Timing Stats")) {
         m_minFL = m_latestFL;
@@ -812,7 +910,7 @@ bool Viewport::ui_picking()
   // Pick view center //
 
   const bool shouldPickCenter =
-      m_camera.current->subtype() == core::tokens::camera::perspective
+      m_camera.current->subtype() == scene::tokens::camera::perspective
       && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
       && ImGui::IsKeyDown(ImGuiKey_LeftShift);
   if (shouldPickCenter && ImGui::IsWindowHovered()) {
@@ -882,6 +980,14 @@ void Viewport::ui_overlay()
     ImGui::Text("   ANARI: %.2fms", m_latestAnariFL);
     ImGui::Text("   (min): %.2fms", m_minFL);
     ImGui::Text("   (max): %.2fms", m_maxFL);
+
+    const auto &passTimings = imagePipeline().getPassTimings();
+    if (!passTimings.empty()) {
+      ImGui::Separator();
+      ImGui::Text("passes:");
+      for (const auto &timing : passTimings)
+        ImGui::Text("  %s: %.2fms", timing.name, timing.milliseconds);
+    }
   }
   ImGui::EndChild();
 

@@ -3,9 +3,12 @@
 
 #include "Animations.h"
 // tsd_core
+#include "tsd/animation/AnimationManager.hpp"
 #include "tsd/core/Logging.hpp"
 // tsd_ui_imgui
 #include "tsd/ui/imgui/Application.h"
+// std
+#include <optional>
 
 namespace tsd::ui::imgui {
 
@@ -14,62 +17,60 @@ Animations::Animations(Application *app, const char *name) : Window(app, name)
 
 void Animations::buildUI()
 {
-  if (ImGui::IsKeyPressed(ImGuiKey_Space))
-    m_playing = !m_playing;
-
-  auto *core = appCore();
-  auto &scene = core->tsd.scene;
-
-  if (m_playing)
-    scene.incrementAnimationTime();
+  auto *ctx = appContext();
+  auto &animMgr = ctx->tsd.animationMgr;
 
   buildUI_animationControls();
 
-  tsd::core::Animation *toDelete = nullptr;
-  for (size_t i = 0; i < scene.numberOfAnimations(); i++) {
-    auto *animation = scene.animation(i);
-    ImGui::PushID(static_cast<int>(i));
-    buildUI_editAnimation(animation);
-    if (ImGui::Button("delete"))
-      toDelete = animation;
-    ImGui::PopID();
+  auto &anims = animMgr.animations();
+  if (anims.empty()) {
+    ImGui::Separator();
+    ImGui::Text("-- No Animations --");
+  } else {
+    std::optional<size_t> toDelete;
+    for (size_t i = 0; i < anims.size(); i++) {
+      auto &anim = anims[i];
+      ImGui::PushID(static_cast<int>(i));
+      ImGui::Separator();
+      ImGui::Text("name | %s", anim.name().c_str());
+      ImGui::Text("info | %zu parameter, %zu transforms, %zu callbacks",
+          anim.objectParameterBindings().size(),
+          anim.transformBindings().size(),
+          anim.callbackBindings().size());
+      if (ImGui::Button("delete"))
+        toDelete = i;
+      ImGui::PopID();
+    }
+    if (toDelete)
+      animMgr.removeAnimation(toDelete.value());
   }
-  if (toDelete != nullptr)
-    scene.removeAnimation(toDelete);
 }
 
 void Animations::buildUI_animationControls()
 {
-  auto *core = appCore();
-  auto &scene = core->tsd.scene;
+  auto *ctx = appContext();
+  auto &animMgr = ctx->tsd.animationMgr;
 
-  ImGui::BeginDisabled(m_playing);
+  ImGui::BeginDisabled(animMgr.isPlaying());
 
-  float time = scene.getAnimationTime();
+  float time = animMgr.getAnimationTime();
   if (ImGui::SliderFloat("time", &time, 0.f, 1.f))
-    scene.setAnimationTime(time);
+    animMgr.setAnimationTime(time);
 
   if (ImGui::Button("play"))
-    m_playing = true;
+    animMgr.play();
   ImGui::EndDisabled();
 
-  ImGui::BeginDisabled(!m_playing);
+  ImGui::BeginDisabled(!animMgr.isPlaying());
   ImGui::SameLine();
   if (ImGui::Button("stop"))
-    m_playing = false;
+    animMgr.stop();
   ImGui::EndDisabled();
 
   ImGui::SameLine();
-  float increment = scene.getAnimationIncrement();
+  float increment = animMgr.getAnimationIncrement();
   if (ImGui::DragFloat("step", &increment, 0.01f, 0.f, 0.5f))
-    scene.setAnimationIncrement(increment);
-}
-
-void Animations::buildUI_editAnimation(tsd::core::Animation *animation)
-{
-  ImGui::Separator();
-  ImGui::Text("name | %s", animation->name().c_str());
-  ImGui::Text("info | %s", animation->info().c_str());
+    animMgr.setAnimationIncrement(increment);
 }
 
 } // namespace tsd::ui::imgui

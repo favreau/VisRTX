@@ -3,13 +3,21 @@
 
 #pragma once
 
+// std
 #include <limits>
-#include "tsd/core/scene/Scene.hpp"
+// tsd_rendering
 #include "tsd/rendering/view/Manipulator.hpp"
+// tsd_scene
+#include "tsd/scene/Scene.hpp"
+
+namespace tsd::animation {
+struct Animation;
+struct AnimationManager;
+} // namespace tsd::animation
 
 namespace tsd::io {
 
-using namespace tsd::core;
+using namespace tsd::scene;
 
 // NanoVDB quantization precision options
 enum class VDBPrecision
@@ -44,18 +52,25 @@ void nodeToCameraPose(core::DataNode &node, rendering::CameraPose &pose);
 
 // Layers //
 
-void layerToNode(Layer &layer, core::DataNode &node);
+void layerToNode(const Layer &layer, core::DataNode &node);
 void nodeToLayer(core::DataNode &rootNode, Layer &layer, Scene &scene);
+
+// Animations //
+
+void animationToNode(const animation::Animation &anim, core::DataNode &node);
+void nodeToAnimation(core::DataNode &node, animation::Animation &anim, Scene &scene);
+void animationManagerToNode(const animation::AnimationManager &mgr, core::DataNode &node);
+void nodeToAnimationManager(core::DataNode &node, animation::AnimationManager &mgr, Scene &scene);
 
 // Scenes //
 
 void save_Scene(Scene &scene, const char *filename);
-void save_Scene(Scene &scene, core::DataNode &root, bool forceProxyArrays);
-void load_Scene(Scene &scene, const char *filename);
-void load_Scene(Scene &scene, core::DataNode &root);
+void save_Scene(Scene &scene, core::DataNode &root, bool forceProxyArrays, tsd::animation::AnimationManager *animMgr = nullptr);
+void load_Scene(Scene &scene, const char *filename, tsd::animation::AnimationManager *animMgr = nullptr);
+void load_Scene(Scene &scene, core::DataNode &root, tsd::animation::AnimationManager *animMgr = nullptr);
 
 void export_SceneToUSD(
-    Scene &scene, const char *filename, int framesPerSecond = 30);
+    Scene &scene, const char *filename, int framesPerSecond = 30, tsd::animation::AnimationManager *animMgr = nullptr);
 void export_StructuredVolumeToNanoVDB(
   const SpatialField* spatialField,
   std::string_view outputFilename,

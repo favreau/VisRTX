@@ -47,7 +47,6 @@ void ImportFileDialog::buildUI()
       "SWC",
       "TRK",
       "USD",
-      "USD2",
       "VTP",
       "VTU",
       "XYZDP",
@@ -98,15 +97,15 @@ void ImportFileDialog::buildUI()
     this->hide();
 
     auto doLoad = [&]() {
-      auto *core = appCore();
-      auto &scene = core->tsd.scene;
-      auto *layer = core->tsd.scene.defaultLayer();
-      auto importRoot = core->getFirstSelected();
+      auto *ctx = appContext();
+      auto &scene = ctx->tsd.scene;
+      auto *layer = ctx->tsd.scene.defaultLayer();
+      auto importRoot = ctx->getFirstSelected();
       if (!importRoot.valid())
         importRoot = layer->root();
       tsd::io::ImportFile file{
           static_cast<tsd::io::ImporterType>(m_selectedFileType), m_filename};
-      tsd::io::import_file(scene, file, importRoot);
+      tsd::io::import_file(scene, ctx->tsd.animationMgr, file, importRoot);
       scene.signalLayerStructureChanged(layer);
     };
 

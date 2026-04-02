@@ -3,10 +3,11 @@
 
 #include "tsd/io/importers.hpp"
 
+#include "tsd/animation/AnimationManager.hpp"
 #include "tsd/core/ColorMapUtil.hpp"
 #include "tsd/core/Logging.hpp"
-#include "tsd/core/algorithms/computeScalarRange.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
+#include "tsd/scene/algorithms/computeScalarRange.hpp"
 // std
 #include <algorithm>
 #include <cstdio>
@@ -16,7 +17,10 @@ namespace tsd::io {
 
 using namespace tsd::core;
 
-void import_AXYZ(Scene &scene, const char *filepath, LayerNodeRef location)
+void import_AXYZ(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filepath,
+    LayerNodeRef location)
 {
   std::string file = fileOf(filepath);
   if (file.empty())
@@ -49,7 +53,7 @@ void import_AXYZ(Scene &scene, const char *filepath, LayerNodeRef location)
       numParticles,
       filepath);
 
-  std::vector<tsd::core::ObjectUsePtr<tsd::core::Array>> timeSteps;
+  std::vector<tsd::scene::ObjectUsePtr<tsd::scene::Array>> timeSteps;
 
   for (int t = 0; t < numTimeSteps; ++t) {
     auto positionsArray = scene.createArray(ANARI_FLOAT32_VEC3, numParticles);
@@ -64,19 +68,20 @@ void import_AXYZ(Scene &scene, const char *filepath, LayerNodeRef location)
   // create TSD objects //
 
   auto axyz_root = scene.insertChildTransformNode(
-      location ? location : scene.defaultLayer()->root());
-  (*axyz_root)->name() = "axyz_transform_" + file;
+      location ? location : scene.defaultLayer()->root(),
+      math::IDENTITY_MAT4,
+      ("axyz_transform_" + file).c_str());
 
   // geometry + material
 
-  auto geom = scene.createObject<tsd::core::Geometry>(
-      tsd::core::tokens::geometry::sphere);
+  auto geom = scene.createObject<tsd::scene::Geometry>(
+      tsd::scene::tokens::geometry::sphere);
   geom->setName(("axyz_geometry" + file).c_str());
   geom->setParameter("radius", 0.1f); // TODO: something smarter
   geom->setParameterObject("vertex.position", *timeSteps[0]);
 
-  auto mat = scene.createObject<tsd::core::Material>(
-      tsd::core::tokens::material::matte);
+  auto mat = scene.createObject<tsd::scene::Material>(
+      tsd::scene::tokens::material::matte);
   mat->setName("axyz_material");
   mat->setParameter("color", tsd::math::float3(0.8f, 0.8f, 0.8f));
 
@@ -87,8 +92,10 @@ void import_AXYZ(Scene &scene, const char *filepath, LayerNodeRef location)
 
   // animation
 
-  auto *anim = scene.addAnimation(file.c_str());
-  anim->setAsTimeSteps(*geom, "vertex.position", timeSteps);
+  auto tb = makeLinearTimeBase(timeSteps.size());
+  auto &anim = animMgr.addAnimation(file.c_str());
+  addArrayTimeStepBindings(
+      anim, geom.data(), {Token("vertex.position")}, {timeSteps}, tb);
 }
 
 } // namespace tsd::io

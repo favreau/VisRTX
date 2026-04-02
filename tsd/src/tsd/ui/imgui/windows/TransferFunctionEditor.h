@@ -6,8 +6,8 @@
 #include "Window.h"
 // tsd_core
 #include "tsd/core/ColorMapUtil.hpp"
-#include "tsd/core/scene/objects/Array.hpp"
-#include "tsd/core/scene/objects/Volume.hpp"
+#include "tsd/scene/objects/Array.hpp"
+#include "tsd/scene/objects/Volume.hpp"
 // std
 #include <string>
 #include <vector>
@@ -50,9 +50,10 @@ class TransferFunctionEditor : public Window
 
   // Data //
 
-  tsd::core::Volume *m_volume{nullptr};
-  std::vector<tsd::core::Volume*> m_otherVolumes;
-  tsd::core::Array *m_colorMapArray{nullptr};
+  tsd::scene::Volume *m_volume{nullptr};
+  std::vector<tsd::scene::Volume*> m_otherVolumes;
+  tsd::scene::Array *m_colorMapArray{nullptr};
+  tsd::scene::Volume *m_lastColorVolume{nullptr};
 
   // all available transfer functions
   std::vector<std::string> m_tfnsNames;

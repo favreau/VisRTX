@@ -8,22 +8,23 @@
 #endif
 
 #if ENABLE_SDL
-#include "RenderPass.h"
+#include "ImagePass.h"
 // SDL3
 #include <SDL3/SDL.h>
 
 namespace tsd::rendering {
 
-struct CopyToSDLTexturePass : public RenderPass
+struct CopyToSDLTexturePass : public ImagePass
 {
   CopyToSDLTexturePass(SDL_Renderer *renderer);
   ~CopyToSDLTexturePass() override;
+  const char *name() const override { return "Copy To SDL"; }
 
   SDL_Texture *getTexture() const;
 
  private:
   bool checkGLInterop() const;
-  void render(RenderBuffers &b, int stageId) override;
+  void render(ImageBuffers &b, int stageId) override;
   void updateSize() override;
 
   struct CopyToSDLTexturePassImpl;

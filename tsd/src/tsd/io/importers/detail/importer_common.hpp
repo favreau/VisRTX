@@ -3,8 +3,9 @@
 
 #pragma once
 
+#include "tsd/animation/Animation.hpp"
 #include "tsd/core/ColorMapUtil.hpp"
-#include "tsd/core/scene/Scene.hpp"
+#include "tsd/scene/Scene.hpp"
 // std
 #include <cstdio>
 #include <string>
@@ -22,17 +23,17 @@ std::string fileOf(const std::string &filepath);
 std::string extensionOf(const std::string &filepath);
 std::vector<std::string> splitString(const std::string &s, char delim);
 
-tsd::core::ArrayRef readArray(
-    tsd::core::Scene &scene, anari::DataType elementType, std::FILE *fp);
+tsd::scene::ArrayRef readArray(
+    tsd::scene::Scene &scene, anari::DataType elementType, std::FILE *fp);
 
-using TextureCache = std::unordered_map<std::string, tsd::core::ArrayRef>;
-tsd::core::SamplerRef importTexture(tsd::core::Scene &scene,
+using TextureCache = std::unordered_map<std::string, tsd::scene::ArrayRef>;
+tsd::scene::SamplerRef importTexture(tsd::scene::Scene &scene,
     std::string filepath,
     TextureCache &cache,
     bool isLinear = false);
 
-tsd::core::SamplerRef makeDefaultColorMapSampler(
-    tsd::core::Scene &scene, const tsd::math::float2 &range);
+tsd::scene::SamplerRef makeDefaultColorMapSampler(
+    tsd::scene::Scene &scene, const tsd::math::float2 &range);
 
 // Transfer function import functions
 tsd::core::TransferFunction importTransferFunction(const std::string &filepath);
@@ -48,15 +49,46 @@ bool calcTangentsForTriangleMesh(const tsd::math::uint3 *indices,
 #if TSD_USE_VTK
 anari::DataType vtkTypeToANARIType(
     int vtkType, int numComps, const char *errorIdentifier = "");
-tsd::core::ArrayRef makeArray1DFromVTK(tsd::core::Scene &scene,
+tsd::scene::ArrayRef makeArray1DFromVTK(tsd::scene::Scene &scene,
     vtkDataArray *array,
     const char *errorIdentifier = "");
-tsd::core::ArrayRef makeArray3DFromVTK(tsd::core::Scene &scene,
+tsd::scene::ArrayRef makeArray3DFromVTK(tsd::scene::Scene &scene,
     vtkDataArray *array,
     size_t w,
     size_t h,
     size_t d,
     const char *errorIdentifier = "");
 #endif
+
+// Animation helpers ///////////////////////////////////////////////////////////
+
+// Create a linear time base [0..1] with `count` evenly spaced samples.
+std::vector<float> makeLinearTimeBase(size_t count);
+
+// Build bindings for the "one value-array per parameter" pattern (e.g. camera
+// animation where each Array has N elements of the parameter's scalar type).
+void addValueTimeStepBindings(tsd::animation::Animation &anim,
+    tsd::scene::Object *target,
+    const std::vector<tsd::core::Token> &paramNames,
+    const std::vector<tsd::scene::ObjectUsePtr<tsd::scene::Array>> &dataArrays,
+    const std::vector<float> &timeBase,
+    tsd::animation::InterpolationRule interp =
+        tsd::animation::InterpolationRule::STEP);
+
+// Build bindings for the "array-of-arrays per parameter" pattern (e.g. geometry
+// animation where each timestep swaps a different Array object).
+void addArrayTimeStepBindings(tsd::animation::Animation &anim,
+    tsd::scene::Object *target,
+    const std::vector<tsd::core::Token> &paramNames,
+    const std::vector<std::vector<tsd::scene::ObjectUsePtr<tsd::scene::Array>>>
+        &arraysPerParam,
+    const std::vector<float> &timeBase);
+
+// Build a TransformBinding from a sequence of mat4 frames (decomposes each
+// frame into rotation quaternion, translation, and scale).
+void addTransformStepBinding(tsd::animation::Animation &anim,
+    tsd::scene::LayerNodeRef target,
+    const std::vector<tsd::math::mat4> &frames,
+    const std::vector<float> &timeBase);
 
 } // namespace tsd::io

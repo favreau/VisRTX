@@ -3,11 +3,19 @@
 
 #pragma once
 
-#include "RenderPass.h"
+#include "ImagePass.h"
 
 namespace tsd::rendering {
 
-struct ClearBuffersPass : public RenderPass
+/*
+ * ImagePass that fills the color buffer with a solid background color each
+ * frame; should be the first pass in a pipeline to establish a clean slate.
+ *
+ * Example:
+ *   auto *pass = pipeline.emplace_back<ClearBuffersPass>();
+ *   pass->setClearColor({0.1f, 0.1f, 0.1f, 1.f});
+ */
+struct ClearBuffersPass : public ImagePass
 {
   ClearBuffersPass();
   ~ClearBuffersPass() override;
@@ -15,7 +23,7 @@ struct ClearBuffersPass : public RenderPass
   void setClearColor(const tsd::math::float4 &color);
 
  private:
-  void render(RenderBuffers &b, int stageId) override;
+  void render(ImageBuffers &b, int stageId) override;
 
   tsd::math::float4 m_clearColor{0.f, 0.f, 0.f, 1.f};
 };

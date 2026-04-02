@@ -182,8 +182,12 @@ void readSWCFile(
  * @param location Node in the scene graph where the SWC file should be
  * imported.
  */
-void import_SWC(Scene &scene, const char *filename, LayerNodeRef location)
+void import_SWC(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filename,
+    LayerNodeRef location)
 {
+  (void)animMgr;
   readSWCFile(scene, filename, location);
 }
 

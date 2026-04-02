@@ -5,7 +5,7 @@
 // tsd_ui_imgui
 #include "tsd/ui/imgui/tsd_ui_imgui.h"
 // tsd_app
-#include "tsd/app/Core.h"
+#include "tsd/app/Context.h"
 // std
 #include <algorithm>
 
@@ -17,12 +17,12 @@ IsosurfaceEditor::IsosurfaceEditor(Application *app, const char *name)
 
 void IsosurfaceEditor::buildUI()
 {
-  auto &scene = appCore()->tsd.scene;
+  auto &scene = appContext()->tsd.scene;
 
-  tsd::core::Object *selectedIsosurface = nullptr;
-  tsd::core::Object *selectedVolume = nullptr;
-  auto selectedNode = appCore()->getFirstSelected();
-  tsd::core::Object *selectedObject =
+  tsd::scene::Object *selectedIsosurface = nullptr;
+  tsd::scene::Object *selectedVolume = nullptr;
+  auto selectedNode = appContext()->getFirstSelected();
+  tsd::scene::Object *selectedObject =
       selectedNode.valid() ? (*selectedNode)->getObject() : nullptr;
 
   if (selectedObject != nullptr) {
@@ -34,7 +34,7 @@ void IsosurfaceEditor::buildUI()
     // NOTE: will get in here here if originally a surface was selected
     if (selectedObject && selectedObject->type() == ANARI_GEOMETRY
         && selectedObject->subtype()
-            == tsd::core::tokens::geometry::isosurface) {
+            == tsd::scene::tokens::geometry::isosurface) {
       selectedIsosurface = selectedObject;
     }
   }
@@ -51,7 +51,7 @@ void IsosurfaceEditor::buildUI()
   ImGui::Text("isovalues:");
 
   auto *arr =
-      selectedIsosurface->parameterValueAsObject<tsd::core::Array>("isovalue");
+      selectedIsosurface->parameterValueAsObject<tsd::scene::Array>("isovalue");
   if (!arr) {
     ImGui::Text("{no isovalue array object found!}");
     return;
@@ -96,16 +96,16 @@ void IsosurfaceEditor::buildUI()
 
 void IsosurfaceEditor::addIsosurfaceGeometryFromSelected()
 {
-  auto selectedNode = appCore()->getFirstSelected();
-  tsd::core::Object *selectedObject =
+  auto selectedNode = appContext()->getFirstSelected();
+  tsd::scene::Object *selectedObject =
       selectedNode.valid() ? (*selectedNode)->getObject() : nullptr;
-  auto &scene = appCore()->tsd.scene;
+  auto &scene = appContext()->tsd.scene;
   auto *layer = scene.defaultLayer();
 
   auto isovalue = scene.createArray(ANARI_FLOAT32, 1);
 
-  auto g = scene.createObject<tsd::core::Geometry>(
-      tsd::core::tokens::geometry::isosurface);
+  auto g = scene.createObject<tsd::scene::Geometry>(
+      tsd::scene::tokens::geometry::isosurface);
   g->setName("isosurface_geometry");
 
   if (auto *field = selectedObject->parameterValueAsObject("value"); field)
@@ -115,9 +115,9 @@ void IsosurfaceEditor::addIsosurfaceGeometryFromSelected()
 
   auto s = scene.createSurface("isosurface", g, scene.defaultMaterial());
 
-  auto n = layer->insert_last_child(layer->root(), {s});
+  auto n = layer->root()->insert_last_child({layer, s});
 
-  appCore()->setSelected(n);
+  appContext()->setSelected(n);
   scene.signalLayerStructureChanged(layer);
 }
 

@@ -29,9 +29,9 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "tsd/core/Logging.hpp"
 #include "tsd/io/importers.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
-#include "tsd/core/Logging.hpp"
 
 #if TSD_USE_TORCH
 #include <immintrin.h> // For _cvtss_sh
@@ -129,14 +129,18 @@ ModelData loadModel(const char *filename)
       ("Total parameters: " + std::to_string(data.total_parameters)).c_str());
   logInfo(("Memory usage: "
       + std::to_string(data.total_parameters * sizeof(float) / 1024.0f) + " KB")
-          .c_str());
+              .c_str());
   logInfo("=================================");
 
   return data;
 }
 
-void import_PT(Scene &scene, const char *filename, LayerNodeRef location)
+void import_PT(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filename,
+    LayerNodeRef location)
 {
+  (void)animMgr;
   try {
     ModelData data = loadModel(filename);
 
@@ -157,7 +161,7 @@ void import_PT(Scene &scene, const char *filename, LayerNodeRef location)
 
     // Create transform as parent of neural object
     const auto xformNode = scene.insertChildTransformNode(
-        neuralLocation, tsd::math::mat4(tsd::math::identity), basename.c_str());
+        neuralLocation, math::IDENTITY_MAT4, basename.c_str());
 
     auto neural = scene.createObject<Geometry>(tokens::geometry::neural);
     const std::string name = "neural_geometry_t";
@@ -195,12 +199,16 @@ void import_PT(Scene &scene, const char *filename, LayerNodeRef location)
     logError(("Error: " + std::string(e.what())).c_str());
   }
 }
-} // namespace tsd
+} // namespace tsd::io
 #else
 namespace tsd::io {
-void import_PT(Scene &scene, const char *filename, LayerNodeRef location)
+void import_PT(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filename,
+    LayerNodeRef location)
 {
+  (void)animMgr;
   logError("[import_PT] PyTorch not enabled in TSD build.");
 }
-} // namespace tsd
+} // namespace tsd::io
 #endif

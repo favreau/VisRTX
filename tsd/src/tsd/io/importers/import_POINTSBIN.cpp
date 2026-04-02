@@ -1,10 +1,11 @@
 // Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tsd/animation/AnimationManager.hpp"
 #include "tsd/core/ColorMapUtil.hpp"
-#include "tsd/core/algorithms/computeScalarRange.hpp"
 #include "tsd/io/importers.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
+#include "tsd/scene/algorithms/computeScalarRange.hpp"
 // std
 #include <array>
 #include <vector>
@@ -17,6 +18,7 @@ using namespace tsd::core;
 // Importing a bespoke binary dump of points + N vertex attribute scalars
 //
 void import_POINTSBIN(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
     const std::vector<std::string> &filepaths,
     LayerNodeRef location)
 {
@@ -32,7 +34,7 @@ void import_POINTSBIN(Scene &scene,
 
   size_t numTimeSteps = filepaths.size();
 
-  std::vector<TimeStepArrays> arrays;
+  std::vector<std::vector<ObjectUsePtr<Array>>> arrays;
   arrays.emplace_back(); // vertex.position
   arrays.emplace_back(); // vertex.attribute0
 
@@ -54,9 +56,13 @@ void import_POINTSBIN(Scene &scene,
   }
 
   if (numTimeSteps > 1) {
-    auto *anim = scene.addAnimation("pointsbin animation");
-    anim->setAsTimeSteps(
-        *geom, {Token("vertex.position"), Token("vertex.attribute0")}, arrays);
+    auto tb = makeLinearTimeBase(numTimeSteps);
+    auto &anim = animMgr.addAnimation("pointsbin animation");
+    addArrayTimeStepBindings(anim,
+        geom.data(),
+        {Token("vertex.position"), Token("vertex.attribute0")},
+        arrays,
+        tb);
   }
 
   geom->setParameterObject("vertex.position", *arrays[0][0]);

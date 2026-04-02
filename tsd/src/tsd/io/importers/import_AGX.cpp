@@ -3,10 +3,11 @@
 
 #include "tsd/io/importers.hpp"
 
+#include "tsd/animation/AnimationManager.hpp"
 #include "tsd/core/ColorMapUtil.hpp"
 #include "tsd/core/Logging.hpp"
-#include "tsd/core/algorithms/computeScalarRange.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
+#include "tsd/scene/algorithms/computeScalarRange.hpp"
 // std
 #include <algorithm>
 #include <vector>
@@ -20,7 +21,10 @@ namespace tsd::io {
 //
 // See https://github.com/jeffamstutz/agx
 //
-void import_AGX(Scene &scene, const char *filepath, LayerNodeRef location)
+void import_AGX(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filepath,
+    LayerNodeRef location)
 {
   std::string file = fileOf(filepath);
   if (file.empty()) {
@@ -70,12 +74,13 @@ void import_AGX(Scene &scene, const char *filepath, LayerNodeRef location)
   //// Create TSD objects ////
 
   auto agx_root = scene.insertChildTransformNode(
-      location ? location : scene.defaultLayer()->root());
-  (*agx_root)->name() = "agx_transform_" + file;
+      location ? location : scene.defaultLayer()->root(),
+      math::IDENTITY_MAT4,
+      ("agx_transform_" + file).c_str());
 
   // geometry
 
-  auto geom = scene.createObject<tsd::core::Geometry>(subtype);
+  auto geom = scene.createObject<tsd::scene::Geometry>(subtype);
   if (!geom) {
     logError("[import_AGX] failed to create geometry of type '%s'", subtype);
     agxReleaseReader(r);
@@ -123,7 +128,7 @@ void import_AGX(Scene &scene, const char *filepath, LayerNodeRef location)
   // geometry time steps
 
   std::vector<Token> timeStepNames;
-  std::vector<TimeStepArrays> timeSteps;
+  std::vector<std::vector<ObjectUsePtr<Array>>> timeSteps;
 
   agxReaderResetTimeSteps(r);
   uint32_t stepIndex = 0, paramCount = 0;
@@ -178,7 +183,8 @@ void import_AGX(Scene &scene, const char *filepath, LayerNodeRef location)
           if (pv.elementType == ANARI_FLOAT32 && pv.elementCount > 0) {
             const float *values = (const float *)pv.data;
             float minVal = values[0], maxVal = values[0];
-            for (size_t i = 1; i < std::min((size_t)pv.elementCount, (size_t)100);
+            for (size_t i = 1;
+                 i < std::min((size_t)pv.elementCount, (size_t)100);
                  i++) {
               if (values[i] < minVal)
                 minVal = values[i];
@@ -220,8 +226,8 @@ void import_AGX(Scene &scene, const char *filepath, LayerNodeRef location)
 
   // material
 
-  auto mat = scene.createObject<tsd::core::Material>(
-      tsd::core::tokens::material::matte);
+  auto mat = scene.createObject<tsd::scene::Material>(
+      tsd::scene::tokens::material::matte);
   if (!mat) {
     logError("[import_AGX] failed to create material");
     agxReleaseReader(r);
@@ -231,7 +237,7 @@ void import_AGX(Scene &scene, const char *filepath, LayerNodeRef location)
 
   // Check if we have vertex attributes to map to color
   bool hasAttribute0 = false;
-  for (const auto& name : timeStepNames) {
+  for (const auto &name : timeStepNames) {
     if (name.str().find("attribute0") != std::string::npos) {
       hasAttribute0 = true;
       break;
@@ -251,12 +257,15 @@ void import_AGX(Scene &scene, const char *filepath, LayerNodeRef location)
     if (attr0Idx < timeSteps.size() && !timeSteps[attr0Idx].empty()) {
       auto attr0Array = timeSteps[attr0Idx][0];
       auto scalarRange = computeScalarRange(*attr0Array);
-      logInfo("[import_AGX] vertex.attribute0 range: [%f, %f]", scalarRange.x, scalarRange.y);
+      logInfo("[import_AGX] vertex.attribute0 range: [%f, %f]",
+          scalarRange.x,
+          scalarRange.y);
 
       // Create colormap sampler
       auto colorMapSampler = makeDefaultColorMapSampler(scene, scalarRange);
       mat->setParameterObject("color", *colorMapSampler);
-      logInfo("[import_AGX] applied colormap to material for vertex.attribute0");
+      logInfo(
+          "[import_AGX] applied colormap to material for vertex.attribute0");
     } else {
       mat->setParameter("color", tsd::math::float3(0.8f, 0.8f, 0.8f));
     }
@@ -278,13 +287,11 @@ void import_AGX(Scene &scene, const char *filepath, LayerNodeRef location)
   // animation
 
   if (!timeSteps.empty()) {
-    auto *anim = scene.addAnimation(file.c_str());
-    if (anim) {
-      anim->setAsTimeSteps(*geom, timeStepNames, timeSteps);
-      logInfo("[import_AGX] animation created successfully");
-    } else {
-      logError("[import_AGX] failed to create animation");
-    }
+    size_t numSteps = timeSteps.empty() ? 0 : timeSteps[0].size();
+    auto tb = makeLinearTimeBase(numSteps);
+    auto &anim = animMgr.addAnimation(file.c_str());
+    addArrayTimeStepBindings(anim, geom.data(), timeStepNames, timeSteps, tb);
+    logInfo("[import_AGX] animation created successfully");
   }
 
   //// Cleanup ////

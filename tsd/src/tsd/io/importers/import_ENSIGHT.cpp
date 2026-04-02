@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/core/Logging.hpp"
-#include "tsd/core/algorithms/computeScalarRange.hpp"
 #include "tsd/io/importers.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
+#include "tsd/scene/algorithms/computeScalarRange.hpp"
 // std
 #include <algorithm>
 #include <array>
@@ -734,11 +734,13 @@ static void readVarFile(const std::string &filename,
 }
 
 void import_ENSIGHT(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
     const char *filepath,
     LayerNodeRef location,
     const std::vector<std::string> &fields,
     int timestep)
 {
+  (void)animMgr;
   if (!location)
     location = scene.defaultLayer()->root();
 
@@ -955,8 +957,7 @@ void import_ENSIGHT(Scene &scene,
     }
 
     auto surface = scene.createSurface(partName.c_str(), geom, mat);
-    auto nodeRef = scene.insertChildObjectNode(root, surface);
-    (*nodeRef)->name() = partName;
+    auto nodeRef = scene.insertChildObjectNode(root, surface, partName.c_str());
   }
 
   logStatus("[import_ENSIGHT] done, %zu part(s) loaded", parts.size());

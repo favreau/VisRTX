@@ -1,8 +1,10 @@
 // Copyright 2024-2026 NVIDIA Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+// tsd_animation
+#include <tsd/animation/AnimationManager.hpp>
 // tsd_core
-#include <tsd/core/scene/Scene.hpp>
+#include <tsd/scene/Scene.hpp>
 // tsd_io
 #include <tsd/io/importers.hpp>
 // tsd_rendering
@@ -69,11 +71,12 @@ int main(int argc, char *argv[])
 
   // Create context //
 
-  tsd::core::Scene scene;
+  tsd::scene::Scene scene;
 
   // Populate spheres //
 
-  tsd::io::import_OBJ(scene, g_filename.c_str());
+  tsd::animation::AnimationManager anim(&scene);
+  tsd::io::import_OBJ(scene, anim, g_filename.c_str());
 
   // Setup ANARI device //
 

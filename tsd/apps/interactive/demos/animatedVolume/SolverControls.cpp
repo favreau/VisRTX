@@ -75,7 +75,7 @@ void SolverControls::buildUI()
   ImGui::InputText("export root", &m_exportRoot);
 }
 
-void SolverControls::setField(tsd::core::SpatialFieldRef f)
+void SolverControls::setField(tsd::scene::SpatialFieldRef f)
 {
   m_field = f;
   resetSolver();
@@ -93,7 +93,7 @@ void SolverControls::remakeDataArray()
     return;
   }
 
-  auto &scene = appCore()->tsd.scene;
+  auto &scene = appContext()->tsd.scene;
 
   m_dataHost = {};
   m_dataCUDA_1 = {};

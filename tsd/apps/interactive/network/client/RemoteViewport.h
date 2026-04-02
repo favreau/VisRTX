@@ -7,7 +7,7 @@
 #include "tsd/ui/imgui/tsd_ui_imgui.h"
 #include "tsd/ui/imgui/windows/BaseViewport.h"
 // tsd_rendering
-#include "tsd/rendering/pipeline/RenderPipeline.h"
+#include "tsd/rendering/pipeline/ImagePipeline.h"
 #include "tsd/rendering/view/Manipulator.hpp"
 // tsd_network
 #include "tsd/network/NetworkChannel.hpp"
@@ -32,14 +32,14 @@ struct RemoteViewport : public BaseViewport
   void disconnect();
 
  private:
-  void imagePipeline_populate(tsd::rendering::RenderPipeline &p) override;
+  void imagePipeline_populate(tsd::rendering::ImagePipeline &p) override;
 
   void camera_resetView(bool resetAzEl = true) override;
   void camera_centerView() override;
 
   void renderer_resetParameterDefaults() override;
 
-  void reshape(tsd::math::int2 newWindowSize);
+  void viewport_reshape(tsd::math::int2 newWindowSize) override;
 
   void updateRenderer();
   void updateCamera();
@@ -54,8 +54,8 @@ struct RemoteViewport : public BaseViewport
 
   size_t m_receivedRendererIdx{TSD_INVALID_INDEX};
   size_t m_receivedCameraIdx{TSD_INVALID_INDEX};
-  tsd::core::RendererAppRef m_prevRenderer;
-  tsd::core::CameraAppRef m_prevCamera;
+  tsd::scene::RendererAppRef m_prevRenderer;
+  tsd::scene::CameraAppRef m_prevCamera;
 
   // Camera manipulator //
 
@@ -68,6 +68,7 @@ struct RemoteViewport : public BaseViewport
   // Display //
 
   std::vector<uint8_t> m_incomingColorBuffer;
+  tsd::network::RenderSession::Frame::Config m_frameConfig;
 
   tsd::rendering::ClearBuffersPass *m_clearPass{nullptr};
   tsd::rendering::CopyToColorBufferPass *m_incomingFramePass{nullptr};

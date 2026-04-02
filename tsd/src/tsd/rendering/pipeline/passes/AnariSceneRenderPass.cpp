@@ -3,42 +3,16 @@
 
 #include "AnariSceneRenderPass.h"
 #include "tsd/core/Logging.hpp"
+// tsd_algorithms
+#include "tsd/algorithms/cpu/depthCompositeFrame.hpp"
+#ifdef TSD_ALGORITHMS_HAS_CUDA
+#include "tsd/algorithms/cuda/depthCompositeFrame.hpp"
+#endif
 // std
 #include <algorithm>
 #include <cstring>
-#include <limits>
-
-#include "detail/parallel_for.h"
 
 namespace tsd::rendering {
-
-// Thrust kernels /////////////////////////////////////////////////////////////
-
-DEVICE_FCN_INLINE uint32_t shadePixel(uint32_t c_in)
-{
-  auto c_in_f = helium::cvt_color_to_float4(c_in);
-  auto c_h = tsd::math::float4(1.f, 0.5f, 0.f, 1.f);
-  auto c_out = tsd::math::lerp(c_in_f, c_h, 0.8f);
-  return helium::cvt_color_to_uint32(c_out);
-};
-
-void compositeFrame(RenderBuffers &b_out,
-    const RenderBuffers &b_in,
-    tsd::math::uint2 size,
-    bool firstPass)
-{
-  detail::parallel_for(
-      b_out.stream, 0u, uint32_t(size.x * size.y), [=] DEVICE_FCN(uint32_t i) {
-        const float currentDepth = b_in.depth[i];
-        const float incomingDepth = b_out.depth[i];
-        if (firstPass || currentDepth < incomingDepth) {
-          b_out.depth[i] = currentDepth;
-          b_out.color[i] = b_in.color[i];
-          if (b_in.objectId)
-            b_out.objectId[i] = b_in.objectId[i];
-        }
-      });
-}
 
 // Helper functions ///////////////////////////////////////////////////////////
 
@@ -75,9 +49,9 @@ AnariSceneRenderPass::AnariSceneRenderPass(anari::Device d) : m_device(d)
   m_deviceSupportsCUDAFrames = supportsCUDAFbData(d);
 
   if (m_deviceSupportsCUDAFrames)
-    tsd::core::logStatus("[RenderPipeline] using CUDA-mapped fb channels");
+    tsd::core::logStatus("[ImagePipeline] using CUDA-mapped fb channels");
   else
-    tsd::core::logStatus("[RenderPipeline] using host-mapped fb channels");
+    tsd::core::logStatus("[ImagePipeline] using host-mapped fb channels");
 }
 
 AnariSceneRenderPass::~AnariSceneRenderPass()
@@ -144,7 +118,7 @@ void AnariSceneRenderPass::setEnableIDs(bool on)
   m_enableIDs = on;
 
   if (on) {
-    tsd::core::logInfo("[RenderPipeline] enabling objectId frame channel");
+    tsd::core::logInfo("[ImagePipeline] enabling objectId frame channel");
 
     anari::discard(m_device, m_frame);
     anari::wait(m_device, m_frame);
@@ -155,7 +129,7 @@ void AnariSceneRenderPass::setEnableIDs(bool on)
     anari::render(m_device, m_frame);
     anari::wait(m_device, m_frame);
   } else {
-    tsd::core::logInfo("[RenderPipeline] disabling objectId frame channel");
+    tsd::core::logInfo("[ImagePipeline] disabling objectId frame channel");
     anari::unsetParameter(m_device, m_frame, "channel.objectId");
     anari::commitParameters(m_device, m_frame);
 
@@ -173,7 +147,7 @@ void AnariSceneRenderPass::setEnablePrimitiveId(bool on)
   m_enablePrimitiveId = on;
 
   if (on) {
-    tsd::core::logInfo("[RenderPipeline] enabling primitiveId frame channel");
+    tsd::core::logInfo("[ImagePipeline] enabling primitiveId frame channel");
 
     anari::discard(m_device, m_frame);
     anari::wait(m_device, m_frame);
@@ -184,7 +158,7 @@ void AnariSceneRenderPass::setEnablePrimitiveId(bool on)
     anari::render(m_device, m_frame);
     anari::wait(m_device, m_frame);
   } else {
-    tsd::core::logInfo("[RenderPipeline] disabling primitiveId frame channel");
+    tsd::core::logInfo("[ImagePipeline] disabling primitiveId frame channel");
     anari::unsetParameter(m_device, m_frame, "channel.primitiveId");
     anari::commitParameters(m_device, m_frame);
 
@@ -202,7 +176,7 @@ void AnariSceneRenderPass::setEnableInstanceId(bool on)
   m_enableInstanceId = on;
 
   if (on) {
-    tsd::core::logInfo("[RenderPipeline] enabling instanceId frame channel");
+    tsd::core::logInfo("[ImagePipeline] enabling instanceId frame channel");
 
     anari::discard(m_device, m_frame);
     anari::wait(m_device, m_frame);
@@ -213,7 +187,7 @@ void AnariSceneRenderPass::setEnableInstanceId(bool on)
     anari::render(m_device, m_frame);
     anari::wait(m_device, m_frame);
   } else {
-    tsd::core::logInfo("[RenderPipeline] disabling instanceId frame channel");
+    tsd::core::logInfo("[ImagePipeline] disabling instanceId frame channel");
     anari::unsetParameter(m_device, m_frame, "channel.instanceId");
     anari::commitParameters(m_device, m_frame);
 
@@ -231,7 +205,7 @@ void AnariSceneRenderPass::setEnableAlbedo(bool on)
   m_enableAlbedo = on;
 
   if (on) {
-    tsd::core::logInfo("[RenderPipeline] enabling albedo frame channel");
+    tsd::core::logInfo("[ImagePipeline] enabling albedo frame channel");
 
     anari::discard(m_device, m_frame);
     anari::wait(m_device, m_frame);
@@ -243,7 +217,7 @@ void AnariSceneRenderPass::setEnableAlbedo(bool on)
     anari::render(m_device, m_frame);
     anari::wait(m_device, m_frame);
   } else {
-    tsd::core::logInfo("[RenderPipeline] disabling albedo frame channel");
+    tsd::core::logInfo("[ImagePipeline] disabling albedo frame channel");
     anari::unsetParameter(m_device, m_frame, "channel.albedo");
     anari::commitParameters(m_device, m_frame);
   }
@@ -257,7 +231,7 @@ void AnariSceneRenderPass::setEnableNormals(bool on)
   m_enableNormals = on;
 
   if (on) {
-    tsd::core::logInfo("[RenderPipeline] enabling normal frame channel");
+    tsd::core::logInfo("[ImagePipeline] enabling normal frame channel");
 
     anari::discard(m_device, m_frame);
     anari::wait(m_device, m_frame);
@@ -269,15 +243,10 @@ void AnariSceneRenderPass::setEnableNormals(bool on)
     anari::render(m_device, m_frame);
     anari::wait(m_device, m_frame);
   } else {
-    tsd::core::logInfo("[RenderPipeline] disabling normal frame channel");
+    tsd::core::logInfo("[ImagePipeline] disabling normal frame channel");
     anari::unsetParameter(m_device, m_frame, "channel.normal");
     anari::commitParameters(m_device, m_frame);
   }
-}
-
-anari::DataType AnariSceneRenderPass::getColorFormat() const
-{
-  return m_format;
 }
 
 void AnariSceneRenderPass::setRunAsync(bool on)
@@ -285,19 +254,9 @@ void AnariSceneRenderPass::setRunAsync(bool on)
   m_runAsync = on;
 }
 
-anari::Device AnariSceneRenderPass::getDevice() const
-{
-  return m_device;
-}
-
 anari::Frame AnariSceneRenderPass::getFrame() const
 {
   return m_frame;
-}
-
-anari::Camera AnariSceneRenderPass::getCamera() const
-{
-  return m_camera;
 }
 
 void AnariSceneRenderPass::updateSize()
@@ -314,6 +273,7 @@ void AnariSceneRenderPass::updateSize()
 
   const size_t totalSize = size_t(size.x) * size_t(size.y);
   m_buffers.color = detail::allocate<uint32_t>(totalSize);
+  m_buffers.hdrColor = detail::allocate<float>(totalSize * 4);
   m_buffers.depth = detail::allocate<float>(totalSize);
   m_buffers.objectId = detail::allocate<uint32_t>(totalSize);
   m_buffers.primitiveId = detail::allocate<uint32_t>(totalSize);
@@ -322,7 +282,7 @@ void AnariSceneRenderPass::updateSize()
   m_buffers.normal = detail::allocate<tsd::math::float3>(totalSize);
 }
 
-void AnariSceneRenderPass::render(RenderBuffers &b, int stageId)
+void AnariSceneRenderPass::render(ImageBuffers &b, int stageId)
 {
   m_buffers.stream = b.stream;
 
@@ -368,6 +328,7 @@ void AnariSceneRenderPass::copyFrameData()
   const size_t totalSize = size.x * size.y;
   if (totalSize > 0 && size.x == color.width && size.y == color.height) {
     if (color.pixelType == ANARI_FLOAT32_VEC4) {
+      detail::copy(m_buffers.hdrColor, (float *)color.data, totalSize * 4);
       detail::convertFloatColorBuffer_(m_buffers.stream,
           (const float *)color.data,
           (uint8_t *)m_buffers.color,
@@ -421,7 +382,7 @@ void AnariSceneRenderPass::copyFrameData()
     anari::unmap(m_device, m_frame, normalChannel);
 }
 
-void AnariSceneRenderPass::composite(RenderBuffers &b, int stageId)
+void AnariSceneRenderPass::composite(ImageBuffers &b, int stageId)
 {
   const bool firstPass = stageId == 0;
   const tsd::math::uint2 size(getDimensions());
@@ -429,6 +390,8 @@ void AnariSceneRenderPass::composite(RenderBuffers &b, int stageId)
 
   if (firstPass) {
     detail::copy(b.color, m_buffers.color, totalSize);
+    if (m_format == ANARI_FLOAT32_VEC4)
+      detail::copy(b.hdrColor, m_buffers.hdrColor, totalSize * 4);
     detail::copy(b.depth, m_buffers.depth, totalSize);
     detail::copy(b.objectId, m_buffers.objectId, totalSize);
     if (m_enablePrimitiveId)
@@ -440,13 +403,36 @@ void AnariSceneRenderPass::composite(RenderBuffers &b, int stageId)
     if (m_enableNormals)
       detail::copy(b.normal, m_buffers.normal, totalSize);
   } else {
-    compositeFrame(b, m_buffers, size, firstPass);
+    const uint32_t totalPixels = uint32_t(size.x) * uint32_t(size.y);
+#ifdef TSD_ALGORITHMS_HAS_CUDA
+    if (b.stream) {
+      tsd::algorithms::cuda::depthCompositeFrame(b.stream,
+          b.color,
+          b.depth,
+          b.objectId,
+          m_buffers.color,
+          m_buffers.depth,
+          m_buffers.objectId,
+          totalPixels,
+          firstPass);
+      return;
+    }
+#endif
+    tsd::algorithms::cpu::depthCompositeFrame(b.color,
+        b.depth,
+        b.objectId,
+        m_buffers.color,
+        m_buffers.depth,
+        m_buffers.objectId,
+        totalPixels,
+        firstPass);
   }
 }
 
 void AnariSceneRenderPass::cleanup()
 {
   detail::free(m_buffers.color);
+  detail::free(m_buffers.hdrColor);
   detail::free(m_buffers.depth);
   detail::free(m_buffers.objectId);
   detail::free(m_buffers.primitiveId);
