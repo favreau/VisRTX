@@ -10,14 +10,18 @@
 #include "tsd/core/ColorMapUtil.hpp"
 #include "tsd/core/Logging.hpp"
 #include "tsd/core/TSDMath.hpp"
+#include "tsd/io/animation/EnSightFileBinding.hpp"
 #include "tsd/io/animation/SpatialFieldFileBinding.hpp"
 #include "tsd/io/importers.hpp"
 #include "tsd/io/importers/detail/HDRImage.h"
+#include "tsd/io/importers/detail/ensight_io.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
 #include "tsd/io/importers/detail/usd/OmniPbrMaterial.h"
+#include "tsd/scene/algorithms/computeScalarRange.hpp"
 #include "tsd/scene/objects/Array.hpp"
 #if TSD_USE_USD
 // usd
+#include <pxr/base/vt/dictionary.h>
 #include <pxr/base/gf/matrix4f.h>
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/base/gf/vec3f.h>
@@ -395,6 +399,43 @@ inline float3 min(const float3 &a, const float3 &b)
 inline float3 max(const float3 &a, const float3 &b)
 {
   return float3(std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z));
+}
+
+// Resample a sparse set of authored USD time samples at the stage's frame rate
+// so that consecutive quaternion deltas stay small enough for correct SLERP.
+// Without this, a 360° rotation with only 2 keyframes produces identical
+// quaternions and no visible animation.
+static constexpr size_t MAX_XFORM_SAMPLES = 4096;
+
+static std::vector<double> densifyTimeSamples(
+    const std::vector<double> &authored, const pxr::UsdStageRefPtr &stage)
+{
+  if (authored.size() < 2)
+    return authored;
+
+  double fps = stage->GetFramesPerSecond();
+  if (fps <= 0)
+    fps = 24.0;
+
+  double tMin = authored.front();
+  double tMax = authored.back();
+  double range = tMax - tMin;
+  double step = 1.0 / fps;
+
+  size_t count = static_cast<size_t>(range / step) + 1;
+  if (count <= authored.size())
+    return authored;
+  if (count > MAX_XFORM_SAMPLES) {
+    count = MAX_XFORM_SAMPLES;
+    step = range / static_cast<double>(count - 1);
+  }
+
+  std::vector<double> dense;
+  dense.reserve(count);
+  for (size_t i = 0; i < count; ++i)
+    dense.push_back(tMin + i * step);
+  dense.back() = tMax;
+  return dense;
 }
 
 // Helper: Generate triangle indices from polygon face data
@@ -1343,8 +1384,22 @@ static void importUsdVolume(Scene &scene,
     colorArray->setData(makeDefaultColorMap(colorArray->size()));
   }
 
+  // Override valueRange from custom USD attribute if present
+  pxr::GfVec2f customRange;
+  if (auto attr = prim.GetAttribute(pxr::TfToken("anari:valueRange"))) {
+    if (attr.Get(&customRange))
+      valueRange = math::float2(customRange[0], customRange[1]);
+  }
+
   volume->setParameterObject("color", *colorArray);
   volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &valueRange);
+
+  // Read unitDistance from custom USD attribute if present
+  float unitDistance = 0.0f;
+  if (auto attr = prim.GetAttribute(pxr::TfToken("anari:unitDistance"))) {
+    if (attr.Get(&unitDistance) && unitDistance > 0.0f)
+      volume->setParameter("unitDistance", unitDistance);
+  }
 
   if (filePaths.size() > 1) {
     auto &anim = animMgr.addAnimation(primName);
@@ -1802,6 +1857,66 @@ static bool isIdentity(const pxr::GfMatrix4d &m)
 }
 
 // -----------------------------------------------------------------------------
+// EnSight-backed mesh import
+// -----------------------------------------------------------------------------
+
+// Import an entire EnSight dataset referenced by a Scope prim. Creates one
+// surface per internal part, all under the same parent node. Delegates to
+// import_ENSIGHT which already handles the .case → geometry pipeline.
+static void importEnsightDataset(Scene &scene,
+    const pxr::UsdPrim &scopePrim,
+    LayerNodeRef parent,
+    tsd::animation::AnimationManager &animMgr)
+{
+  std::string primName = scopePrim.GetName().GetString();
+
+  // Find the case file path from the first child's layer stack
+  std::string caseFile;
+  for (const auto &child : scopePrim.GetChildren()) {
+    for (const auto &spec : child.GetPrimStack()) {
+      auto lcd = spec->GetLayer()->GetCustomLayerData();
+      auto it = lcd.find("ensight");
+      if (it != lcd.end()) {
+        const auto &d = it->second.Get<pxr::VtDictionary>();
+        auto cfIt = d.find("caseFile");
+        if (cfIt != d.end()) {
+          caseFile = cfIt->second.Get<std::string>();
+          break;
+        }
+      }
+    }
+    if (!caseFile.empty())
+      break;
+  }
+
+  if (caseFile.empty()) {
+    logWarning("[import_USD] EnSight scope '%s': no case file found",
+        primName.c_str());
+    return;
+  }
+
+  // Read field mapping from the Scope's attributes
+  std::vector<std::string> fields;
+  for (int i = 0; i < 4; ++i) {
+    std::string attrName =
+        "ensight:fieldMapping:attribute" + std::to_string(i);
+    pxr::UsdAttribute attr =
+        scopePrim.GetAttribute(pxr::TfToken(attrName));
+    if (!attr)
+      continue;
+    std::string varName;
+    if (attr.Get(&varName) && !varName.empty())
+      fields.push_back(varName);
+  }
+
+  logStatus("[import_USD] Importing EnSight dataset '%s' from '%s'",
+      primName.c_str(),
+      caseFile.c_str());
+
+  import_ENSIGHT(scene, animMgr, caseFile.c_str(), parent, fields, 0);
+}
+
+// -----------------------------------------------------------------------------
 // Recursive import function for prims and their children
 // -----------------------------------------------------------------------------
 
@@ -1877,11 +1992,11 @@ static void importUsdPrimRecursive(Scene &scene,
   for (const auto &child : prim.GetChildren())
     ++numChildren;
 
-  // For pure xform/scope prims, check for time-sampled animation *before*
-  // deciding whether to create a node — an animated xform that happens to be
-  // identity at the default time still needs a node.
+  // Check for time-sampled xform animation *before* deciding whether to
+  // create a node — an animated xform that happens to be identity at the
+  // default time still needs a node.
   std::vector<double> xformTimeSamples;
-  if (isXform) {
+  {
     pxr::UsdGeomXformable xformable(prim);
     if (xformable)
       xformable.GetTimeSamples(&xformTimeSamples);
@@ -1912,17 +2027,19 @@ static void importUsdPrimRecursive(Scene &scene,
         scene.insertChildTransformNode(parent, tsdXform, primName.c_str());
   }
 
-  // Attach xform animation for pure xform/scope prims with time samples.
-  // Geometry prims are excluded — proc shapes bake world-space positions, and
-  // mesh vertices are already in local space but we don't yet handle the
-  // animated-xform-on-mesh case here.
-  if (hasXformAnimation) {
-    pxr::UsdGeomXformCache tc;
+  // Attach xform animation for any prim with time-sampled transforms.
+  // Guard on createNode: if we didn't create a dedicated node (e.g. DomeLight),
+  // thisNode is the parent and animating it would be incorrect.
+  if (hasXformAnimation && createNode) {
+    auto denseTimeSamples =
+        densifyTimeSamples(xformTimeSamples, prim.GetStage());
+
     std::vector<math::mat4> frames;
-    frames.reserve(xformTimeSamples.size());
-    for (double t : xformTimeSamples) {
-      pxr::UsdTimeCode timeCode(t);
-      tc.SetTime(timeCode);
+    frames.reserve(denseTimeSamples.size());
+
+    pxr::UsdGeomXformCache tc;
+    for (double t : denseTimeSamples) {
+      tc.SetTime(pxr::UsdTimeCode(t));
       bool resets = false;
       frames.push_back(toTsdMat4(tc.GetLocalTransformation(prim, &resets)));
     }
@@ -1930,9 +2047,21 @@ static void importUsdPrimRecursive(Scene &scene,
     auto tb = makeLinearTimeBase(numFrames);
     auto &anim = animMgr.addAnimation(primName.c_str());
     addTransformStepBinding(anim, thisNode, frames, tb);
-    logStatus("[import_USD] Xform '%s': animated transform (%zu frames)\n",
+    logStatus("[import_USD] '%s': animated transform (%zu frames)\n",
         primName.c_str(),
         numFrames);
+  }
+
+  // Check if this Scope/Xform references an EnSight .case dataset. If so,
+  // import the entire dataset here and skip recursion into children (the
+  // CaseFileFormat plugin's Mesh prims are just metadata carriers).
+  if (isXform && numChildren > 0) {
+    auto firstChild = *prim.GetChildren().begin();
+    pxr::VtDictionary childCd = firstChild.GetCustomData();
+    if (childCd.count("ensight")) {
+      importEnsightDataset(scene, prim, thisNode, animMgr);
+      return;
+    }
   }
 
   // Import geometry for this prim (if any).

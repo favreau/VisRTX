@@ -7,7 +7,9 @@ project_add_library(STATIC)
 
 project_sources(
 PRIVATE
+  animation/EnSightFileBinding.cpp
   animation/SpatialFieldFileBinding.cpp
+  importers/detail/ensight_io.cpp
   importers/detail/HDRImage.cpp
   importers/detail/importer_common.cpp
   importers/detail/usd/MaterialCommon.cpp
@@ -124,9 +126,39 @@ endif()
 if (TSD_USE_USD)
   find_package(OpenGL)
   find_package(X11)
-  find_package(pxr REQUIRED usd usdGeom tf gf usdShade usdLux)
+  find_package(pxr REQUIRED sdf usd usdGeom tf gf usdShade usdLux)
   project_compile_definitions(PRIVATE -DTSD_USE_USD=1)
   project_link_libraries(PRIVATE ${PXR_LIBRARIES})
+
+  # CaseFileFormat -- SdfFileFormat plugin for EnSight .case files
+  add_library(CaseFileFormat SHARED
+    usd/CaseFileFormat.cpp
+  )
+  target_link_libraries(CaseFileFormat
+    PRIVATE tsd_io ${PXR_LIBRARIES}
+  )
+  target_include_directories(CaseFileFormat
+    PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../..
+  )
+  set_target_properties(CaseFileFormat PROPERTIES
+    PREFIX "lib"
+  )
+
+  set(CASEFILEFORMAT_PLUGIN_FILENAME
+    "${CMAKE_SHARED_LIBRARY_PREFIX}CaseFileFormat${CMAKE_SHARED_LIBRARY_SUFFIX}")
+  configure_file(
+    ${CMAKE_CURRENT_LIST_DIR}/usd/plugInfo.json.in
+    ${CMAKE_CURRENT_BINARY_DIR}/usd/plugInfo.json
+    @ONLY
+  )
+
+  install(TARGETS CaseFileFormat
+    RUNTIME DESTINATION lib
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+  )
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/usd/plugInfo.json
+    DESTINATION lib/usd/CaseFileFormat/resources)
 else()
   project_compile_definitions(PRIVATE -DTSD_USE_USD=0)
 endif()

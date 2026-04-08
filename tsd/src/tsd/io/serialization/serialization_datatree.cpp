@@ -9,6 +9,7 @@
 #include "tsd/animation/AnimationManager.hpp"
 #include "tsd/core/DataTree.hpp"
 #include "tsd/core/Logging.hpp"
+#include "tsd/io/animation/EnSightFileBinding.hpp"
 #include "tsd/io/animation/SpatialFieldFileBinding.hpp"
 #include "tsd/io/importers.hpp"
 #include "tsd/io/serialization.hpp"
@@ -454,6 +455,19 @@ void nodeToAnimation(
 
         anim.emplaceFileBinding<SpatialFieldFileBinding>(
             &scene, vol, initialField, std::move(files));
+      } else if (kind == "ensight") {
+        auto data = EnSightFileBinding::fromDataNode(scene, fbNode);
+        if (!data)
+          return;
+
+        anim.emplaceFileBinding<EnSightFileBinding>(&scene,
+            std::move(data->parts),
+            std::move(data->geoFiles),
+            std::move(data->fieldMappings));
+      } else {
+        logWarning(
+            "[nodeToAnimation] unknown file binding kind '%s'; skipping",
+            kind.c_str());
       }
     });
   }
@@ -483,7 +497,6 @@ void nodeToAnimationManager(
   increment = node["increment"].getValueOr<float>(increment);
   totalFrames = node["totalFrames"].getValueOr<int>(totalFrames);
 
-  mgr.setAnimationTime(time);
   mgr.setAnimationIncrement(increment);
   mgr.setAnimationTotalFrames(totalFrames);
 
@@ -491,6 +504,8 @@ void nodeToAnimationManager(
     auto &anim = mgr.addAnimation();
     nodeToAnimation(animNode, anim, scene);
   });
+
+  mgr.setAnimationTime(time);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
