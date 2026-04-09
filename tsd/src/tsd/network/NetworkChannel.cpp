@@ -197,9 +197,19 @@ void NetworkChannel::read_payload(std::shared_ptr<Message> msg)
 
 void NetworkChannel::invoke_handler(std::shared_ptr<Message> msg)
 {
-  // Invoke handler if registered
   if (auto *handler = m_handlers.at(msg->header.type); handler != nullptr) {
-    (*handler)(*msg);
+    try {
+      (*handler)(*msg);
+    } catch (const std::exception &e) {
+      tsd::core::logError(
+          "[NetworkChannel] handler for message type %d threw: %s",
+          static_cast<int>(msg->header.type),
+          e.what());
+    } catch (...) {
+      tsd::core::logError(
+          "[NetworkChannel] handler for message type %d threw unknown exception",
+          static_cast<int>(msg->header.type));
+    }
   } else {
     tsd::core::logWarning(
         "[NetworkChannel] No handler registered for message type %d",

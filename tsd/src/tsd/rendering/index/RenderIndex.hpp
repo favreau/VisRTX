@@ -37,6 +37,7 @@ struct RenderIndex : public BaseUpdateDelegate
   anari::World world() const;
   anari::Renderer renderer(size_t i);
   anari::Camera camera(size_t i);
+  anari::Light light(size_t i);
 
   CameraPose computeDefaultView() const;
 

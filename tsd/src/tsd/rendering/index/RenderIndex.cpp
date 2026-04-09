@@ -43,6 +43,11 @@ anari::Camera RenderIndex::camera(size_t i)
   return (anari::Camera)m_cache.getHandle(ANARI_CAMERA, i, true);
 }
 
+anari::Light RenderIndex::light(size_t i)
+{
+  return (anari::Light)m_cache.getHandle(ANARI_LIGHT, i, false);
+}
+
 CameraPose RenderIndex::computeDefaultView() const
 {
   tsd::math::float3 bounds[2] = {{-1.f, -1.f, -1.f}, {1.f, 1.f, 1.f}};
