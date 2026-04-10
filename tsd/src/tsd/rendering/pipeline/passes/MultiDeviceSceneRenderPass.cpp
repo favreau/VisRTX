@@ -24,11 +24,16 @@ MultiDeviceSceneRenderPass::MultiDeviceSceneRenderPass(
     anari::commitParameters(d, f);
     m_frames.emplace_back(f);
   }
+  m_renderers.assign(m_devices.size(), nullptr);
 }
 
 MultiDeviceSceneRenderPass::~MultiDeviceSceneRenderPass()
 {
   cleanup();
+  for (size_t i = 0; i < m_devices.size(); ++i) {
+    if (m_renderers[i])
+      anari::release(m_devices[i], m_renderers[i]);
+  }
   foreach_frame([](anari::Device d, anari::Frame f) {
     anari::release(d, f);
     anari::release(d, d);
@@ -52,8 +57,20 @@ void MultiDeviceSceneRenderPass::setRenderer(size_t i, anari::Renderer r)
 {
   auto d = m_devices[i];
   auto f = m_frames[i];
+  if (r)
+    anari::retain(d, r);
+  if (m_renderers[i])
+    anari::release(d, m_renderers[i]);
+  m_renderers[i] = r;
   anari::setParameter(d, f, "renderer", r);
   anari::commitParameters(d, f);
+  if (r) {
+    bool denoiseOn = true;
+    if (anari::getProperty(d, r, "denoise", denoiseOn, ANARI_WAIT)) {
+      anari::setParameter(d, f, "denoise", denoiseOn);
+      anari::commitParameters(d, f);
+    }
+  }
 }
 
 void MultiDeviceSceneRenderPass::setWorld(size_t i, anari::World w)
@@ -97,6 +114,19 @@ void MultiDeviceSceneRenderPass::updateSize()
     anari::setParameter(d, f, "size", size);
     anari::commitParameters(d, f);
   });
+  // Re-apply denoise on each frame after resize (Barney FB reads frame param at finalize).
+  for (size_t i = 0; i < m_devices.size() && i < m_renderers.size(); ++i) {
+    auto d = m_devices[i];
+    auto f = m_frames[i];
+    auto r = m_renderers[i];
+    if (!r)
+      continue;
+    bool denoiseOn = true;
+    if (anari::getProperty(d, r, "denoise", denoiseOn, ANARI_WAIT)) {
+      anari::setParameter(d, f, "denoise", denoiseOn);
+      anari::commitParameters(d, f);
+    }
+  }
 
   const size_t totalSize = size_t(size.x) * size_t(size.y);
   m_buffers.color = detail::allocate<uint32_t>(totalSize);

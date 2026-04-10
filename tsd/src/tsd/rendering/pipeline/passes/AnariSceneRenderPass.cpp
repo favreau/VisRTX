@@ -83,6 +83,17 @@ void AnariSceneRenderPass::setCamera(anari::Camera c)
   }
 }
 
+void AnariSceneRenderPass::syncFrameDenoiseFromRenderer()
+{
+  if (!m_renderer)
+    return;
+  bool denoiseOn = true;
+  if (anari::getProperty(m_device, m_renderer, "denoise", denoiseOn, ANARI_WAIT)) {
+    anari::setParameter(m_device, m_frame, "denoise", denoiseOn);
+    anari::commitParameters(m_device, m_frame);
+  }
+}
+
 void AnariSceneRenderPass::setRenderer(anari::Renderer r)
 {
   if (r)
@@ -91,6 +102,7 @@ void AnariSceneRenderPass::setRenderer(anari::Renderer r)
   anari::commitParameters(m_device, m_frame);
   anari::release(m_device, m_renderer);
   m_renderer = r;
+  syncFrameDenoiseFromRenderer();
 }
 
 void AnariSceneRenderPass::setWorld(anari::World w)
@@ -280,6 +292,14 @@ void AnariSceneRenderPass::updateSize()
   m_buffers.instanceId = detail::allocate<uint32_t>(totalSize);
   m_buffers.albedo = detail::allocate<tsd::math::float3>(totalSize);
   m_buffers.normal = detail::allocate<tsd::math::float3>(totalSize);
+
+  // After resize the ANARI frame needs a fresh render+wait cycle before
+  // copyFrameData can map it (the BN FrameBuffer is resized only during
+  // Frame::finalize which runs inside render).  Without this reset the
+  // async path would try to map a pre-resize framebuffer.
+  m_firstFrame = true;
+
+  syncFrameDenoiseFromRenderer();
 }
 
 void AnariSceneRenderPass::render(ImageBuffers &b, int stageId)

@@ -45,6 +45,9 @@ struct AnariSceneRenderPass : public ImagePass
   void copyFrameData();
   void composite(ImageBuffers &b, int stageId);
   void cleanup();
+  /*! Copy renderer's denoise flag onto the ANARI frame (required for Barney:
+   *  denoise is applied in FrameBuffer from the frame param, not the renderer). */
+  void syncFrameDenoiseFromRenderer();
 
   ImageBuffers m_buffers;
 

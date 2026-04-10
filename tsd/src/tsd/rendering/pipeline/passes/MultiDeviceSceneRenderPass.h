@@ -55,6 +55,8 @@ struct MultiDeviceSceneRenderPass : public ImagePass
 
   std::vector<anari::Device> m_devices;
   std::vector<anari::Frame> m_frames;
+  /*! Kept so updateSize() can re-sync frame denoise from renderer (Barney). */
+  std::vector<anari::Renderer> m_renderers;
 };
 
 } // namespace tsd::rendering
