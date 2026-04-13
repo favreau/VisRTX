@@ -10,12 +10,21 @@
 #include <tsd/io/serialization.hpp>
 #include <tsd/rendering/index/RenderIndexAllLayers.hpp>
 #include <tsd/rendering/view/ManipulatorToAnari.hpp>
+#include <tsd/rendering/view/ManipulatorToTSD.hpp>
 #include "stb_image_write.h"
 
+#ifdef TSD_USE_MPI
+#include <mpi.h>
+#endif
+
 #include <chrono>
+#include <cctype>
 #include <cstdio>
+#include <iomanip>
 #include <iostream>
 #include <memory>
+#include <sstream>
+#include <string>
 #include <vector>
 
 static std::unique_ptr<tsd::rendering::RenderIndexAllLayers> g_renderIndex;
@@ -29,6 +38,8 @@ static tsd::core::Token g_deviceName;
 static anari::Library g_library{nullptr};
 static anari::Device g_device{nullptr};
 static anari::Camera g_camera{nullptr};
+static bool g_numFramesExplicit = false;
+static bool g_usingSceneCamera = false;
 
 struct Config
 {
@@ -37,9 +48,16 @@ struct Config
   tsd::math::float3 cameraUp = {0.f, 1.f, 0.f};
   float fovy = 40.f;
   bool autoCamera = true;
+  bool hasManualCameraOptions = false;
+  bool hasCameraSelection = false;
+  bool createdDefaultCamera = false;
+  std::string cameraSelection;
 
   std::string rendererName = "default";
   std::string outputFile = "tsdOffline.png";
+
+  std::string animOutputDir;
+  std::string animPrefix = "frame_";
 
   tsd::math::float4 background = {0.05f, 0.05f, 0.05f, 1.f};
   float ambientRadiance = 0.25f;
@@ -71,6 +89,8 @@ static void printUsage(const char *programName)
       << "  --lib <name>               ANARI library name (default: TSD_ANARI_LIBRARIES[0], environment, or visrtx)\n";
   std::cout
       << "  --renderer <name>          Renderer name (default: default)\n";
+  std::cout
+      << "  --camera <name-or-index>   Use a scene camera by exact name or object index\n";
   std::cout << "  --campos <x y z>           Camera position (3 floats)\n";
   std::cout << "  --lookpos <x y z>          Camera look-at point (3 floats)\n";
   std::cout << "  --upvec <x y z>            Camera up vector (3 floats)\n";
@@ -92,6 +112,29 @@ static void printUsage(const char *programName)
   std::cout
       << "                             Add directional light (direction + color + intensity)\n";
   std::cout << "  --help                     Show this help message\n";
+  std::cout << "\n";
+  std::cout << "Animation Options:\n";
+  std::cout
+      << "  --anim-out-dir <dir>       Output directory for animation frames\n";
+  std::cout
+      << "                             (enables animation mode; frames saved as\n";
+  std::cout
+      << "                              <dir>/<prefix><NNNN>.png)\n";
+  std::cout
+      << "  --anim-prefix <prefix>     Filename prefix for animation frames\n";
+  std::cout
+      << "                             (default: frame_)\n";
+  std::cout
+      << "  --num-frames <int>         Number of frames to render (default: 1,\n";
+  std::cout
+      << "                             or total animation frames if scene has animations)\n";
+#ifdef TSD_USE_MPI
+  std::cout << "\n";
+  std::cout
+      << "MPI: when run with mpirun/srun, each rank renders an interleaved subset\n";
+  std::cout
+      << "     of animation frames (rank k renders frames k, k+N, k+2N, ...).\n";
+#endif
   std::cout << "\n";
   std::cout << "Importer Options:\n";
   std::cout << "  -tsd <file>                Load TSD scene file\n";
@@ -134,7 +177,11 @@ static void printUsage(const char *programName)
   std::cout
       << "If no importer flags are specified, a default empty scene will be created.\n";
   std::cout
-      << "If camera is not specified, it will be computed from scene bounds.\n";
+      << "If no camera is specified, available scene cameras will be listed and\n";
+  std::cout
+      << "you will be prompted to choose one. If the scene has no cameras, a\n";
+  std::cout
+      << "default camera will be created and framed from the scene bounds.\n";
 }
 
 static tsd::math::float3 parseFloat3(const char **argv, int &i)
@@ -144,6 +191,283 @@ static tsd::math::float3 parseFloat3(const char **argv, int &i)
   result.y = std::stof(argv[++i]);
   result.z = std::stof(argv[++i]);
   return result;
+}
+
+struct CameraChoice
+{
+  size_t index{TSD_INVALID_INDEX};
+  std::string name;
+  std::string subtype;
+};
+
+static void noteManualCameraOption()
+{
+  g_config.hasManualCameraOptions = true;
+}
+
+static bool parseCameraSelectionArg(int argc, const char *argv[], int &i)
+{
+  if (i + 1 >= argc) {
+    std::cerr << "Error: --camera requires an argument\n";
+    return false;
+  }
+
+  g_config.cameraSelection = argv[++i];
+  g_config.hasCameraSelection = true;
+  return true;
+}
+
+static bool validateCameraOptionCompatibility()
+{
+  if (g_config.hasCameraSelection && g_config.hasManualCameraOptions) {
+    std::cerr
+        << "Error: --camera cannot be used with --campos, --lookpos, --upvec, or --fovy\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool tryParseUnsignedIndex(const std::string &text, size_t &value)
+{
+  if (text.empty())
+    return false;
+
+  for (char c : text) {
+    if (!std::isdigit(static_cast<unsigned char>(c)))
+      return false;
+  }
+
+  try {
+    value = static_cast<size_t>(std::stoull(text));
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+static std::vector<CameraChoice> collectSceneCameras()
+{
+  std::vector<CameraChoice> cameras;
+  const auto &cameraDB = g_ctx->tsd.scene.objectDB().camera;
+
+  tsd::core::foreach_item_const(cameraDB, [&](const auto *cam) {
+    if (!cam)
+      return;
+
+    CameraChoice choice;
+    choice.index = cam->index();
+    choice.name = cam->name();
+    choice.subtype = cam->subtype().c_str();
+    cameras.push_back(std::move(choice));
+  });
+
+  return cameras;
+}
+
+static void printCameraList(const std::vector<CameraChoice> &cameras)
+{
+  std::cout << "Available cameras:\n";
+  for (size_t i = 0; i < cameras.size(); ++i) {
+    const auto &camera = cameras[i];
+    const char *name =
+        camera.name.empty() ? "<unnamed>" : camera.name.c_str();
+    std::cout << "  " << (i + 1) << ". index=" << camera.index
+              << " name=\"" << name << "\" subtype=" << camera.subtype
+              << '\n';
+  }
+}
+
+static void ensureSceneHasCamera()
+{
+  if (g_ctx->tsd.scene.numberOfObjects(ANARI_CAMERA) != 0)
+    return;
+
+  auto camera = g_ctx->tsd.scene.defaultCamera();
+  if (camera) {
+    g_ctx->offline.camera.cameraIndex = camera->index();
+    g_config.createdDefaultCamera = true;
+  }
+}
+
+static bool resolveCameraSelectionFromCli(const std::vector<CameraChoice> &cameras,
+    const std::string &selection,
+    size_t &cameraIndex)
+{
+  size_t parsedIndex = TSD_INVALID_INDEX;
+  if (tryParseUnsignedIndex(selection, parsedIndex)) {
+    for (const auto &camera : cameras) {
+      if (camera.index == parsedIndex) {
+        cameraIndex = camera.index;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  size_t matches = 0;
+  for (const auto &camera : cameras) {
+    if (camera.name == selection) {
+      cameraIndex = camera.index;
+      ++matches;
+    }
+  }
+
+  return matches == 1;
+}
+
+static bool resolvePromptSelection(const std::vector<CameraChoice> &cameras,
+    const std::string &selection,
+    size_t &cameraIndex)
+{
+  size_t parsedValue = TSD_INVALID_INDEX;
+  if (tryParseUnsignedIndex(selection, parsedValue)) {
+    if (parsedValue > 0 && parsedValue <= cameras.size()) {
+      cameraIndex = cameras[parsedValue - 1].index;
+      return true;
+    }
+
+    for (const auto &camera : cameras) {
+      if (camera.index == parsedValue) {
+        cameraIndex = camera.index;
+        return true;
+      }
+    }
+  }
+
+  return resolveCameraSelectionFromCli(cameras, selection, cameraIndex);
+}
+
+static size_t promptForCameraSelection(const std::vector<CameraChoice> &cameras)
+{
+  while (true) {
+    std::cout << "Choose camera [1-" << cameras.size()
+              << "] (or enter object index / exact name): ";
+    std::cout.flush();
+
+    std::string input;
+    if (!std::getline(std::cin, input)) {
+      std::cerr << "\nError: failed to read camera selection from stdin\n";
+      return TSD_INVALID_INDEX;
+    }
+
+    size_t cameraIndex = TSD_INVALID_INDEX;
+    if (resolvePromptSelection(cameras, input, cameraIndex))
+      return cameraIndex;
+
+    std::cout << "Invalid selection. Please choose a listed camera.\n";
+  }
+}
+
+static void selectOfflineCamera()
+{
+  ensureSceneHasCamera();
+
+  const auto cameras = collectSceneCameras();
+  if (cameras.empty())
+    return;
+
+  if (g_config.createdDefaultCamera) {
+    g_ctx->offline.camera.cameraIndex = cameras.front().index;
+    return;
+  }
+
+  size_t selectedIndex = TSD_INVALID_INDEX;
+  if (g_config.hasCameraSelection
+      && resolveCameraSelectionFromCli(
+          cameras, g_config.cameraSelection, selectedIndex)) {
+    g_ctx->offline.camera.cameraIndex = selectedIndex;
+    return;
+  }
+
+  if (g_config.hasCameraSelection) {
+    std::cout << "Requested camera '" << g_config.cameraSelection
+              << "' is invalid or ambiguous.\n";
+  }
+
+  printCameraList(cameras);
+  selectedIndex = promptForCameraSelection(cameras);
+  if (selectedIndex == TSD_INVALID_INDEX)
+    std::exit(1);
+
+  g_ctx->offline.camera.cameraIndex = selectedIndex;
+}
+
+static void configureDefaultSceneCameraPose()
+{
+  auto cameraIndex = g_ctx->offline.camera.cameraIndex;
+  auto camera = g_ctx->tsd.scene.getObject<tsd::scene::Camera>(cameraIndex);
+  if (!camera)
+    return;
+
+  auto pose = g_renderIndex->computeDefaultView();
+  g_manipulator.setConfig(pose);
+  tsd::rendering::updateCameraObject(*camera, g_manipulator);
+}
+
+static void setupManualCameraPose()
+{
+  printf("Setting up camera...");
+  fflush(stdout);
+
+  g_timer.start();
+
+  tsd::rendering::CameraPose pose;
+
+  if (g_config.autoCamera) {
+    printf("from world bounds...");
+    fflush(stdout);
+    pose = g_renderIndex->computeDefaultView();
+  } else {
+    printf("from command line...");
+    fflush(stdout);
+
+    pose.lookat = g_config.cameraLookAt;
+    pose.fixedDist =
+        tsd::math::length(g_config.cameraPos - g_config.cameraLookAt);
+
+    auto dir = tsd::math::normalize(g_config.cameraPos - g_config.cameraLookAt);
+    float azimuth = std::atan2(dir.x, dir.z) * 180.f / M_PI;
+    float elevation = std::asin(dir.y) * 180.f / M_PI;
+    pose.azeldist = {azimuth, elevation, pose.fixedDist};
+    pose.upAxis = static_cast<int>(tsd::rendering::UpAxis::POS_Y);
+  }
+
+  g_cameraPoses.clear();
+  g_cameraPoses.push_back(std::move(pose));
+
+  g_timer.end();
+
+  printf("done (%.2f ms)\n", g_timer.milliseconds());
+}
+
+static void setupSelectedSceneCamera()
+{
+  printf("Setting up camera...");
+  fflush(stdout);
+
+  g_timer.start();
+  selectOfflineCamera();
+
+  if (g_config.createdDefaultCamera) {
+    printf("using generated default camera...");
+    fflush(stdout);
+    configureDefaultSceneCameraPose();
+  } else {
+    auto camera =
+        g_ctx->tsd.scene.getObject<tsd::scene::Camera>(
+            g_ctx->offline.camera.cameraIndex);
+    const char *name =
+        (camera && !camera->name().empty()) ? camera->name().c_str() : "<unnamed>";
+    printf("using scene camera '%s' (index=%zu)...",
+        name,
+        g_ctx->offline.camera.cameraIndex);
+    fflush(stdout);
+  }
+
+  g_timer.end();
+
+  printf("done (%.2f ms)\n", g_timer.milliseconds());
 }
 
 // Parse rendering-specific options and build a new argv with importer options
@@ -196,11 +520,15 @@ static int parseRenderingOptions(
         return -1;
       }
       g_config.rendererName = argv[++i];
+    } else if (arg == "--camera") {
+      if (!parseCameraSelectionArg(argc, argv, i))
+        return -1;
     } else if (arg == "--campos") {
       if (i + 3 >= argc) {
         std::cerr << "Error: --campos requires 3 arguments (x y z)\n";
         return -1;
       }
+      noteManualCameraOption();
       g_config.cameraPos = parseFloat3(argv, i);
       g_config.autoCamera = false;
     } else if (arg == "--lookpos") {
@@ -208,6 +536,7 @@ static int parseRenderingOptions(
         std::cerr << "Error: --lookpos requires 3 arguments (x y z)\n";
         return -1;
       }
+      noteManualCameraOption();
       g_config.cameraLookAt = parseFloat3(argv, i);
       g_config.autoCamera = false;
     } else if (arg == "--upvec") {
@@ -215,12 +544,14 @@ static int parseRenderingOptions(
         std::cerr << "Error: --upvec requires 3 arguments (x y z)\n";
         return -1;
       }
+      noteManualCameraOption();
       g_config.cameraUp = parseFloat3(argv, i);
     } else if (arg == "--fovy") {
       if (i + 1 >= argc) {
         std::cerr << "Error: --fovy requires an argument\n";
         return -1;
       }
+      noteManualCameraOption();
       g_config.fovy = std::stof(argv[++i]);
     } else if (arg == "--aperture") {
       if (i + 1 >= argc) {
@@ -261,6 +592,25 @@ static int parseRenderingOptions(
       g_config.ambientColor.x = std::stof(argv[++i]);
       g_config.ambientColor.y = std::stof(argv[++i]);
       g_config.ambientColor.z = std::stof(argv[++i]);
+    } else if (arg == "--anim-out-dir") {
+      if (i + 1 >= argc) {
+        std::cerr << "Error: --anim-out-dir requires an argument\n";
+        return -1;
+      }
+      g_config.animOutputDir = argv[++i];
+    } else if (arg == "--anim-prefix") {
+      if (i + 1 >= argc) {
+        std::cerr << "Error: --anim-prefix requires an argument\n";
+        return -1;
+      }
+      g_config.animPrefix = argv[++i];
+    } else if (arg == "--num-frames") {
+      if (i + 1 >= argc) {
+        std::cerr << "Error: --num-frames requires an argument\n";
+        return -1;
+      }
+      g_ctx->offline.frame.numFrames = std::stoi(argv[++i]);
+      g_numFramesExplicit = true;
     } else if (arg == "--dir-light") {
       if (i + 7 >= argc) {
         std::cerr
@@ -387,44 +737,6 @@ static void setupLights()
   printf("done (%.2f ms)\n", g_timer.milliseconds());
 }
 
-static void setupCameraManipulator()
-{
-  printf("Setting up camera...");
-  fflush(stdout);
-
-  g_timer.start();
-
-  if (g_cameraPoses.empty()) {
-    tsd::rendering::CameraPose pose;
-
-    if (g_config.autoCamera) {
-      printf("from world bounds...");
-      fflush(stdout);
-      pose = g_renderIndex->computeDefaultView();
-    } else {
-      printf("from command line...");
-      fflush(stdout);
-
-      pose.lookat = g_config.cameraLookAt;
-      pose.fixedDist =
-          tsd::math::length(g_config.cameraPos - g_config.cameraLookAt);
-
-      auto dir =
-          tsd::math::normalize(g_config.cameraPos - g_config.cameraLookAt);
-      float azimuth = std::atan2(dir.x, dir.z) * 180.f / M_PI;
-      float elevation = std::asin(dir.y) * 180.f / M_PI;
-      pose.azeldist = {azimuth, elevation, pose.fixedDist};
-      pose.upAxis = static_cast<int>(tsd::rendering::UpAxis::POS_Y);
-    }
-
-    g_cameraPoses.push_back(std::move(pose));
-  }
-
-  g_timer.end();
-
-  printf("done (%.2f ms)\n", g_timer.milliseconds());
-}
-
 static void setupImagePipeline()
 {
   const auto frameWidth = g_ctx->offline.frame.width;
@@ -437,11 +749,17 @@ static void setupImagePipeline()
   g_renderPipeline =
       std::make_unique<tsd::rendering::ImagePipeline>(frameWidth, frameHeight);
 
-  g_camera = anari::newObject<anari::Camera>(g_device, "perspective");
+  if (g_usingSceneCamera) {
+    auto cameraIndex = g_ctx->offline.camera.cameraIndex;
+    g_camera = g_renderIndex->camera(cameraIndex);
+  } else {
+    g_camera = anari::newObject<anari::Camera>(g_device, "perspective");
+    anari::setParameter(
+        g_device, g_camera, "fovy", anari::radians(g_config.fovy));
+  }
+
   anari::setParameter(
       g_device, g_camera, "aspect", frameWidth / float(frameHeight));
-  anari::setParameter(
-      g_device, g_camera, "fovy", anari::radians(g_config.fovy));
   anari::setParameter(g_device,
       g_camera,
       "apertureRadius",
@@ -477,46 +795,100 @@ static void setupImagePipeline()
   printf("done (%.2f ms)\n", g_timer.milliseconds());
 }
 
-static void renderFrame()
+static void renderFrames()
 {
+#ifdef TSD_USE_MPI
+  int mpiRank = 0, mpiSize = 1;
+  MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank);
+  MPI_Comm_size(MPI_COMM_WORLD, &mpiSize);
+#else
+  const int mpiRank = 0, mpiSize = 1;
+#endif
+
+  const bool animMode = !g_config.animOutputDir.empty();
+
+  int numFrames = 1;
+  if (animMode) {
+    auto &animMgr = g_ctx->tsd.animationMgr;
+    if (!animMgr.animations().empty()) {
+      numFrames = animMgr.getAnimationTotalFrames();
+      if (g_numFramesExplicit)
+        numFrames = std::min(numFrames, g_ctx->offline.frame.numFrames);
+    } else {
+      numFrames = g_ctx->offline.frame.numFrames;
+    }
+  }
+
+  const auto frameSamples = g_ctx->offline.frame.samples;
   const auto frameWidth = g_ctx->offline.frame.width;
   const auto frameHeight = g_ctx->offline.frame.height;
-  const auto frameSamples = g_ctx->offline.frame.samples;
 
-  printf("Rendering frame (%u spp)...\n", frameSamples);
-  fflush(stdout);
+  if (mpiRank == 0) {
+    if (animMode)
+      printf("Rendering %d frame(s) (%u spp)...\n", numFrames, frameSamples);
+    else
+      printf("Rendering frame (%u spp)...\n", frameSamples);
+    fflush(stdout);
+  }
 
   stbi_flip_vertically_on_write(1);
 
-  g_timer.start();
-
-  const auto &pose = g_cameraPoses[0];
-
-  g_manipulator.setConfig(pose);
-  tsd::rendering::updateCameraParametersPerspective(
-      g_device, g_camera, g_manipulator);
-  anari::commitParameters(g_device, g_camera);
-
-  for (int i = 0; i < frameSamples; i++) {
-    g_renderPipeline->render();
-    if ((i + 1) % 10 == 0 || i == frameSamples - 1) {
-      printf("...rendered %d/%u samples\r", i + 1, frameSamples);
-      fflush(stdout);
-    }
+  if (!g_usingSceneCamera) {
+    const auto &pose = g_cameraPoses[0];
+    g_manipulator.setConfig(pose);
+    tsd::rendering::updateCameraParametersPerspective(
+        g_device, g_camera, g_manipulator);
+    anari::commitParameters(g_device, g_camera);
   }
-  printf("\n");
 
-  stbi_write_png(g_config.outputFile.c_str(),
-      frameWidth,
-      frameHeight,
-      4,
-      g_renderPipeline->getColorBuffer(),
-      4 * frameWidth);
+  for (int frameIndex = 0; frameIndex < numFrames; ++frameIndex) {
+    if (mpiSize > 1 && frameIndex % mpiSize != mpiRank)
+      continue;
 
-  g_timer.end();
+    if (animMode)
+      g_ctx->tsd.animationMgr.setAnimationFrame(frameIndex);
 
-  printf("...done (%.2f ms)\n", g_timer.milliseconds());
-  printf("Output written to: %s\n", g_config.outputFile.c_str());
+    g_timer.start();
+    for (int s = 0; s < (int)frameSamples; ++s) {
+      g_renderPipeline->render();
+      if ((s + 1) % 10 == 0 || s == (int)frameSamples - 1) {
+        if (animMode)
+          printf("[rank %d] frame %d/%d: %d/%u spp\r",
+              mpiRank,
+              frameIndex + 1,
+              numFrames,
+              s + 1,
+              frameSamples);
+        else
+          printf("...rendered %d/%u samples\r", s + 1, frameSamples);
+        fflush(stdout);
+      }
+    }
+    printf("\n");
+    g_timer.end();
+
+    std::string outPath;
+    if (animMode) {
+      std::ostringstream ss;
+      ss << g_config.animOutputDir << "/" << g_config.animPrefix
+         << std::setfill('0') << std::setw(4) << frameIndex << ".png";
+      outPath = ss.str();
+    } else {
+      outPath = g_config.outputFile;
+    }
+
+    stbi_write_png(outPath.c_str(),
+        frameWidth,
+        frameHeight,
+        4,
+        g_renderPipeline->getColorBuffer(),
+        4 * frameWidth);
+
+    printf("[rank %d] written: %s (%.2f ms)\n",
+        mpiRank,
+        outPath.c_str(),
+        g_timer.milliseconds());
+  }
 }
 
 static void cleanup()
@@ -527,7 +899,8 @@ static void cleanup()
   g_timer.start();
   g_renderPipeline.reset();
   g_renderIndex.reset();
-  anari::release(g_device, g_camera);
+  if (!g_usingSceneCamera)
+    anari::release(g_device, g_camera);
   anari::release(g_device, g_device);
   anari::unloadLibrary(g_library);
   g_timer.end();
@@ -537,6 +910,14 @@ static void cleanup()
 
 int main(int argc, const char *argv[])
 {
+#ifdef TSD_USE_MPI
+  MPI_Init(&argc, (char ***)&argv);
+  int mpiRank = 0;
+  MPI_Comm_rank(MPI_COMM_WORLD, &mpiRank);
+#else
+  const int mpiRank = 0;
+#endif
+
   // Enable TSD logging to stdout so we can see import errors
   tsd::core::setLogToStdout();
 
@@ -568,19 +949,29 @@ int main(int argc, const char *argv[])
     return 1;
   }
 
+  if (!validateCameraOptionCompatibility())
+    return 1;
+
   // Let Context parse importer options (-gltf, -obj, -volume, etc.)
   g_ctx->parseCommandLine(importerArgc, importerArgv.data());
 
-  printf("tsdOffline - Headless TSD Renderer\n");
-  printf("===================================\n");
-  printf("Resolution: %ux%u\n",
-      g_ctx->offline.frame.width,
-      g_ctx->offline.frame.height);
-  printf("Samples: %u\n", g_ctx->offline.frame.samples);
-  printf("Library: %s\n", g_ctx->offline.renderer.libraryName.c_str());
-  printf("Renderer: %s\n", g_config.rendererName.c_str());
-  printf("Output: %s\n", g_config.outputFile.c_str());
-  printf("\n");
+  if (mpiRank == 0) {
+    printf("tsdOffline - Headless TSD Renderer\n");
+    printf("===================================\n");
+    printf("Resolution: %ux%u\n",
+        g_ctx->offline.frame.width,
+        g_ctx->offline.frame.height);
+    printf("Samples: %u\n", g_ctx->offline.frame.samples);
+    printf("Library: %s\n", g_ctx->offline.renderer.libraryName.c_str());
+    printf("Renderer: %s\n", g_config.rendererName.c_str());
+    if (g_config.animOutputDir.empty())
+      printf("Output: %s\n", g_config.outputFile.c_str());
+    else
+      printf("Animation output: %s/%s<NNNN>.png\n",
+          g_config.animOutputDir.c_str(),
+          g_config.animPrefix.c_str());
+    printf("\n");
+  }
 
   // Context already initializes its scene, no separate initialization needed
   loadANARIDevice();
@@ -588,12 +979,20 @@ int main(int argc, const char *argv[])
   setupLights(); // Then add lights
   initTSDRenderIndex(); // THEN create render index with populated scene
   populateRenderIndex();
-  setupCameraManipulator();
+  g_usingSceneCamera = !g_config.hasManualCameraOptions;
+  if (g_usingSceneCamera)
+    setupSelectedSceneCamera();
+  else
+    setupManualCameraPose();
   setupImagePipeline();
-  renderFrame();
+  renderFrames();
   cleanup();
 
   g_ctx.reset();
+
+#ifdef TSD_USE_MPI
+  MPI_Finalize();
+#endif
 
   return 0;
 }
