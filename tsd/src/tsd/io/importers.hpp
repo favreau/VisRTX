@@ -4,6 +4,7 @@
 #pragma once
 
 #include "tsd/core/ColorMapUtil.hpp"
+#include "tsd/core/FlatMap.hpp"
 #include "tsd/scene/Scene.hpp"
 // std
 #include <string>
@@ -12,6 +13,10 @@
 namespace tsd::animation {
 struct AnimationManager;
 } // namespace tsd::animation
+
+namespace tsd::core {
+class DataNode;
+} // namespace tsd::core
 
 namespace tsd::io {
 
@@ -36,6 +41,30 @@ void import_ENSIGHT(Scene &scene,
     const char *filename,
     LayerNodeRef location,
     const std::vector<std::string> &fields,
+    int timestep = 0);
+void import_ENSIGHT(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filename,
+    LayerNodeRef location,
+    const std::vector<std::string> &fields,
+    const tsd::core::DataNode &settings,
+    int timestep = 0);
+void import_ENSIGHT(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filename,
+    LayerNodeRef location,
+    const std::vector<std::string> &fields,
+    const tsd::core::DataNode &settings,
+    MaterialRef overrideMaterial,
+    int timestep = 0);
+void import_ENSIGHT(Scene &scene,
+    tsd::animation::AnimationManager &animMgr,
+    const char *filename,
+    LayerNodeRef location,
+    const std::vector<std::string> &fields,
+    const tsd::core::DataNode &settings,
+    MaterialRef overrideMaterial,
+    const tsd::core::FlatMap<std::string, MaterialRef> &perPartMaterials,
     int timestep = 0);
 void import_GLTF(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {});
 void import_HDRI(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {});

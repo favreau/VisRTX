@@ -8,6 +8,7 @@
 
 #include "tsd/animation/AnimationManager.hpp"
 #include "tsd/core/ColorMapUtil.hpp"
+#include "tsd/core/DataTree.hpp"
 #include "tsd/core/Logging.hpp"
 #include "tsd/core/TSDMath.hpp"
 #include "tsd/io/animation/EnSightFileBinding.hpp"
@@ -16,17 +17,19 @@
 #include "tsd/io/importers/detail/HDRImage.h"
 #include "tsd/io/importers/detail/ensight_io.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
+#include "tsd/io/importers/detail/usd/MaterialCommon.h"
 #include "tsd/io/importers/detail/usd/OmniPbrMaterial.h"
 #include "tsd/scene/algorithms/computeScalarRange.hpp"
 #include "tsd/scene/objects/Array.hpp"
 #if TSD_USE_USD
 // usd
-#include <pxr/base/vt/dictionary.h>
 #include <pxr/base/gf/matrix4f.h>
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/tf/token.h>
+#include <pxr/base/vt/dictionary.h>
 #include <pxr/usd/sdf/assetPath.h>
+#include <pxr/usd/usd/collectionAPI.h>
 #include <pxr/usd/usd/primRange.h>
 #include <pxr/usd/usd/stage.h>
 #include <pxr/usd/usdGeom/basisCurves.h>
@@ -105,7 +108,8 @@ static void setShaderInputIfPresent(MaterialRef &mat,
 // Helper: Import a UsdPreviewSurface material as a physicallyBased TSD material
 static MaterialRef importUsdPreviewSurfaceMaterial(Scene &scene,
     const pxr::UsdShadeMaterial &usdMat,
-    const std::string &basePath)
+    const std::string &basePath,
+    TextureCache &texCache)
 {
   // Find the UsdPreviewSurface shader
   pxr::UsdShadeShader surfaceShader;
@@ -126,7 +130,12 @@ static MaterialRef importUsdPreviewSurfaceMaterial(Scene &scene,
 
   auto mat = scene.createObject<Material>(tokens::material::physicallyBased);
 
-  setShaderInputIfPresent(mat, surfaceShader, "diffuseColor", "baseColor");
+  if (auto sampler = materials::resolveTexturedInput(
+          scene, surfaceShader, "diffuseColor", basePath, texCache)) {
+    mat->setParameterObject("baseColor", *sampler);
+  } else {
+    setShaderInputIfPresent(mat, surfaceShader, "diffuseColor", "baseColor");
+  }
   setShaderInputIfPresent(mat, surfaceShader, "emissiveColor", "emissive");
   setShaderInputIfPresent(mat, surfaceShader, "metallic", "metallic", 0.0f);
   setShaderInputIfPresent(mat, surfaceShader, "roughness", "roughness", 0.0f);
@@ -171,20 +180,22 @@ static MaterialRef getBoundMaterial(Scene &scene,
 
   // Try OmniPBR via MDL surface output
   auto mdlOutput = usdMat.GetSurfaceOutput(pxr::TfToken("mdl"));
-  for (auto &src : mdlOutput.GetConnectedSources()) {
-    pxr::UsdShadeShader shader(src.source);
-    pxr::TfToken subId;
-    shader.GetSourceAssetSubIdentifier(&subId, pxr::TfToken("mdl"));
-    if (subId == pxr::TfToken("OmniPBR")) {
-      mat = materials::importOmniPBRMaterial(
-          scene, usdMat, shader, basePath, texCache);
-      break;
+  if (mdlOutput) {
+    for (auto &src : mdlOutput.GetConnectedSources()) {
+      pxr::UsdShadeShader shader(src.source);
+      pxr::TfToken subId;
+      shader.GetSourceAssetSubIdentifier(&subId, pxr::TfToken("mdl"));
+      if (subId == pxr::TfToken("OmniPBR")) {
+        mat = materials::importOmniPBRMaterial(
+            scene, usdMat, shader, basePath, texCache);
+        break;
+      }
     }
   }
 
   // Fall back to UsdPreviewSurface
   if (!mat)
-    mat = importUsdPreviewSurfaceMaterial(scene, usdMat, basePath);
+    mat = importUsdPreviewSurfaceMaterial(scene, usdMat, basePath, texCache);
 
   if (!mat)
     mat = scene.defaultMaterial();
@@ -197,180 +208,166 @@ static MaterialRef getBoundMaterial(Scene &scene,
 struct VolumeTransferFunction
 {
   std::vector<math::float4> colors;
-  std::vector<float> xPoints;
+  std::vector<float> xPointsColor; // color control point positions
+  std::vector<float>
+      xPoints; // opacity control point positions (legacy: shared)
+  std::vector<float> opacityValues; // opacity values at xPoints
   math::float2 domain{0.0f, 1.0f};
+  float unitDistance{0.0f};
   bool hasTransferFunction = false;
 };
+
+// Read all colormap attributes from a prim into VolumeTransferFunction.
+// Returns true if at least rgbaPoints was found and read successfully.
+static bool extractColormapFromPrim(
+    const pxr::UsdPrim &prim, VolumeTransferFunction &tf)
+{
+  auto rgbaAttr = prim.GetAttribute(pxr::TfToken("rgbaPoints"));
+  if (!rgbaAttr)
+    return false;
+
+  pxr::VtArray<pxr::GfVec4f> rgbaPoints;
+  if (!rgbaAttr.Get(&rgbaPoints) || rgbaPoints.empty())
+    return false;
+
+  tf.colors.resize(rgbaPoints.size());
+  for (size_t i = 0; i < rgbaPoints.size(); ++i) {
+    const auto &c = rgbaPoints[i];
+    tf.colors[i] = math::float4(c[0], c[1], c[2], c[3]);
+  }
+
+  auto readFloatArray = [&](const char *name, std::vector<float> &out) {
+    if (auto attr = prim.GetAttribute(pxr::TfToken(name))) {
+      pxr::VtArray<float> vals;
+      if (attr.Get(&vals))
+        out.assign(vals.begin(), vals.end());
+    }
+  };
+
+  readFloatArray("xPointsColor", tf.xPointsColor);
+  readFloatArray("xPoints", tf.xPoints);
+  readFloatArray("opacityValues", tf.opacityValues);
+
+  if (auto attr = prim.GetAttribute(pxr::TfToken("domain"))) {
+    pxr::GfVec2f domain;
+    if (attr.Get(&domain))
+      tf.domain = math::float2(domain[0], domain[1]);
+  }
+
+  if (auto attr = prim.GetAttribute(pxr::TfToken("unitDistance"))) {
+    float ud;
+    if (attr.Get(&ud) && ud > 0.0f)
+      tf.unitDistance = ud;
+  }
+
+  tf.hasTransferFunction = true;
+  return true;
+}
+
+// Convert the USD-specific representation to core::TransferFunction so that
+// the existing interpolation helpers (interpolateColor / interpolateOpacity)
+// can be used directly.
+static core::TransferFunction toTransferFunction(
+    const VolumeTransferFunction &vtf)
+{
+  core::TransferFunction tf;
+  tf.range = {vtf.domain.x, vtf.domain.y};
+
+  // ColorPoint is {x, r, g, b}
+  const auto &xColor =
+      vtf.xPointsColor.empty() ? vtf.xPoints : vtf.xPointsColor;
+  for (size_t i = 0; i < vtf.colors.size() && i < xColor.size(); ++i) {
+    tf.colorPoints.emplace_back(
+        xColor[i], vtf.colors[i].x, vtf.colors[i].y, vtf.colors[i].z);
+  }
+
+  // OpacityPoint is {x, opacity}
+  if (!vtf.opacityValues.empty()) {
+    for (size_t i = 0; i < vtf.opacityValues.size() && i < vtf.xPoints.size();
+        ++i)
+      tf.opacityPoints.emplace_back(vtf.xPoints[i], vtf.opacityValues[i]);
+  } else {
+    for (size_t i = 0; i < vtf.colors.size() && i < vtf.xPoints.size(); ++i)
+      tf.opacityPoints.emplace_back(vtf.xPoints[i], vtf.colors[i].w);
+  }
+
+  return tf;
+}
 
 static VolumeTransferFunction getVolumeTransferFunction(
     const pxr::UsdPrim &prim)
 {
   VolumeTransferFunction tf;
 
-  // Check if MaterialBindingAPI can be applied to this prim type
-  if (!pxr::UsdShadeMaterialBindingAPI::CanApply(prim)) {
-    return tf;
-  }
+  // Strategy 1: Material binding chain (Material → VolumeShader → Colormap)
+  if (pxr::UsdShadeMaterialBindingAPI::CanApply(prim)) {
+    pxr::UsdShadeMaterialBindingAPI binding(prim);
+    pxr::UsdShadeMaterial usdMat;
 
-  // Try to get material binding
-  pxr::UsdShadeMaterialBindingAPI binding(prim);
-  pxr::UsdShadeMaterial usdMat;
-
-  // First, try to get the direct material binding relationship
-  pxr::UsdRelationship materialRel =
-      prim.GetRelationship(pxr::TfToken("material:binding"));
-  if (materialRel) {
-    pxr::SdfPathVector targets;
-    materialRel.GetTargets(&targets);
-    if (!targets.empty()) {
-      // Try to get the material prim directly
-      pxr::UsdPrim materialPrim = prim.GetStage()->GetPrimAtPath(targets[0]);
-      if (materialPrim) {
-        usdMat = pxr::UsdShadeMaterial(materialPrim);
+    pxr::UsdRelationship materialRel =
+        prim.GetRelationship(pxr::TfToken("material:binding"));
+    if (materialRel) {
+      pxr::SdfPathVector targets;
+      materialRel.GetTargets(&targets);
+      if (!targets.empty()) {
+        pxr::UsdPrim materialPrim = prim.GetStage()->GetPrimAtPath(targets[0]);
+        if (materialPrim)
+          usdMat = pxr::UsdShadeMaterial(materialPrim);
       }
     }
-  }
 
-  // If direct resolution didn't work, try ComputeBoundMaterial
-  if (!usdMat && binding) {
-    usdMat = binding.ComputeBoundMaterial();
-  }
+    if (!usdMat && binding)
+      usdMat = binding.ComputeBoundMaterial();
 
-  if (!usdMat) {
-    return tf;
-  }
+    if (usdMat) {
+      pxr::UsdShadeOutput volumeOutput =
+          usdMat.GetOutput(pxr::TfToken("nvindex:volume"));
+      if (volumeOutput && volumeOutput.HasConnectedSource()) {
+        pxr::UsdShadeConnectableAPI src;
+        pxr::TfToken srcName;
+        pxr::UsdShadeAttributeType srcType;
+        volumeOutput.GetConnectedSource(&src, &srcName, &srcType);
+        pxr::UsdShadeShader volumeShader(src.GetPrim());
 
-  // Look for volume output connection
-  pxr::TfToken volumeOutputName("nvindex:volume");
-  pxr::UsdShadeOutput volumeOutput = usdMat.GetOutput(volumeOutputName);
-
-  if (!volumeOutput || !volumeOutput.HasConnectedSource()) {
-    return tf;
-  }
-
-  // Get the VolumeShader
-  pxr::UsdShadeConnectableAPI volumeSource;
-  pxr::TfToken volumeSourceName;
-  pxr::UsdShadeAttributeType volumeSourceType;
-  volumeOutput.GetConnectedSource(
-      &volumeSource, &volumeSourceName, &volumeSourceType);
-  pxr::UsdShadeShader volumeShader(volumeSource.GetPrim());
-
-  if (!volumeShader) {
-    return tf;
-  }
-
-  // Look for colormap input connection
-  pxr::UsdShadeInput colormapInput =
-      volumeShader.GetInput(pxr::TfToken("colormap"));
-  if (!colormapInput || !colormapInput.HasConnectedSource()) {
-    return tf;
-  }
-
-  // Get the Colormap shader
-  pxr::UsdShadeConnectableAPI colormapSource;
-  pxr::TfToken colormapSourceName;
-  pxr::UsdShadeAttributeType colormapSourceType;
-  bool hasConnection = colormapInput.GetConnectedSource(
-      &colormapSource, &colormapSourceName, &colormapSourceType);
-
-  if (!hasConnection) {
-    return tf;
-  }
-
-  pxr::UsdPrim colormapPrim = colormapSource.GetPrim();
-  if (!colormapPrim) {
-    return tf;
-  }
-
-  pxr::UsdShadeShader colormapShader(colormapPrim);
-
-  if (!colormapShader) {
-    // Try to extract data directly from the prim even if it's not a valid
-    // UsdShadeShader
-    pxr::UsdAttribute rgbaPointsAttr =
-        colormapPrim.GetAttribute(pxr::TfToken("rgbaPoints"));
-    pxr::UsdAttribute xPointsAttr =
-        colormapPrim.GetAttribute(pxr::TfToken("xPoints"));
-    pxr::UsdAttribute domainAttr =
-        colormapPrim.GetAttribute(pxr::TfToken("domain"));
-
-    if (rgbaPointsAttr && xPointsAttr) {
-      // Extract the data using the same logic as below
-      pxr::VtArray<pxr::GfVec4f> rgbaPoints;
-      pxr::VtArray<float> xPoints;
-
-      if (rgbaPointsAttr.Get(&rgbaPoints) && xPointsAttr.Get(&xPoints)) {
-        // Convert to TSD format
-        tf.colors.resize(rgbaPoints.size());
-        tf.xPoints.resize(xPoints.size());
-
-        for (size_t i = 0; i < rgbaPoints.size(); ++i) {
-          const auto &rgba = rgbaPoints[i];
-          tf.colors[i] = math::float4(rgba[0], rgba[1], rgba[2], rgba[3]);
-        }
-
-        for (size_t i = 0; i < xPoints.size(); ++i) {
-          tf.xPoints[i] = xPoints[i];
-        }
-
-        // Get domain if present
-        if (domainAttr) {
-          pxr::GfVec2f domain;
-          if (domainAttr.Get(&domain)) {
-            tf.domain = math::float2(domain[0], domain[1]);
+        if (volumeShader) {
+          pxr::UsdShadeInput cmapInput =
+              volumeShader.GetInput(pxr::TfToken("colormap"));
+          if (cmapInput && cmapInput.HasConnectedSource()) {
+            pxr::UsdShadeConnectableAPI cmapSrc;
+            pxr::TfToken cmapSrcName;
+            pxr::UsdShadeAttributeType cmapSrcType;
+            if (cmapInput.GetConnectedSource(
+                    &cmapSrc, &cmapSrcName, &cmapSrcType)) {
+              pxr::UsdPrim cmapPrim = cmapSrc.GetPrim();
+              if (cmapPrim && extractColormapFromPrim(cmapPrim, tf)) {
+                logStatus(
+                    "[import_USD] Found volume colormap via material binding, "
+                    "%zu colors, domain: [%f, %f]\n",
+                    tf.colors.size(),
+                    tf.domain.x,
+                    tf.domain.y);
+                return tf;
+              }
+            }
           }
         }
-
-        tf.hasTransferFunction = true;
       }
     }
-
-    return tf;
   }
 
-  // Extract transfer function data from colormap shader
-  pxr::UsdAttribute rgbaPointsAttr =
-      colormapShader.GetPrim().GetAttribute(pxr::TfToken("rgbaPoints"));
-  pxr::UsdAttribute xPointsAttr =
-      colormapShader.GetPrim().GetAttribute(pxr::TfToken("xPoints"));
-  pxr::UsdAttribute domainAttr =
-      colormapShader.GetPrim().GetAttribute(pxr::TfToken("domain"));
-
-  if (rgbaPointsAttr && xPointsAttr) {
-    pxr::VtArray<pxr::GfVec4f> rgbaPoints;
-    pxr::VtArray<float> xPoints;
-
-    if (rgbaPointsAttr.Get(&rgbaPoints) && xPointsAttr.Get(&xPoints)) {
-      // Convert to TSD format
-      tf.colors.resize(rgbaPoints.size());
-      tf.xPoints.resize(xPoints.size());
-
-      for (size_t i = 0; i < rgbaPoints.size(); ++i) {
-        const auto &rgba = rgbaPoints[i];
-        tf.colors[i] = math::float4(rgba[0], rgba[1], rgba[2], rgba[3]);
-      }
-
-      for (size_t i = 0; i < xPoints.size(); ++i) {
-        tf.xPoints[i] = xPoints[i];
-      }
-
-      // Get domain if present
-      if (domainAttr) {
-        pxr::GfVec2f domain;
-        if (domainAttr.Get(&domain)) {
-          tf.domain = math::float2(domain[0], domain[1]);
-        }
-      }
-
-      tf.hasTransferFunction = true;
-
+  // Strategy 2: Child Shader prim with colormap attributes
+  for (const auto &child : prim.GetChildren()) {
+    if (!child.IsA<pxr::UsdShadeShader>())
+      continue;
+    if (extractColormapFromPrim(child, tf)) {
       logStatus(
-          "[import_USD] Found volume transfer function with %zu colors and %zu x-points, domain: [%f, %f]\n",
+          "[import_USD] Found volume colormap on child prim '%s', "
+          "%zu colors, domain: [%f, %f]\n",
+          child.GetPath().GetText(),
           tf.colors.size(),
-          tf.xPoints.size(),
           tf.domain.x,
           tf.domain.y);
+      return tf;
     }
   }
 
@@ -1347,7 +1344,6 @@ static void importUsdVolume(Scene &scene,
   // Check for transfer function from USD material
   VolumeTransferFunction tf = getVolumeTransferFunction(prim);
 
-  ArrayRef colorArray;
   // Default to the field's value range to avoid undefined ranges.
   math::float2 valueRange = field->computeValueRange();
 
@@ -1357,49 +1353,45 @@ static void importUsdVolume(Scene &scene,
   volume->setName(primName.c_str());
   volume->setParameterObject("value", *field);
 
-  if (tf.hasTransferFunction && !tf.colors.empty() && !tf.xPoints.empty()) {
-    // Use transfer function from USD material
-    colorArray = scene.createArray(ANARI_FLOAT32_VEC4, tf.colors.size());
-    colorArray->setData(tf.colors.data(), tf.colors.size());
-    if (tf.domain.x < tf.domain.y)
-      valueRange = tf.domain;
-
-    // Create opacity control points from USD transfer function
-    std::vector<math::float2> opacityControlPoints;
-    opacityControlPoints.reserve(tf.colors.size());
-
-    for (size_t i = 0; i < tf.colors.size(); ++i) {
-      // x = position in transfer function, y = opacity value
-      opacityControlPoints.emplace_back(tf.xPoints[i], tf.colors[i].w);
+  if (tf.hasTransferFunction && !tf.colors.empty()) {
+    auto coreTF = toTransferFunction(tf);
+    if (!coreTF.colorPoints.empty() && !coreTF.opacityPoints.empty()) {
+      applyTransferFunction(scene, volume, coreTF);
+      if (coreTF.range.lower < coreTF.range.upper)
+        valueRange = math::float2(coreTF.range.lower, coreTF.range.upper);
+    } else {
+      auto colors = makeDefaultColorMap(256);
+      auto colorArray = scene.createArray(ANARI_FLOAT32_VEC4, colors.size());
+      colorArray->setData(colors);
+      volume->setParameterObject("color", *colorArray);
+      volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &valueRange);
     }
-
-    // Set the opacity control points as metadata
-    volume->setMetadataArray("opacityControlPoints",
-        ANARI_FLOAT32_VEC2,
-        opacityControlPoints.data(),
-        opacityControlPoints.size());
   } else {
-    // Use default transfer function if available, otherwise create default
-    colorArray = scene.createArray(ANARI_FLOAT32_VEC4, 256);
-    colorArray->setData(makeDefaultColorMap(colorArray->size()));
+    auto colors = makeDefaultColorMap(256);
+    auto colorArray = scene.createArray(ANARI_FLOAT32_VEC4, colors.size());
+    colorArray->setData(colors);
+    volume->setParameterObject("color", *colorArray);
+    volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &valueRange);
   }
 
   // Override valueRange from custom USD attribute if present
   pxr::GfVec2f customRange;
   if (auto attr = prim.GetAttribute(pxr::TfToken("anari:valueRange"))) {
-    if (attr.Get(&customRange))
+    if (attr.Get(&customRange)) {
       valueRange = math::float2(customRange[0], customRange[1]);
+      volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &valueRange);
+    }
   }
 
-  volume->setParameterObject("color", *colorArray);
-  volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &valueRange);
-
-  // Read unitDistance from custom USD attribute if present
-  float unitDistance = 0.0f;
-  if (auto attr = prim.GetAttribute(pxr::TfToken("anari:unitDistance"))) {
-    if (attr.Get(&unitDistance) && unitDistance > 0.0f)
-      volume->setParameter("unitDistance", unitDistance);
+  // unitDistance: prefer transfer function value, then custom USD attribute
+  float unitDistance = tf.unitDistance;
+  if (unitDistance <= 0.0f) {
+    if (auto attr = prim.GetAttribute(pxr::TfToken("anari:unitDistance"))) {
+      attr.Get(&unitDistance);
+    }
   }
+  if (unitDistance > 0.0f)
+    volume->setParameter("unitDistance", unitDistance);
 
   if (filePaths.size() > 1) {
     auto &anim = animMgr.addAnimation(primName);
@@ -1539,8 +1531,7 @@ static void importUsdDomeLight(Scene &scene,
     if (!texFile.empty()) {
       // Use basePath to resolve relative paths if needed
       std::string resolvedPath = texFile;
-      if (!resolvedPath.empty() && resolvedPath[0] != '/') {
-        // Try to resolve relative to basePath
+      if (!resolvedPath.empty() && !isAbsolute(resolvedPath)) {
         resolvedPath = basePath + texFile;
       }
 
@@ -1857,6 +1848,45 @@ static bool isIdentity(const pxr::GfMatrix4d &m)
 }
 
 // -----------------------------------------------------------------------------
+// RenderSettings import
+// -----------------------------------------------------------------------------
+
+static void importRenderSettings(
+    const pxr::UsdStageRefPtr &stage, core::DataNode &settings)
+{
+  for (const auto &prim : stage->Traverse()) {
+    if (prim.GetTypeName() != "RenderSettings")
+      continue;
+
+    if (auto attr = prim.GetAttribute(pxr::TfToken("tsd:io:cutPlane"))) {
+      pxr::GfVec4f val;
+      if (attr.Get(&val)) {
+        settings["cutPlane"] = math::float4(val[0], val[1], val[2], val[3]);
+        logStatus("[import_USD] RenderSettings cutPlane: (%f, %f, %f, %f)",
+            val[0],
+            val[1],
+            val[2],
+            val[3]);
+      }
+    }
+
+    auto collection =
+        pxr::UsdCollectionAPI::Get(prim, pxr::TfToken("tsd:io:cutPlaneTarget"));
+    if (collection) {
+      pxr::SdfPathVector includes;
+      collection.GetIncludesRel().GetTargets(&includes);
+      auto &targets = settings["cutPlaneTargets"];
+      for (const auto &path : includes) {
+        targets.append() = std::string(path.GetString());
+        logStatus("[import_USD] cutPlaneTarget: %s", path.GetText());
+      }
+    }
+
+    break; // only first RenderSettings prim
+  }
+}
+
+// -----------------------------------------------------------------------------
 // EnSight-backed mesh import
 // -----------------------------------------------------------------------------
 
@@ -1866,7 +1896,11 @@ static bool isIdentity(const pxr::GfMatrix4d &m)
 static void importEnsightDataset(Scene &scene,
     const pxr::UsdPrim &scopePrim,
     LayerNodeRef parent,
-    tsd::animation::AnimationManager &animMgr)
+    tsd::animation::AnimationManager &animMgr,
+    const core::DataNode &settings,
+    const std::string &basePath,
+    MaterialCache &matCache,
+    TextureCache &texCache)
 {
   std::string primName = scopePrim.GetName().GetString();
 
@@ -1898,10 +1932,8 @@ static void importEnsightDataset(Scene &scene,
   // Read field mapping from the Scope's attributes
   std::vector<std::string> fields;
   for (int i = 0; i < 4; ++i) {
-    std::string attrName =
-        "ensight:fieldMapping:attribute" + std::to_string(i);
-    pxr::UsdAttribute attr =
-        scopePrim.GetAttribute(pxr::TfToken(attrName));
+    std::string attrName = "ensight:fieldMapping:attribute" + std::to_string(i);
+    pxr::UsdAttribute attr = scopePrim.GetAttribute(pxr::TfToken(attrName));
     if (!attr)
       continue;
     std::string varName;
@@ -1909,11 +1941,60 @@ static void importEnsightDataset(Scene &scene,
       fields.push_back(varName);
   }
 
-  logStatus("[import_USD] Importing EnSight dataset '%s' from '%s'",
-      primName.c_str(),
-      caseFile.c_str());
+  // Check if this prim is a cut plane target and build per-dataset settings
+  std::string primPath = scopePrim.GetPath().GetString();
+  core::DataTree datasetSettings;
+  const auto *targets = settings.child("cutPlaneTargets");
+  const auto *cutPlane = settings.child("cutPlane");
+  if (cutPlane && targets) {
+    for (size_t i = 0; i < targets->numChildren(); ++i) {
+      if (auto target = targets->child(i)->getValueAs<std::string>();
+          target == primPath) {
+        datasetSettings.root()["cutPlane"] = cutPlane->getValue();
+        // Cutting all the parts of the target.
+        datasetSettings.root().remove("cutPlaneTargets");
+        break;
+      } else if (target.substr(0, primPath.size() + 1) == primPath + "/") {
+        datasetSettings.root()["cutPlane"] = cutPlane->getValue();
+        datasetSettings.root()["cutPlaneTarget"].append(
+            target.substr(primPath.size() + 1));
+      }
+    }
+  }
 
-  import_ENSIGHT(scene, animMgr, caseFile.c_str(), parent, fields, 0);
+  // Resolve scope-level material binding as fallback for all parts
+  MaterialRef fallbackMaterial =
+      getBoundMaterial(scene, scopePrim, basePath, matCache, texCache);
+  if (fallbackMaterial == scene.defaultMaterial())
+    fallbackMaterial = {};
+
+  // Build per-part material map from USD child prim bindings.
+  // Child prim names match sanitized EnSight part names (via CaseFileFormat).
+  core::FlatMap<std::string, MaterialRef> perPartMaterials;
+  for (const auto &child : scopePrim.GetChildren()) {
+    MaterialRef childMat =
+        getBoundMaterial(scene, child, basePath, matCache, texCache);
+    if (childMat && childMat != scene.defaultMaterial()
+        && childMat != fallbackMaterial)
+      perPartMaterials[child.GetName().GetString()] = childMat;
+  }
+
+  logStatus(
+      "[import_USD] Importing EnSight dataset '%s' from '%s'"
+      " (%zu per-part material override(s))",
+      primName.c_str(),
+      caseFile.c_str(),
+      perPartMaterials.size());
+
+  import_ENSIGHT(scene,
+      animMgr,
+      caseFile.c_str(),
+      parent,
+      fields,
+      datasetSettings.root(),
+      fallbackMaterial,
+      perPartMaterials,
+      0);
 }
 
 // -----------------------------------------------------------------------------
@@ -1928,7 +2009,8 @@ static void importUsdPrimRecursive(Scene &scene,
     const pxr::GfMatrix4d &parentWorldXform,
     tsd::animation::AnimationManager &animMgr,
     MaterialCache &matCache,
-    TextureCache &texCache)
+    TextureCache &texCache,
+    const core::DataNode &settings)
 {
   // if (prim.IsPrototype()) return;
   if (prim.IsInstance()) {
@@ -1953,7 +2035,8 @@ static void importUsdPrimRecursive(Scene &scene,
           thisWorldXform,
           animMgr,
           matCache,
-          texCache);
+          texCache,
+          settings);
     } else {
       tsd::core::logStatus("[import_USD] Instance has no prototype: %s\n",
           prim.GetName().GetString().c_str());
@@ -2059,7 +2142,14 @@ static void importUsdPrimRecursive(Scene &scene,
     auto firstChild = *prim.GetChildren().begin();
     pxr::VtDictionary childCd = firstChild.GetCustomData();
     if (childCd.count("ensight")) {
-      importEnsightDataset(scene, prim, thisNode, animMgr);
+      importEnsightDataset(scene,
+          prim,
+          thisNode,
+          animMgr,
+          settings,
+          basePath,
+          matCache,
+          texCache);
       return;
     }
   }
@@ -2117,7 +2207,8 @@ static void importUsdPrimRecursive(Scene &scene,
         thisWorldXform,
         animMgr,
         matCache,
-        texCache);
+        texCache,
+        settings);
   }
 }
 
@@ -2153,6 +2244,9 @@ void import_USD(Scene &scene,
   MaterialCache matCache;
   TextureCache texCache;
 
+  core::DataTree settings;
+  importRenderSettings(stage, settings.root());
+
   // Traverse all prims in the USD file, but only import top-level prims
   for (pxr::UsdPrim const &prim : stage->Traverse()) {
     // if (prim.IsPrototype()) continue;
@@ -2165,7 +2259,8 @@ void import_USD(Scene &scene,
           pxr::GfMatrix4d(1.0),
           animMgr,
           matCache,
-          texCache);
+          texCache,
+          settings.root());
     }
   }
 

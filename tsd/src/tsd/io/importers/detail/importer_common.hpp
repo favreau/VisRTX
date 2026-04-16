@@ -21,6 +21,8 @@ namespace tsd::io {
 std::string pathOf(const std::string &filepath);
 std::string fileOf(const std::string &filepath);
 std::string extensionOf(const std::string &filepath);
+bool isAbsolute(const std::string &filepath);
+
 std::vector<std::string> splitString(const std::string &s, char delim);
 
 tsd::scene::ArrayRef readArray(
@@ -37,6 +39,12 @@ tsd::scene::SamplerRef makeDefaultColorMapSampler(
 
 // Transfer function import functions
 tsd::core::TransferFunction importTransferFunction(const std::string &filepath);
+
+// Sample a TransferFunction into a 256-entry RGBA colormap and apply it to a
+// volume (sets color array, valueRange, and opacityControlPoints metadata).
+void applyTransferFunction(tsd::scene::Scene &scene,
+    tsd::scene::VolumeRef volume,
+    const tsd::core::TransferFunction &transferFunction);
 
 bool calcTangentsForTriangleMesh(const tsd::math::uint3 *indices,
     const tsd::math::float3 *vertexPositions,

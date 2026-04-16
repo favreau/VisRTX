@@ -57,6 +57,7 @@ struct Viewport : public BaseViewport
   void camera_resetView(bool resetAzEl = true) override;
   void camera_centerView() override;
 
+  void renderer_clone() override;
   void renderer_resetParameterDefaults() override;
 
   void teardownDevice();
@@ -65,6 +66,7 @@ struct Viewport : public BaseViewport
 
   void updateFrame();
   void updateImage();
+  void syncImagePassState();
   void updateDisplayPassState();
 
   void ui_menubar();
