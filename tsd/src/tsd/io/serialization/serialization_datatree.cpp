@@ -517,7 +517,7 @@ void save_Scene(Scene &scene,
 
   // Layers //
 
-  tsd::core::logStatus("    ...serializing %zu layers", scene.numberOfLayers());
+  tsd::core::logDebug("    ...serializing %zu layers", scene.numberOfLayers());
 
   auto &layersRoot = root["layers"];
   for (auto l : scene.layers()) {
@@ -537,7 +537,7 @@ void save_Scene(Scene &scene,
     if (objPool.empty())
       return;
 
-    tsd::core::logStatus(
+    tsd::core::logDebug(
         "    ...serializing %zu %s objects", size_t(objPool.size()), poolName);
 
     auto &childNode = objPoolRoot[poolName];

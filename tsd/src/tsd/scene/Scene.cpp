@@ -815,7 +815,6 @@ void Scene::defragmentObjectStorage()
   defrag |= !(defrags[ANARI_RENDERER] = m_db.renderer.defragment()).empty();
 
   if (!defrag) {
-    tsd::core::logStatus("No defragmentation needed");
     return;
   } else {
     tsd::core::logStatus("Defragmenting context arrays:");
