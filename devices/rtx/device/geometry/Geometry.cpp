@@ -35,6 +35,7 @@
 #include "Curve.h"
 #include "Cylinder.h"
 #include "Quad.h"
+#include "SDFGeometries.h"
 #include "Sphere.h"
 #include "Triangle.h"
 
@@ -97,6 +98,8 @@ Geometry *Geometry::createInstance(
     return new Cone(d);
   else if (subtype == "curve")
     return new Curve(d);
+  else if (subtype == "sdfGeometries")
+    return new SDFGeometries(d);
 #ifdef VISRTX_USE_NEURAL
   else if (subtype == "neural")
     return new Neural(d);

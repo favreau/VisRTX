@@ -142,6 +142,7 @@ set(SOURCES
   geometry/Geometry.cpp
   $<$<BOOL:${VISRTX_ENABLE_NEURAL}>:geometry/Neural.cpp>
   geometry/Quad.cpp
+  geometry/SDFGeometries.cpp
   geometry/Sphere.cu
   geometry/Triangle.cpp
   geometry/UnknownGeometry.cpp

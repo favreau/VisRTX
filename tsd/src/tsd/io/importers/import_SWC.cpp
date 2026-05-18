@@ -4,11 +4,15 @@
 #include "tsd/core/Logging.hpp"
 #include "tsd/io/importers.hpp"
 
+#include <algorithm>
+#include <cassert>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <random>
 #include <sstream>
+#include <vector>
 
 namespace {
 const float DEFAULT_ROUGHNESS = 0.5f;
@@ -19,168 +23,309 @@ namespace tsd::io {
 
 /**
  * Represents a point in a SWC (Standard Warehouse Connector) file.
- *
- * A SWC file is a text file that describes a collection of points and their
- * connections. Each point is represented by six values: an ID, a type, and x,
- * y, z coordinates.
- *
- * @struct SWCPoint
  */
 struct SWCPoint
 {
-  int id; ///< Unique identifier for the point.
-  int type; ///< Type of point (e.g. 0 for neurite, 1 for dendrite, 2 for axon).
-  double x, y, z; ///< 3D coordinates of the point in space.
-  double radius; ///< Radius of the point.
-  int parent; ///< ID of the parent point (or -1 if it is a root point).
+  int id;
+  int type;
+  double x, y, z;
+  double radius;
+  int parent;
 };
 
+// ---------------------------------------------------------------------------
+// SDF primitive layout — must match SDFPrimitive in devices/rtx/device/gpu/gpu_objects.h
+// byte-for-byte. The static_assert below guards against drift.
+// ---------------------------------------------------------------------------
+
+enum class SDFType : uint8_t
+{
+  SPHERE = 0,
+  PILL = 1,
+  CONE_PILL = 2,
+  CONE_PILL_SIGMOID = 3,
+  CONE = 4,
+  TORUS = 5,
+  CUT_SPHERE = 6,
+  VESICA = 7,
+  ELLIPSOID = 8
+};
+
+struct SDFPrimLayout
+{
+  uint64_t userData{0};
+  float    userParams[3]{0.f, 0.f, 0.f};
+  float    p0[3]{0.f, 0.f, 0.f};
+  float    p1[3]{0.f, 0.f, 0.f};
+  float    r0{-1.f};
+  float    r1{-1.f};
+  uint32_t _pad{0};
+  uint64_t neighboursIndex{0};
+  uint8_t  numNeighbours{0};
+  uint8_t  type{0};
+  uint8_t  _pad2[6]{};
+};
+
+static_assert(sizeof(SDFPrimLayout) == 72,
+    "SDFPrimLayout size must be 72 bytes to match SDFPrimitive in gpu_objects.h");
+static_assert(offsetof(SDFPrimLayout, neighboursIndex) == 56,
+    "SDFPrimLayout::neighboursIndex offset mismatch");
+
+// ---------------------------------------------------------------------------
+
 /**
- * Reads a SWC file and generates a 3D representation.
+ * Builds an SDF geometry from a parsed SWC skeleton.
  *
- * @param scene Scene in which to create the 3D representation.
- * @param filename Path to the SWC file to read.
- * @param location Node in the scene graph where the 3D representation should be
- * added.
- * @param name A default name for the 3D representation.
+ * Each SWC point becomes one SDF primitive:
+ *  - Root points (parent == -1) → SPHERE
+ *  - All other points           → CONE_PILL from the point to its parent
+ *
+ * Neighbour connections are established so that smooth-min blending fires at
+ * every junction (branch points, connection to parent segment, connection to
+ * child segments), giving organic surface continuity across the morphology.
  */
 void readSWCFile(
     Scene &scene, const std::string &filename, LayerNodeRef location)
 {
-  // Open the SWC file and check for errors
   std::ifstream file(filename);
-  std::string line;
-
   if (!file.is_open()) {
-    logError("Error opening file: %s", filename.c_str());
+    logError("[import_SWC] Error opening file: %s", filename.c_str());
     return;
   }
 
-  // Read the file and store the points in a map
-  std::map<uint64_t, SWCPoint> points;
+  std::map<int, SWCPoint> points;
+  std::string line;
   while (std::getline(file, line)) {
     if (line.empty() || line[0] == '#')
       continue;
-
     std::istringstream iss(line);
-    SWCPoint point;
-    if (iss >> point.id >> point.type >> point.x >> point.y >> point.z
-        >> point.radius >> point.parent) {
-      points[point.id] = point;
-    }
+    SWCPoint pt;
+    if (iss >> pt.id >> pt.type >> pt.x >> pt.y >> pt.z >> pt.radius
+        >> pt.parent)
+      points[pt.id] = pt;
   }
   file.close();
 
-  // Get the location node if not already provided
+  if (points.empty()) {
+    logWarning("[import_SWC] No points found in %s", filename.c_str());
+    return;
+  }
+
   if (!location)
     location = scene.defaultLayer()->root();
 
-  // Default material for the 3D representation
-  auto material = scene.defaultMaterial();
+  // ------------------------------------------------------------------
+  // Step 1: build one SDF primitive per SWC point and record the mapping
+  //         SWC-point-ID -> SDF-buffer-index.
+  // ------------------------------------------------------------------
+  std::map<int, size_t> pointToSdfIdx;
 
-  // Count the number of points in the file
-  const auto numPoints = points.size();
+  struct PrimBuild
+  {
+    SDFPrimLayout prim;
+    int swcId{-1};
+    int parentId{-1};
+  };
 
-  // Generate spheres for each point
-  auto spheres = scene.createObject<Geometry>(tokens::geometry::sphere);
-  spheres->setName("spheres_geometry_t");
+  std::vector<PrimBuild> primBuilds;
+  primBuilds.reserve(points.size());
 
-  // Initialize the positions and radii of the spheres
-  std::vector<float3> spherePositions;
-  spherePositions.reserve(numPoints);
-  std::vector<float> sphereRadii;
-  sphereRadii.reserve(numPoints);
+  for (const auto &[id, pt] : points) {
+    PrimBuild build;
+    build.swcId = id;
+    build.parentId = pt.parent;
 
-  for (const auto &p : points) {
-    spherePositions.push_back(
-        tsd::math::float3(p.second.x, p.second.y, p.second.z));
-    sphereRadii.push_back(p.second.radius * 0.5);
+    build.prim.userData = static_cast<uint64_t>(id);
+
+    if (pt.parent == -1) {
+      // Root → sphere
+      build.prim.p0[0] = static_cast<float>(pt.x);
+      build.prim.p0[1] = static_cast<float>(pt.y);
+      build.prim.p0[2] = static_cast<float>(pt.z);
+      build.prim.r0 = static_cast<float>(pt.radius);
+      build.prim.type = static_cast<uint8_t>(SDFType::SPHERE);
+    } else {
+      // Non-root → CONE_PILL from this point to its parent
+      const auto &par = points.at(pt.parent);
+
+      float px = static_cast<float>(pt.x);
+      float py = static_cast<float>(pt.y);
+      float pz = static_cast<float>(pt.z);
+      float qx = static_cast<float>(par.x);
+      float qy = static_cast<float>(par.y);
+      float qz = static_cast<float>(par.z);
+      float r0 = static_cast<float>(pt.radius);
+      float r1 = static_cast<float>(par.radius);
+
+      // ConePill requires the larger radius at p0
+      if (r0 < r1) {
+        std::swap(px, qx);
+        std::swap(py, qy);
+        std::swap(pz, qz);
+        std::swap(r0, r1);
+      }
+
+      build.prim.p0[0] = px; build.prim.p0[1] = py; build.prim.p0[2] = pz;
+      build.prim.p1[0] = qx; build.prim.p1[1] = qy; build.prim.p1[2] = qz;
+      build.prim.r0 = r0;
+      build.prim.r1 = r1;
+      build.prim.type = static_cast<uint8_t>(SDFType::CONE_PILL);
+    }
+
+    pointToSdfIdx[id] = primBuilds.size();
+    primBuilds.push_back(std::move(build));
   }
 
-  // Create arrays to store the positions and radii of the spheres
-  auto spherePositionArray = scene.createArray(ANARI_FLOAT32_VEC3, numPoints);
-  auto sphereRadiusArray = scene.createArray(ANARI_FLOAT32, numPoints);
+  // ------------------------------------------------------------------
+  // Step 2: build the children map for quick lookup of SWC adjacency.
+  // ------------------------------------------------------------------
+  std::map<int, std::vector<int>> swcChildren;
+  for (const auto &[id, pt] : points)
+    if (pt.parent != -1)
+      swcChildren[pt.parent].push_back(id);
 
-  spherePositionArray->setData(spherePositions);
-  sphereRadiusArray->setData(sphereRadii);
+  // ------------------------------------------------------------------
+  // Step 3: for each primitive, collect its neighbours and fill the flat
+  //         neighbour buffer.  Neighbours are all SDF primitives that share
+  //         an endpoint with the current primitive:
+  //
+  //   • child segments   (primitives for direct SWC children)
+  //   • parent primitive (primitive for the SWC parent, sphere or segment)
+  //   • sibling segments (other SWC children of the same parent)
+  //
+  // This covers every junction type: tips, straight runs, and branch points.
+  // ------------------------------------------------------------------
+  std::vector<uint64_t> neighbourBuffer;
 
-  // Set the positions and radii of the spheres
-  spheres->setParameterObject("vertex.position", *spherePositionArray);
-  spheres->setParameterObject("vertex.radius", *sphereRadiusArray);
+  for (auto &build : primBuilds) {
+    const int myId = build.swcId;
+    const int parentId = build.parentId;
 
-  // Generate cones to connect the points
-  auto cones = scene.createObject<Geometry>(tokens::geometry::cone);
-  cones->setName("cones_geometry_t");
+    std::vector<uint64_t> nbrs;
 
-  // Initialize the positions and radii of the cones
-  std::vector<float3> conePositions;
-  std::vector<float> coneRadii;
+    // Children of this point
+    auto childIt = swcChildren.find(myId);
+    if (childIt != swcChildren.end()) {
+      for (int childId : childIt->second)
+        nbrs.push_back(static_cast<uint64_t>(pointToSdfIdx.at(childId)));
+    }
 
-  uint64_t numcones = 0;
-  for (const auto &p : points) {
-    if (p.second.parent == -1)
-      continue;
+    if (parentId != -1) {
+      // The primitive representing the parent point
+      nbrs.push_back(static_cast<uint64_t>(pointToSdfIdx.at(parentId)));
 
-    conePositions.push_back(
-        tsd::math::float3(p.second.x, p.second.y, p.second.z));
-    coneRadii.push_back(p.second.radius * 0.5f);
+      // Siblings: other children of the same parent
+      auto sibIt = swcChildren.find(parentId);
+      if (sibIt != swcChildren.end()) {
+        for (int sibId : sibIt->second) {
+          if (sibId != myId)
+            nbrs.push_back(static_cast<uint64_t>(pointToSdfIdx.at(sibId)));
+        }
+      }
+    }
 
-    const auto &p1 = points[p.second.parent];
-    conePositions.push_back(tsd::math::float3(p1.x, p1.y, p1.z));
-    coneRadii.push_back(p1.radius * 0.5f);
-    ++numcones;
+    // Deduplicate and cap at 255
+    std::sort(nbrs.begin(), nbrs.end());
+    nbrs.erase(std::unique(nbrs.begin(), nbrs.end()), nbrs.end());
+    // Remove self-reference if somehow present
+    nbrs.erase(
+        std::remove(nbrs.begin(), nbrs.end(),
+            static_cast<uint64_t>(pointToSdfIdx.at(myId))),
+        nbrs.end());
+
+    const uint8_t numNbrs =
+        static_cast<uint8_t>(std::min(nbrs.size(), static_cast<size_t>(255)));
+
+    build.prim.neighboursIndex = static_cast<uint64_t>(neighbourBuffer.size());
+    build.prim.numNeighbours = numNbrs;
+
+    for (uint8_t i = 0; i < numNbrs; i++)
+      neighbourBuffer.push_back(nbrs[i]);
   }
 
-  // Create arrays to store the positions and radii of the cones
-  auto positionArray = scene.createArray(ANARI_FLOAT32_VEC3, 2 * numcones);
-  auto radiiArray = scene.createArray(ANARI_FLOAT32, 2 * numcones);
+  // ------------------------------------------------------------------
+  // Step 4: pack into flat byte arrays and upload to the TSD scene.
+  // ------------------------------------------------------------------
+  const size_t numPrims = primBuilds.size();
 
-  positionArray->setData(conePositions);
-  radiiArray->setData(coneRadii);
+  std::vector<uint8_t> sdfRawBytes(numPrims * sizeof(SDFPrimLayout));
+  for (size_t i = 0; i < numPrims; i++) {
+    std::memcpy(sdfRawBytes.data() + i * sizeof(SDFPrimLayout),
+        &primBuilds[i].prim,
+        sizeof(SDFPrimLayout));
+  }
 
-  // Set the positions and radii of the cones
-  cones->setParameterObject("vertex.position", *positionArray);
-  cones->setParameterObject("vertex.radius", *radiiArray);
+  // primitive.sdf  : raw bytes, element type UINT8
+  auto sdfArray = scene.createArray(ANARI_UINT8, sdfRawBytes.size());
+  sdfArray->setData(sdfRawBytes);
 
-  // Material properties
+  // primitive.neighbor : flat uint64 index buffer
+  ArrayRef neighbourArray;
+  if (!neighbourBuffer.empty()) {
+    neighbourArray = scene.createArray(ANARI_UINT64, neighbourBuffer.size());
+    neighbourArray->setData(neighbourBuffer);
+  }
+
+  logInfo("[import_SWC] Built %zu SDF primitives, %zu neighbour entries from %s",
+      numPrims,
+      neighbourBuffer.size(),
+      filename.c_str());
+
+  // ------------------------------------------------------------------
+  // Step 5: create the SDF geometry object and assign parameters.
+  // ------------------------------------------------------------------
+  auto sdfGeom = scene.createObject<Geometry>(tokens::geometry::sdfGeometries);
+  sdfGeom->setName("sdf_geometry");
+
+  sdfGeom->setParameterObject("primitive.sdf", *sdfArray);
+  if (neighbourArray)
+    sdfGeom->setParameterObject("primitive.neighbor", *neighbourArray);
+
+  const float epsilon = 1e-5f;
+  const uint32_t marchIter = 128u;
+  const float blendFactor = 1.f;
+  const float blendLerpFactor = 0.5f;
+  const float omega = 1.f;
+  const float noiseFactor = 0.f;
+
+  sdfGeom->setParameter("epsilon", ANARI_FLOAT32, &epsilon);
+  sdfGeom->setParameter("nbMarchIterations", ANARI_UINT32, &marchIter);
+  sdfGeom->setParameter("blendFactor", ANARI_FLOAT32, &blendFactor);
+  sdfGeom->setParameter("blendLerpFactor", ANARI_FLOAT32, &blendLerpFactor);
+  sdfGeom->setParameter("omega", ANARI_FLOAT32, &omega);
+  sdfGeom->setParameter("noiseFactor", ANARI_FLOAT32, &noiseFactor);
+
+  // ------------------------------------------------------------------
+  // Step 6: material and scene graph.
+  // ------------------------------------------------------------------
   auto m = scene.createObject<Material>(tokens::material::physicallyBased);
 
-  // Randomly generate base color, metallic, and roughness values
   std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_real_distribution<> dis(0.0, 0.5);
-  tsd::math::float3 baseColor(0.5 + dis(gen), 0.5 + dis(gen), 0.5 + dis(gen));
+  tsd::math::float3 baseColor(
+      0.5f + static_cast<float>(dis(gen)),
+      0.5f + static_cast<float>(dis(gen)),
+      0.5f + static_cast<float>(dis(gen)));
 
   const float metallic = DEFAULT_METALLIC;
   const float roughness = DEFAULT_ROUGHNESS;
 
-  // Set the material properties
   m->setParameter("baseColor", ANARI_FLOAT32_VEC3, &baseColor);
   m->setParameter("metallic", ANARI_FLOAT32, &metallic);
   m->setParameter("roughness", ANARI_FLOAT32, &roughness);
 
-  const auto swcLocation = location->insert_first_child({});
-
-  // Create surfaces for the spheres and cones
   const std::string basename =
       std::filesystem::path(filename).filename().string();
 
-  const std::string conesName = basename + "_cones";
-  auto conesSurface = scene.createSurface(conesName.c_str(), cones, m);
-  scene.insertChildObjectNode(swcLocation, conesSurface);
+  const auto swcLocation = scene.insertChildNode(location, basename.c_str());
 
-  const std::string spheresName = basename + "_spheres";
-  auto sphereSurface = scene.createSurface(spheresName.c_str(), spheres, m);
-  scene.insertChildObjectNode(swcLocation, sphereSurface);
+  auto surface = scene.createSurface(basename.c_str(), sdfGeom, m);
+  scene.insertChildObjectNode(swcLocation, surface);
 }
 
 /**
  * Imports a single SWC file into the current context.
- *
- * @param scene Scene in which to import the SWC file.
- * @param filename Path to the SWC file to import.
- * @param location Node in the scene graph where the SWC file should be
- * imported.
  */
 void import_SWC(Scene &scene,
     tsd::animation::AnimationManager &animMgr,

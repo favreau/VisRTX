@@ -309,6 +309,7 @@ VISRTX_DEVICE void computeTangentSpace(
   }
   case GeometryType::SPHERE:
   case GeometryType::CONE:
+  case GeometryType::SDF:
   case GeometryType::NEURAL:
   case GeometryType::CYLINDER: {
     hit.Ng = hit.Ns = vec3(bit_cast<float>(optixGetAttribute_1()),
