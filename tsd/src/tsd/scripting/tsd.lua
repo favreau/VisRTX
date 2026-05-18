@@ -723,6 +723,8 @@ local RenderIndex = {}
 ---@return tsd.RenderIndex
 function RenderIndex.new(...) end
 
+--- Bootstrap or rebuild this render index from the current scene snapshot.
+--- This does not register the render index for live scene updates.
 function RenderIndex:populate() end
 
 ---@return any
@@ -938,6 +940,11 @@ function tsd.io.importHDRI(...) end
 ---@overload fun(scene: tsd.Scene, filename: string, location: tsd.LayerNode)
 function tsd.io.importUSD(...) end
 
+--- Import a PBRT v4 scene file.
+---@overload fun(scene: tsd.Scene, filename: string)
+---@overload fun(scene: tsd.Scene, filename: string, location: tsd.LayerNode)
+function tsd.io.importPBRT(...) end
+
 --- Import a PDB (Protein Data Bank) file.
 ---@overload fun(scene: tsd.Scene, filename: string)
 ---@overload fun(scene: tsd.Scene, filename: string, location: tsd.LayerNode)
@@ -1137,7 +1144,7 @@ tsd.render = {}
 ---@return tsd.AnariDevice
 function tsd.render.loadDevice(libraryName) end
 
---- Create a render index for a scene.
+--- Create a scene-owned render index for live scene updates.
 --- Throws if `device` is nil or invalid.
 ---@param scene tsd.Scene
 ---@param device tsd.AnariDevice

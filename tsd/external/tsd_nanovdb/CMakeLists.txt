@@ -9,3 +9,12 @@ if (TSD_USE_TBB)
   project_link_libraries(INTERFACE TBB::tbb)
   project_compile_definitions(INTERFACE NANOVDB_USE_TBB)
 endif()
+
+if (TSD_NANOVDB_USE_ZIP)
+  # zlib decompresses ZIP-encoded .nvdb files at read time. ANARI always
+  # receives the decompressed in-memory grid buffer — the codec only
+  # affects on-disk storage. The tsd FindZLIB.cmake module supplies a
+  # fetched static fallback when no system zlib is available.
+  project_link_libraries(INTERFACE tsd_ext_zlib)
+  project_compile_definitions(INTERFACE NANOVDB_USE_ZIP)
+endif()

@@ -7,6 +7,7 @@
 #include "tsd/core/FlatMap.hpp"
 #include "tsd/scene/Scene.hpp"
 // std
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -72,6 +73,7 @@ void import_HSMESH(Scene &scene, tsd::animation::AnimationManager &animMgr, cons
 void import_NBODY(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {}, bool useDefaultMaterial = false);
 void import_OBJ(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {}, bool useDefaultMaterial = false);
 void import_PDB(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {});
+void import_PBRT(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {});
 void import_PLY(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {});
 void import_POINTSBIN(Scene &scene, tsd::animation::AnimationManager &animMgr, const std::vector<std::string> &filepaths, LayerNodeRef location = {});
 void import_PT(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {});
@@ -81,7 +83,7 @@ void import_SWC(Scene &scene, tsd::animation::AnimationManager &animMgr, const c
 void import_TRK(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {});
 void import_USD(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {});
 void import_VTP(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filepath, LayerNodeRef location = {});
-void import_VTU(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filepath, LayerNodeRef location);
+void import_VTU(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filepath, LayerNodeRef location, std::optional<std::string> propertyName = std::nullopt);
 void import_XYZDP(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {});
 
 // Spatial field importers //
@@ -89,7 +91,7 @@ void import_XYZDP(Scene &scene, tsd::animation::AnimationManager &animMgr, const
 // Dispatch to the appropriate spatial field importer based on file extension.
 // Supports: .raw, .flash/.hdf5, .nvdb, .mhd, .vtu, .silo/.sil
 // Note: .vti is not supported here; use import_volume() for VTI files.
-SpatialFieldRef import_spatial_field(Scene &scene, const char *filename);
+SpatialFieldRef import_spatial_field(Scene &scene, const char *filename, std::optional<std::string> propertyName = std::nullopt);
 
 SpatialFieldRef import_RAW(Scene &scene, const char *filename);
 SpatialFieldRef import_FLASH(Scene &scene, const char *filename);
@@ -99,7 +101,7 @@ SpatialFieldRef import_VTI(Scene &scene,
     const char *filename,
     LayerNodeRef location = {},
     std::vector<SpatialFieldRef> *extraFields = nullptr);
-SpatialFieldRef import_VTU(Scene &scene, const char *filename);
+SpatialFieldRef import_VTU(Scene &scene, const char *filename, std::optional<std::string> propertyName = std::nullopt);
 SpatialFieldRef import_SILO(Scene &scene, const char *filename);
 
 // clang-format on
@@ -145,6 +147,7 @@ enum class ImporterType
   NBODY,
   OBJ,
   PDB,
+  PBRT,
   PLY,
   POINTSBIN_MULTIFILE,
   PT,

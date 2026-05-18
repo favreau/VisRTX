@@ -78,13 +78,37 @@ static T GetValueOrDefault(const tinygltf::Value &value,
   return defaultValue;
 }
 
+static int supportedTexCoordSet(int texCoord, const char *samplerName = nullptr)
+{
+  if (texCoord >= 0 && texCoord < 4)
+    return texCoord;
+
+  if (samplerName && samplerName[0] != '\0') {
+    logWarning(
+        "[import_GLTF] texture '%s' uses unsupported TEXCOORD_%d; using TEXCOORD_0",
+        samplerName,
+        texCoord);
+  } else {
+    logWarning(
+        "[import_GLTF] texture uses unsupported TEXCOORD_%d; using TEXCOORD_0",
+        texCoord);
+  }
+  return 0;
+}
+
+static std::string attributeNameForTexCoord(int texCoord)
+{
+  return "attribute"s + std::to_string(texCoord);
+}
+
 static SamplerRef importGLTFTexture(Scene &scene,
     const tinygltf::Model &model,
     int textureIndex,
     TextureCache &cache,
     bool isLinear = false,
     bool flipNormalMapY = false,
-    const char *samplerName = nullptr)
+    const char *samplerName = nullptr,
+    int texCoord = 0)
 {
   if (textureIndex < 0 || textureIndex >= model.textures.size())
     return {};
@@ -197,7 +221,9 @@ static SamplerRef importGLTFTexture(Scene &scene,
 
   auto sampler = scene.createObject<Sampler>(tokens::sampler::image2D);
   sampler->setParameterObject("image", *dataArray);
-  sampler->setParameter("inAttribute", "attribute0");
+  const auto inAttribute =
+      attributeNameForTexCoord(supportedTexCoordSet(texCoord, samplerName));
+  sampler->setParameter("inAttribute", inAttribute.c_str());
 
   // Apply sampler settings if available
   if (texture.sampler >= 0 && texture.sampler < model.samplers.size()) {
@@ -257,6 +283,14 @@ static SamplerRef importGLTFTexture(Scene &scene,
   return sampler;
 }
 
+static void applyNormalTextureScale(SamplerRef sampler, float scale)
+{
+  sampler->setParameter("outTransform",
+      mat4({scale, 0, 0, 0}, {0, scale, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}));
+  const float offset = 0.5f * (1.0f - scale);
+  sampler->setParameter("outOffset", float4(offset, offset, 0.0f, 0.0f));
+}
+
 static std::vector<MaterialRef> importGLTFMaterials(
     Scene &scene, const tinygltf::Model &model)
 {
@@ -291,7 +325,8 @@ static std::vector<MaterialRef> importGLTFMaterials(
             cache,
             false,
             false,
-            "baseColor")) {
+            "baseColor",
+            pbr.baseColorTexture.texCoord)) {
       // Make this an opaque color. Opacity is handled below.
       sampler->setParameter("outTransform",
           mat4({baseColorFactor.x, 0, 0, 0},
@@ -311,7 +346,8 @@ static std::vector<MaterialRef> importGLTFMaterials(
             cache,
             true,
             false,
-            "opacity")) {
+            "opacity",
+            pbr.baseColorTexture.texCoord)) {
       sampler->setParameter("outTransform",
           mat4({0, 0, 0, 0},
               {0, 0, 0, 0},
@@ -330,7 +366,8 @@ static std::vector<MaterialRef> importGLTFMaterials(
             cache,
             true,
             false,
-            "metallic")) {
+            "metallic",
+            pbr.metallicRoughnessTexture.texCoord)) {
       // Metallic is in the blue channel for glTF
       sampler->setParameter("outTransform",
           mat4({0, 0, 0, 0},
@@ -350,7 +387,8 @@ static std::vector<MaterialRef> importGLTFMaterials(
             cache,
             true,
             false,
-            "roughness")) {
+            "roughness",
+            pbr.metallicRoughnessTexture.texCoord)) {
       // Roughness is in the green channel for glTF
       sampler->setParameter("outTransform",
           mat4({0, 0, 0, 0},
@@ -369,13 +407,10 @@ static std::vector<MaterialRef> importGLTFMaterials(
             cache,
             true,
             false,
-            "normal")) {
+            "normal",
+            gltfMaterial.normalTexture.texCoord)) {
       float normalScale = gltfMaterial.normalTexture.scale;
-      sampler->setParameter("outTransform",
-          mat4({normalScale, 0, 0, 0},
-              {0, normalScale, 0, 0},
-              {0, 0, 1, 0}, // Don't scale Z (blue) channel
-              {0, 0, 0, 1}));
+      applyNormalTextureScale(sampler, normalScale);
       material->setParameterObject("normal", *sampler);
     }
 
@@ -386,7 +421,8 @@ static std::vector<MaterialRef> importGLTFMaterials(
             cache,
             true,
             false,
-            "occlusion")) {
+            "occlusion",
+            gltfMaterial.occlusionTexture.texCoord)) {
       material->setParameterObject("occlusion", *sampler);
     }
 
@@ -410,7 +446,8 @@ static std::vector<MaterialRef> importGLTFMaterials(
             cache,
             false,
             false,
-            "emissive")) {
+            "emissive",
+            gltfMaterial.emissiveTexture.texCoord)) {
       sampler->setParameter("outTransform",
           mat4({emissiveFactor.x, 0, 0, 0},
               {0, emissiveFactor.y, 0, 0},
@@ -448,13 +485,16 @@ static std::vector<MaterialRef> importGLTFMaterials(
       // Transmission texture
       auto transmissionTextureIndex = GetValueOrDefault(
           transmissionExt, -1, "transmissionTexture", "index");
+      auto transmissionTexCoord = GetValueOrDefault(
+          transmissionExt, 0, "transmissionTexture", "texCoord");
       if (auto sampler = importGLTFTexture(scene,
               model,
               transmissionTextureIndex,
               cache,
               true,
               false,
-              "transmission")) {
+              "transmission",
+              transmissionTexCoord)) {
         sampler->setParameter("outTransform",
             mat4({transmissionFactor, 0, 0, 0},
                 {0, 0, 0, 0},
@@ -492,13 +532,16 @@ static std::vector<MaterialRef> importGLTFMaterials(
       // Thickness texture
       auto thicknessTextureIndex =
           GetValueOrDefault(volumeExt, -1, "thicknessTexture", "index");
+      auto thicknessTexCoord =
+          GetValueOrDefault(volumeExt, 0, "thicknessTexture", "texCoord");
       if (auto sampler = importGLTFTexture(scene,
               model,
               thicknessTextureIndex,
               cache,
               true,
               false,
-              "thickness")) {
+              "thickness",
+              thicknessTexCoord)) {
         sampler->setParameter("outTransform",
             mat4({0, thicknessFactor, 0, 0},
                 {0, 0, 0, 0},
@@ -539,13 +582,16 @@ static std::vector<MaterialRef> importGLTFMaterials(
       // Clearcoat texture
       auto clearcoatTextureIndex =
           GetValueOrDefault(clearcoatExt, -1, "clearcoatTexture", "index");
+      auto clearcoatTexCoord =
+          GetValueOrDefault(clearcoatExt, 0, "clearcoatTexture", "texCoord");
       if (auto sampler = importGLTFTexture(scene,
               model,
               clearcoatTextureIndex,
               cache,
               true,
               false,
-              "clearcoat")) {
+              "clearcoat",
+              clearcoatTexCoord)) {
         sampler->setParameter("outTransform",
             mat4({clearcoatFactor, 0, 0, 0},
                 {0, 0, 0, 0},
@@ -563,13 +609,16 @@ static std::vector<MaterialRef> importGLTFMaterials(
       // Clearcoat roughness texture
       auto clearcoatRoughnessTextureIndex = GetValueOrDefault(
           clearcoatExt, -1, "clearcoatRoughnessTexture", "index");
+      auto clearcoatRoughnessTexCoord = GetValueOrDefault(
+          clearcoatExt, 0, "clearcoatRoughnessTexture", "texCoord");
       if (auto sampler = importGLTFTexture(scene,
               model,
               clearcoatRoughnessTextureIndex,
               cache,
               true,
               false,
-              "clearcoatRoughness")) {
+              "clearcoatRoughness",
+              clearcoatRoughnessTexCoord)) {
         sampler->setParameter("outTransform",
             mat4({0, 0, 0, 0},
                 {clearcoatRoughnessFactor, 0, 0, 0},
@@ -583,13 +632,19 @@ static std::vector<MaterialRef> importGLTFMaterials(
       // Clearcoat normal texture
       auto clearcoatNormalTextureIndex = GetValueOrDefault(
           clearcoatExt, -1, "clearcoatNormalTexture", "index");
+      float clearcoatNormalScale = GetValueOrDefault(
+          clearcoatExt, 1.0f, "clearcoatNormalTexture", "scale");
+      auto clearcoatNormalTexCoord = GetValueOrDefault(
+          clearcoatExt, 0, "clearcoatNormalTexture", "texCoord");
       if (auto sampler = importGLTFTexture(scene,
               model,
               clearcoatNormalTextureIndex,
               cache,
               true,
               false,
-              "clearcoatNormal")) {
+              "clearcoatNormal",
+              clearcoatNormalTexCoord)) {
+        applyNormalTextureScale(sampler, clearcoatNormalScale);
         material->setParameterObject("clearcoatNormal", *sampler);
       }
     } else {
@@ -610,8 +665,16 @@ static std::vector<MaterialRef> importGLTFMaterials(
 
       auto specularTextureIndex =
           GetValueOrDefault(specularExt, -1, "specularTexture", "index");
-      if (auto sampler = importGLTFTexture(
-              scene, model, specularTextureIndex, cache, true)) {
+      auto specularTexCoord =
+          GetValueOrDefault(specularExt, 0, "specularTexture", "texCoord");
+      if (auto sampler = importGLTFTexture(scene,
+              model,
+              specularTextureIndex,
+              cache,
+              true,
+              false,
+              "specular",
+              specularTexCoord)) {
         sampler->setParameter("outTransform",
             mat4({0, 0, 0, 0},
                 {0, 0, 0, 0},
@@ -629,13 +692,16 @@ static std::vector<MaterialRef> importGLTFMaterials(
 
       auto specularColorTextureIndex =
           GetValueOrDefault(specularExt, -1, "specularColorTexture", "index");
+      auto specularColorTexCoord =
+          GetValueOrDefault(specularExt, 0, "specularColorTexture", "texCoord");
       if (auto sampler = importGLTFTexture(scene,
               model,
               specularColorTextureIndex,
               cache,
               false,
               false,
-              "specularColor")) {
+              "specularColor",
+              specularColorTexCoord)) {
         sampler->setParameter("outTransform",
             mat4({specularColorFactor.x, 0, 0, 0},
                 {0, specularColorFactor.y, 0, 0},
@@ -664,13 +730,16 @@ static std::vector<MaterialRef> importGLTFMaterials(
       // Sheen color texture
       auto sheenColorTextureIndex =
           GetValueOrDefault(sheenExt, -1, "sheenColorTexture", "index");
+      auto sheenColorTexCoord =
+          GetValueOrDefault(sheenExt, 0, "sheenColorTexture", "texCoord");
       if (auto sampler = importGLTFTexture(scene,
               model,
               sheenColorTextureIndex,
               cache,
               false,
               false,
-              "sheenColor")) {
+              "sheenColor",
+              sheenColorTexCoord)) {
         sampler->setParameter("outTransform",
             mat4({sheenColorFactor.x, 0, 0, 0},
                 {0, sheenColorFactor.y, 0, 0},
@@ -688,13 +757,16 @@ static std::vector<MaterialRef> importGLTFMaterials(
       // Sheen roughness texture
       auto sheenRoughnessTextureIndex =
           GetValueOrDefault(sheenExt, -1, "sheenRoughnessTexture", "index");
+      auto sheenRoughnessTexCoord =
+          GetValueOrDefault(sheenExt, 0, "sheenRoughnessTexture", "texCoord");
       if (auto sampler = importGLTFTexture(scene,
               model,
               sheenRoughnessTextureIndex,
               cache,
               true,
               false,
-              "sheenRoughness")) {
+              "sheenRoughness",
+              sheenRoughnessTexCoord)) {
         sampler->setParameter("outTransform",
             mat4({0, 0, 0, 0},
                 {0, 0, 0, 0},
@@ -723,13 +795,16 @@ static std::vector<MaterialRef> importGLTFMaterials(
       // Iridescence texture
       auto iridescenceTextureIndex =
           GetValueOrDefault(iridescenceExt, -1, "iridescenceTexture", "index");
+      auto iridescenceTexCoord = GetValueOrDefault(
+          iridescenceExt, 0, "iridescenceTexture", "texCoord");
       if (auto sampler = importGLTFTexture(scene,
               model,
               iridescenceTextureIndex,
               cache,
               true,
               false,
-              "iridescence")) {
+              "iridescence",
+              iridescenceTexCoord)) {
         sampler->setParameter("outTransform",
             mat4({iridescenceFactor, 0, 0, 0},
                 {0, 0, 0, 0},
@@ -756,13 +831,16 @@ static std::vector<MaterialRef> importGLTFMaterials(
       // Iridescence thickness texture
       auto iridescenceThicknessTextureIndex = GetValueOrDefault(
           iridescenceExt, -1, "iridescenceThicknessTexture", "index");
+      auto iridescenceThicknessTexCoord = GetValueOrDefault(
+          iridescenceExt, 0, "iridescenceThicknessTexture", "texCoord");
       if (auto sampler = importGLTFTexture(scene,
               model,
               iridescenceThicknessTextureIndex,
               cache,
               true,
               false,
-              "iridescenceThickness")) {
+              "iridescenceThickness",
+              iridescenceThicknessTexCoord)) {
         sampler->setParameter("outTransform",
             mat4({iridescenceThicknessMaximum - iridescenceThicknessMinimum,
                      0,
@@ -793,54 +871,114 @@ static std::vector<MaterialRef> importGLTFMaterials(
 }
 
 template <typename T>
-static const T *getAccessorData(const tinygltf::Model &model, int accessorIndex)
-{
-  if (accessorIndex < 0 || accessorIndex >= model.accessors.size())
-    return nullptr;
-
-  const auto &accessor = model.accessors[accessorIndex];
-  const auto &bufferView = model.bufferViews[accessor.bufferView];
-  const auto &buffer = model.buffers[bufferView.buffer];
-
-  return reinterpret_cast<const T *>(
-      buffer.data.data() + bufferView.byteOffset + accessor.byteOffset);
-}
-
-template <typename T>
-static void copyStridedData(
+static bool copyStridedData(
     const tinygltf::Model &model, int accessorIndex, T *outData)
 {
   if (accessorIndex < 0 || accessorIndex >= model.accessors.size())
-    return;
+    return false;
 
   const auto &accessor = model.accessors[accessorIndex];
+
+  // Refuse to copy when the accessor's element layout does not match the
+  // template type.
+  const size_t numComponents = tinygltf::GetNumComponentsInType(accessor.type);
+  const size_t componentSize =
+      tinygltf::GetComponentSizeInBytes(accessor.componentType);
+  const size_t bytesPerElement = numComponents * componentSize;
+  if (bytesPerElement != sizeof(T)) {
+    logWarning(
+        "[import_GLTF] accessor %d element size (%zu) does not match "
+        "destination size (%zu); skipping copy",
+        accessorIndex,
+        bytesPerElement,
+        sizeof(T));
+    return false;
+  }
+
   const auto &bufferView = model.bufferViews[accessor.bufferView];
   const auto &buffer = model.buffers[bufferView.buffer];
 
   const uint8_t *sourceData =
       buffer.data.data() + bufferView.byteOffset + accessor.byteOffset;
 
-  // Check if data is interleaved (has a stride)
   if (bufferView.byteStride > 0) {
-    // Calculate the size of one element based on accessor type and
-    // component type
-    size_t elementSize = tinygltf::GetNumComponentsInType(accessor.type);
-    size_t componentSize =
-        tinygltf::GetComponentSizeInBytes(accessor.componentType);
-
-    size_t bytesPerElement = elementSize * componentSize;
-
-    // Copy data with stride
     for (size_t i = 0; i < accessor.count; ++i) {
       std::memcpy(reinterpret_cast<uint8_t *>(outData) + i * bytesPerElement,
           sourceData + i * bufferView.byteStride,
           bytesPerElement);
     }
   } else {
-    // Data is tightly packed, direct copy
-    size_t bytesToCopy = accessor.count * sizeof(T);
-    std::memcpy(outData, sourceData, bytesToCopy);
+    std::memcpy(outData, sourceData, accessor.count * bytesPerElement);
   }
+  return true;
+}
+
+template <typename T>
+static std::vector<T> copyAccessorData(
+    const tinygltf::Model &model, int accessorIndex)
+{
+  if (accessorIndex < 0 || accessorIndex >= model.accessors.size())
+    return {};
+
+  const auto &accessor = model.accessors[accessorIndex];
+  std::vector<T> data(accessor.count);
+  if (!copyStridedData(model, accessorIndex, data.data()))
+    return {};
+  return data;
+}
+
+template <typename INDEX_T>
+static void copyIndexTriplets(
+    const tinygltf::Model &model, int accessorIndex, uint3 *outIndices)
+{
+  auto indexData = copyAccessorData<INDEX_T>(model, accessorIndex);
+
+  // Drive the loop from the actual returned size so a validation failure
+  // (empty vector) doesn't OOB-index.
+  for (size_t i = 0; i < indexData.size() / 3; ++i) {
+    outIndices[i] =
+        uint3(indexData[i * 3], indexData[i * 3 + 1], indexData[i * 3 + 2]);
+  }
+}
+
+template <typename INDEX_T>
+static void appendIndexTriplets(const tinygltf::Model &model,
+    int accessorIndex,
+    std::vector<uint3> &indices)
+{
+  auto indexData = copyAccessorData<INDEX_T>(model, accessorIndex);
+  const size_t triplets = indexData.size() / 3;
+  indices.reserve(indices.size() + triplets);
+
+  for (size_t i = 0; i < triplets; ++i) {
+    indices.push_back(
+        uint3(indexData[i * 3], indexData[i * 3 + 1], indexData[i * 3 + 2]));
+  }
+}
+
+static int tangentTexCoordSetForPrimitive(
+    const tinygltf::Model &model, const tinygltf::Primitive &primitive)
+{
+  if (primitive.material < 0 || primitive.material >= model.materials.size())
+    return 0;
+
+  const auto &material = model.materials[primitive.material];
+  if (material.normalTexture.index >= 0)
+    return supportedTexCoordSet(material.normalTexture.texCoord, "normal");
+
+  const auto clearcoatIt = material.extensions.find("KHR_materials_clearcoat");
+  if (clearcoatIt == material.extensions.end())
+    return 0;
+
+  const auto &clearcoatExt = clearcoatIt->second;
+  const auto clearcoatNormalTextureIndex =
+      GetValueOrDefault(clearcoatExt, -1, "clearcoatNormalTexture", "index");
+  if (clearcoatNormalTextureIndex < 0)
+    return 0;
+
+  const auto clearcoatNormalTexCoord =
+      GetValueOrDefault(clearcoatExt, 0, "clearcoatNormalTexture", "texCoord");
+  return supportedTexCoordSet(clearcoatNormalTexCoord, "clearcoatNormal");
 }
 
 static std::vector<SurfaceRef> importGLTFMeshes(Scene &scene,
@@ -851,8 +989,11 @@ static std::vector<SurfaceRef> importGLTFMeshes(Scene &scene,
 
   for (const auto &mesh : model.meshes) {
     for (const auto &primitive : mesh.primitives) {
+      auto skipPrimitive = [&]() { surfaces.push_back({}); };
+
       if (primitive.mode != TINYGLTF_MODE_TRIANGLES) {
         logWarning("[import_GLTF] only triangle primitives are supported");
+        skipPrimitive();
         continue;
       }
 
@@ -862,6 +1003,7 @@ static std::vector<SurfaceRef> importGLTFMeshes(Scene &scene,
       auto posIt = primitive.attributes.find("POSITION");
       if (posIt == primitive.attributes.end()) {
         logWarning("[import_GLTF] primitive missing POSITION attribute");
+        skipPrimitive();
         continue;
       }
 
@@ -869,6 +1011,7 @@ static std::vector<SurfaceRef> importGLTFMeshes(Scene &scene,
       if (posAccessor.type != TINYGLTF_TYPE_VEC3
           || posAccessor.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT) {
         logWarning("[import_GLTF] unsupported position data format");
+        skipPrimitive();
         continue;
       }
 
@@ -895,8 +1038,13 @@ static std::vector<SurfaceRef> importGLTFMeshes(Scene &scene,
       }
 
       // Texture coordinate data
-      auto texCoordIt = primitive.attributes.find("TEXCOORD_0");
-      if (texCoordIt != primitive.attributes.end()) {
+      for (int texCoordSet = 0; texCoordSet < 4; ++texCoordSet) {
+        const std::string gltfAttributeName =
+            "TEXCOORD_"s + std::to_string(texCoordSet);
+        auto texCoordIt = primitive.attributes.find(gltfAttributeName);
+        if (texCoordIt == primitive.attributes.end())
+          continue;
+
         const auto &texCoordAccessor = model.accessors[texCoordIt->second];
         if (texCoordAccessor.type == TINYGLTF_TYPE_VEC2
             && texCoordAccessor.componentType
@@ -906,8 +1054,11 @@ static std::vector<SurfaceRef> importGLTFMeshes(Scene &scene,
           auto *texCoordDataOut = vertexTexCoordArray->mapAs<float2>();
           copyStridedData(model, texCoordIt->second, texCoordDataOut);
           vertexTexCoordArray->unmap();
+
+          const std::string attributeName =
+              "vertex."s + attributeNameForTexCoord(texCoordSet);
           geometry->setParameterObject(
-              "vertex.attribute0", *vertexTexCoordArray);
+              attributeName.c_str(), *vertexTexCoordArray);
         }
       }
 
@@ -954,73 +1105,31 @@ static std::vector<SurfaceRef> importGLTFMeshes(Scene &scene,
       if (primitive.indices >= 0) {
         const auto &indexAccessor = model.accessors[primitive.indices];
 
-        if (indexAccessor.componentType
-            == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
-          auto indexArray =
-              scene.createArray(ANARI_UINT32_VEC3, indexAccessor.count / 3);
-          auto *outIndices = indexArray->mapAs<uint3>();
-
-          // Check if we need to handle strided data
-          const auto &indexBufferView =
-              model.bufferViews[indexAccessor.bufferView];
-          if (indexBufferView.byteStride > 0
-              && indexBufferView.byteStride != sizeof(uint16_t)) {
-            // Handle strided indices
-            auto tempIndices = std::vector<uint16_t>(indexAccessor.count);
-            copyStridedData(model, primitive.indices, tempIndices.data());
-
-            for (size_t i = 0; i < indexAccessor.count / 3; ++i) {
-              outIndices[i] = uint3(tempIndices[i * 3],
-                  tempIndices[i * 3 + 1],
-                  tempIndices[i * 3 + 2]);
-            }
-          } else {
-            // Direct access for tightly packed data
-            const uint16_t *inIndices =
-                getAccessorData<uint16_t>(model, primitive.indices);
-            for (size_t i = 0; i < indexAccessor.count / 3; ++i) {
-              outIndices[i] = uint3(
-                  inIndices[i * 3], inIndices[i * 3 + 1], inIndices[i * 3 + 2]);
-            }
-          }
-
-          indexArray->unmap();
-          geometry->setParameterObject("primitive.index", *indexArray);
-        } else if (indexAccessor.componentType
-            == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
-          auto indexArray =
-              scene.createArray(ANARI_UINT32_VEC3, indexAccessor.count / 3);
-
-          // Check if we need to handle strided data
-          const auto &indexBufferView =
-              model.bufferViews[indexAccessor.bufferView];
-          if (indexBufferView.byteStride > 0
-              && indexBufferView.byteStride != sizeof(uint32_t)) {
-            // Handle strided indices
-            auto tempIndices = std::vector<uint32_t>(indexAccessor.count);
-            copyStridedData(model, primitive.indices, tempIndices.data());
-            auto *outIndices = indexArray->mapAs<uint3>();
-
-            for (size_t i = 0; i < indexAccessor.count / 3; ++i) {
-              outIndices[i] = uint3(tempIndices[i * 3],
-                  tempIndices[i * 3 + 1],
-                  tempIndices[i * 3 + 2]);
-            }
-            indexArray->unmap();
-          } else {
-            // Direct copy for tightly packed data
-            const uint32_t *indexData =
-                getAccessorData<uint32_t>(model, primitive.indices);
-            auto *outIndices = indexArray->mapAs<uint3>();
-            std::memcpy(
-                outIndices, indexData, indexAccessor.count * sizeof(uint32_t));
-            indexArray->unmap();
-          }
-          geometry->setParameterObject("primitive.index", *indexArray);
-        } else {
+        if (indexAccessor.componentType != TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE
+            && indexAccessor.componentType
+                != TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT
+            && indexAccessor.componentType
+                != TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
           logWarning("[import_GLTF] unsupported index data type");
+          skipPrimitive();
           continue;
         }
+
+        auto indexArray =
+            scene.createArray(ANARI_UINT32_VEC3, indexAccessor.count / 3);
+        auto *outIndices = indexArray->mapAs<uint3>();
+
+        if (indexAccessor.componentType
+            == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE)
+          copyIndexTriplets<uint8_t>(model, primitive.indices, outIndices);
+        else if (indexAccessor.componentType
+            == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
+          copyIndexTriplets<uint16_t>(model, primitive.indices, outIndices);
+        else
+          copyIndexTriplets<uint32_t>(model, primitive.indices, outIndices);
+
+        indexArray->unmap();
+        geometry->setParameterObject("primitive.index", *indexArray);
       }
 
       std::string geometryName = mesh.name + "_primitive_"
@@ -1033,31 +1142,35 @@ static std::vector<SurfaceRef> importGLTFMeshes(Scene &scene,
         // Check if we have all the required data for tangent calculation
         auto posIt = primitive.attributes.find("POSITION");
         auto normalIt = primitive.attributes.find("NORMAL");
-        auto texCoordIt = primitive.attributes.find("TEXCOORD_0");
+        const int tangentTexCoordSet =
+            tangentTexCoordSetForPrimitive(model, primitive);
+        const std::string tangentTexCoordAttribute =
+            "TEXCOORD_"s + std::to_string(tangentTexCoordSet);
+        auto texCoordIt = primitive.attributes.find(tangentTexCoordAttribute);
 
         if (posIt != primitive.attributes.end()
-            && normalIt != primitive.attributes.end()
             && texCoordIt != primitive.attributes.end()) {
           // Get the accessors
           const auto &posAccessor = model.accessors[posIt->second];
-          const auto &normalAccessor = model.accessors[normalIt->second];
           const auto &texCoordAccessor = model.accessors[texCoordIt->second];
+          const bool hasUsableNormals = normalIt != primitive.attributes.end()
+              && model.accessors[normalIt->second].type == TINYGLTF_TYPE_VEC3
+              && model.accessors[normalIt->second].componentType
+                  == TINYGLTF_COMPONENT_TYPE_FLOAT;
 
           // Verify we have the right data types
           if (posAccessor.type == TINYGLTF_TYPE_VEC3
               && posAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT
-              && normalAccessor.type == TINYGLTF_TYPE_VEC3
-              && normalAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT
               && texCoordAccessor.type == TINYGLTF_TYPE_VEC2
               && texCoordAccessor.componentType
                   == TINYGLTF_COMPONENT_TYPE_FLOAT) {
-            // Get the data
-            const float3 *positions =
-                getAccessorData<float3>(model, posIt->second);
-            const float3 *normals =
-                getAccessorData<float3>(model, normalIt->second);
-            const float2 *texCoords =
-                getAccessorData<float2>(model, texCoordIt->second);
+            // Get stride-aware attribute data for tangent reconstruction.
+            auto positions = copyAccessorData<float3>(model, posIt->second);
+            auto normals = hasUsableNormals
+                ? copyAccessorData<float3>(model, normalIt->second)
+                : std::vector<float3>{};
+            auto texCoords =
+                copyAccessorData<float2>(model, texCoordIt->second);
 
             // Get or generate indices
             std::vector<uint3> indices;
@@ -1065,25 +1178,16 @@ static std::vector<SurfaceRef> importGLTFMeshes(Scene &scene,
               // Indexed geometry
               const auto &indexAccessor = model.accessors[primitive.indices];
               if (indexAccessor.componentType
+                  == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
+                appendIndexTriplets<uint8_t>(model, primitive.indices, indices);
+              } else if (indexAccessor.componentType
                   == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
-                const uint16_t *indexData =
-                    getAccessorData<uint16_t>(model, primitive.indices);
-                indices.reserve(indexAccessor.count / 3);
-                for (size_t i = 0; i < indexAccessor.count / 3; ++i) {
-                  indices.push_back(uint3(indexData[i * 3],
-                      indexData[i * 3 + 1],
-                      indexData[i * 3 + 2]));
-                }
+                appendIndexTriplets<uint16_t>(
+                    model, primitive.indices, indices);
               } else if (indexAccessor.componentType
                   == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
-                const uint32_t *indexData =
-                    getAccessorData<uint32_t>(model, primitive.indices);
-                indices.reserve(indexAccessor.count / 3);
-                for (size_t i = 0; i < indexAccessor.count / 3; ++i) {
-                  indices.push_back(uint3(indexData[i * 3],
-                      indexData[i * 3 + 1],
-                      indexData[i * 3 + 2]));
-                }
+                appendIndexTriplets<uint32_t>(
+                    model, primitive.indices, indices);
               }
             } else {
               // Non-indexed geometry (triangle soup) - generate sequential
@@ -1098,23 +1202,31 @@ static std::vector<SurfaceRef> importGLTFMeshes(Scene &scene,
 
             if (!indices.empty()) {
               // Create tangent array and compute tangents
+              const bool outputFaceVaryingTangents = primitive.indices >= 0;
+              const size_t tangentCount = outputFaceVaryingTangents
+                  ? indices.size() * 3
+                  : posAccessor.count;
               auto vertexTangentArray =
-                  scene.createArray(ANARI_FLOAT32_VEC4, posAccessor.count);
+                  scene.createArray(ANARI_FLOAT32_VEC4, tangentCount);
               auto *tangents = vertexTangentArray->mapAs<float4>();
 
               bool success = calcTangentsForTriangleMesh(indices.data(),
-                  positions,
-                  normals,
-                  texCoords,
+                  positions.data(),
+                  normals.empty() ? nullptr : normals.data(),
+                  texCoords.data(),
                   tangents,
                   indices.size(),
-                  posAccessor.count);
+                  posAccessor.count,
+                  false,
+                  outputFaceVaryingTangents);
 
               vertexTangentArray->unmap();
 
               if (success) {
-                geometry->setParameterObject(
-                    "vertex.tangent", *vertexTangentArray);
+                geometry->setParameterObject(outputFaceVaryingTangents
+                        ? "faceVarying.tangent"
+                        : "vertex.tangent",
+                    *vertexTangentArray);
                 logInfo(
                     "[import_GLTF] Computed tangents for geometry '%s' with %zu vertices and %zu triangles",
                     geometryName.c_str(),
@@ -1133,10 +1245,9 @@ static std::vector<SurfaceRef> importGLTFMeshes(Scene &scene,
           }
         } else {
           logDebug(
-              "[import_GLTF] Skipping tangent computation for geometry '%s': missing required attributes (position=%s, normal=%s, texcoord=%s)",
+              "[import_GLTF] Skipping tangent computation for geometry '%s': missing required attributes (position=%s, texcoord=%s)",
               geometryName.c_str(),
               (posIt != primitive.attributes.end()) ? "yes" : "no",
-              (normalIt != primitive.attributes.end()) ? "yes" : "no",
               (texCoordIt != primitive.attributes.end()) ? "yes" : "no");
         }
       }
@@ -1310,7 +1421,7 @@ static void populateGLTFLayer(Scene &scene,
       }
       surfaceIndex += i;
 
-      if (surfaceIndex < surfaces.size()) {
+      if (surfaceIndex < surfaces.size() && surfaces[surfaceIndex]) {
         auto surface = surfaces[surfaceIndex];
         scene.insertChildObjectNode(nodeRef, surface, surface->name().c_str());
       }

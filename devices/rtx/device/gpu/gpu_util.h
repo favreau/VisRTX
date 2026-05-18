@@ -34,6 +34,7 @@
 #include "cameraCreateRay.h"
 #include "gpu/gpu_debug.h"
 #include "gpu_objects.h"
+#include "shadingState.h"
 // optix
 #include <optix_device.h>
 // std
@@ -44,6 +45,7 @@
 #include <glm/packing.hpp>
 // cuda
 #include <vector_types.h>
+#include "gpu_tonemap.h"
 
 #ifndef __CUDACC__
 #error "gpu_util.h can only be included in device code"
@@ -193,18 +195,14 @@ VISRTX_DEVICE vec3 boolColor(bool pred)
   return pred ? vec3(0.f, 1.f, 0.f) : vec3(1.f, 0.f, 0.f);
 }
 
+// Uniform on the unit sphere via Marsaglia (1972); pdf = 1/(4*pi).
+// Downstream uses: isotropic volume scatter, AO/bounce hemisphere base.
 VISRTX_DEVICE vec3 randomDir(RandState &rs)
 {
-#if 0
-  const float r1 = curand_uniform(&rs);
-  const float r2 = curand_uniform(&rs);
-  return normalize(vec3(cos(2 * float(M_PI) * r1) * sqrt(1 - (r2 * r2)),
-      sin(2 * float(M_PI) * r1) * sqrt(1 - (r2 * r2)),
-      r2 * r2));
-#else
-  const auto r = curand_uniform4(&rs);
-  return normalize((2.f * vec3(r.x, r.y, r.z)) - vec3(1.f));
-#endif
+  const float cosTheta = 1.f - 2.f * curand_uniform(&rs);
+  const float sinTheta = sqrtf(fmaxf(0.f, 1.f - cosTheta * cosTheta));
+  const float phi = 2.f * float(M_PI) * curand_uniform(&rs);
+  return vec3(sinTheta * cosf(phi), sinTheta * sinf(phi), cosTheta);
 }
 
 VISRTX_DEVICE vec3 randomDir(RandState &rs, const vec3 &normal)
@@ -226,14 +224,15 @@ VISRTX_DEVICE mat3 computeOrthonormalBasis(const vec3 &normal)
   return mat3(u, v, normal);
 }
 
+// Cosine-weighted hemisphere sample (Malley's method); pdf = cos(theta)/pi.
 VISRTX_DEVICE vec3 sampleHemisphere(RandState &rs, const vec3 &normal)
 {
-  auto z = curand_uniform(&rs);
-  auto r = sqrtf(1.f - sqrt(z));
-  auto phi = 2.0f * float(M_PI) * curand_uniform(&rs);
-
-  auto sample = vec3(r * cos(phi), r * sin(phi), z);
-
+  const float u1 = curand_uniform(&rs);
+  const float u2 = curand_uniform(&rs);
+  const float r = sqrtf(u1);
+  const float z = sqrtf(fmaxf(0.f, 1.f - r * r));
+  const float phi = 2.f * float(M_PI) * u2;
+  const vec3 sample(r * cosf(phi), r * sinf(phi), z);
   return computeOrthonormalBasis(normal) * sample;
 }
 
@@ -250,9 +249,90 @@ VISRTX_DEVICE vec3 sampleUnitSphere(RandState &rs, const vec3 &normal)
 
 #define ulpEpsilon 0x1.fp-21
 
-VISRTX_DEVICE float epsilonFrom(const vec3 &P, const vec3 &dir, float t)
+VISRTX_DEVICE float epsilonFrom(const vec3 &P)
 {
-  return glm::compMax(vec4(abs(P), glm::compMax(abs(dir)) * t)) * ulpEpsilon;
+  return glm::compMax(abs(P)) * ulpEpsilon;
+}
+
+// Hanika's shadow-terminator fix (Ray Tracing Gems II, ch. 4): lifts a
+// triangle hit point onto the smooth surface implied by per-vertex normals.
+// Without this, grazing-angle shadow rays self-occlude on the planar facet
+// and produce dark bands shaped like the underlying tessellation. All inputs
+// must share a coordinate space.
+VISRTX_DEVICE vec3 shadowTerminatorOffset(const vec3 &P,
+    const vec3 &v0,
+    const vec3 &v1,
+    const vec3 &v2,
+    const vec3 &n0,
+    const vec3 &n1,
+    const vec3 &n2,
+    const vec3 &bary)
+{
+  const float du = glm::dot(P - v0, n0);
+  const float dv = glm::dot(P - v1, n1);
+  const float dw = glm::dot(P - v2, n2);
+  const vec3 lu = du < 0.f ? -du * n0 : vec3(0.f);
+  const vec3 lv = dv < 0.f ? -dv * n1 : vec3(0.f);
+  const vec3 lw = dw < 0.f ? -dw * n2 : vec3(0.f);
+  return P + bary.x * lu + bary.y * lv + bary.z * lw;
+}
+
+// World-space hit position lifted onto the smooth surface implied by
+// per-vertex normals (Hanika shadow-terminator fix). Use this as the origin
+// for direct-light/AO shadow rays so grazing-angle queries do not self-shadow
+// the planar facet. Do NOT use it for path-continuation rays — transmission
+// especially needs the original facet point, since the smoothed point can sit
+// far enough above the facet that an "into-the-surface" offset still ends up
+// outside the volume.
+VISRTX_DEVICE vec3 shadingHitpoint(const SurfaceHit &hit)
+{
+  if (hit.geometry == nullptr || hit.geometry->type != GeometryType::TRIANGLE)
+    return hit.hitpoint;
+
+  const auto &tri = hit.geometry->tri;
+  if (tri.vertexNormalsFV == nullptr && tri.vertexNormals == nullptr)
+    return hit.hitpoint;
+
+  const uvec3 idx = tri.indices ? tri.indices[hit.primID]
+                                : uvec3(0, 1, 2) + hit.primID * 3;
+  const vec3 v0 = tri.vertices[idx.x];
+  const vec3 v1 = tri.vertices[idx.y];
+  const vec3 v2 = tri.vertices[idx.z];
+
+  vec3 n0, n1, n2;
+  if (tri.vertexNormalsFV != nullptr) {
+    const uvec3 nidx = uvec3(0, 1, 2) + hit.primID * 3;
+    n0 = tri.vertexNormalsFV[nidx.x];
+    n1 = tri.vertexNormalsFV[nidx.y];
+    n2 = tri.vertexNormalsFV[nidx.z];
+  } else {
+    n0 = tri.vertexNormals[idx.x];
+    n1 = tri.vertexNormals[idx.y];
+    n2 = tri.vertexNormals[idx.z];
+  }
+
+  // Hanika's tangent-plane projection assumes unit normals; user data is
+  // not guaranteed to be normalized.
+  n0 = normalize(n0);
+  n1 = normalize(n1);
+  n2 = normalize(n2);
+
+  // populateHit.h flips hit.Ng/Ns for back-face hits so they point toward
+  // the ray origin. The per-vertex normals here are still in the original
+  // outward orientation; flip them too so the smooth surface bulges onto
+  // the ray-origin side of the facet (otherwise Hanika lifts P away from
+  // the ray origin and the trailing `+ Ng * epsilon` can land below the
+  // facet).
+  if (!hit.isFrontFace) {
+    n0 = -n0;
+    n1 = -n1;
+    n2 = -n2;
+  }
+
+  const vec3 Plocal = xfmPoint(hit.worldToObject, hit.hitpoint);
+  const vec3 Psmooth =
+      shadowTerminatorOffset(Plocal, v0, v1, v2, n0, n1, n2, hit.uvw);
+  return xfmPoint(hit.objectToWorld, Psmooth);
 }
 
 VISRTX_DEVICE bool pixelOutOfFrame(
@@ -271,6 +351,11 @@ VISRTX_DEVICE bool isMiddelPixel(
     const uvec2 &pixel, const FramebufferGPUData &fb)
 {
   return pixel.x == (fb.size.x / 2) && pixel.y == (fb.size.y / 2);
+}
+
+VISRTX_DEVICE bool continuesThroughSurface(const NextRay &nextRay)
+{
+  return (nextRay.flags & NEXT_RAY_CONTINUES_THROUGH_SURFACE) != 0u;
 }
 
 VISRTX_DEVICE vec3 sampleHDRI(const LightGPUData &ld, const vec2 &uv)
@@ -293,19 +378,11 @@ VISRTX_DEVICE vec3 sampleHDRI(const LightGPUData &ld, const vec3 &rayDir)
   return sampleHDRI(ld, vec2(u, v)) * ld.hdri.scale;
 }
 
-VISRTX_DEVICE vec4 getBackgroundImage(
-    const RendererGPUData &rd, const vec2 &loc)
-{
-  return rd.backgroundMode == BackgroundMode::COLOR
-      ? rd.background.color
-      : make_vec4(tex2D<::float4>(rd.background.texobj, loc.x, loc.y));
-}
-
-VISRTX_DEVICE vec4 getBackground(
-    const FrameGPUData &fd, const vec2 &loc, const vec3 &rayDir)
+VISRTX_DEVICE bool getBackgroundLight(
+    const FrameGPUData &fd, const vec3 &rayDir, vec3 &outRadiance)
 {
   // Accumulate contributions from all visible HDRI lights
-  vec3 hdriContribution = vec3(0.f);
+  outRadiance = vec3(0.f);
   bool hasVisibleHDRI = false;
 
   for (size_t i = 0; i < fd.world.numHdriLightInstances; i++) {
@@ -316,16 +393,12 @@ VISRTX_DEVICE vec4 getBackground(
       // For orthonormal matrices, inverse = transpose
       const mat3 xfmInv = glm::transpose(mat3(hdriLight.xfm));
       const vec3 localRayDir = xfmInv * rayDir;
-      hdriContribution += sampleHDRI(light, localRayDir);
+      outRadiance += sampleHDRI(light, localRayDir);
       hasVisibleHDRI = true;
     }
   }
 
-  if (hasVisibleHDRI)
-    return vec4(hdriContribution, 1.f);
-
-  // No visible HDRI, use background image/color
-  return getBackgroundImage(fd.renderer, loc);
+  return hasVisibleHDRI;
 }
 
 VISRTX_DEVICE uint32_t computeGeometryPrimId(const SurfaceHit &hit)
@@ -341,30 +414,6 @@ VISRTX_DEVICE uint32_t computeGeometryPrimId(const SurfaceHit &hit)
 ///////////////////////////////////////////////////////////////////////////////
 
 namespace detail {
-
-VISRTX_DEVICE
-vec3 tonemap(vec3 v)
-{
-  return v / (1.0f + max(0.0f, compMax(v)));
-}
-
-VISRTX_DEVICE
-vec3 inverseTonemap(vec3 v)
-{
-  return v / max(1e-12f, 1.f - compMax(v));
-}
-
-VISRTX_DEVICE
-vec4 tonemap(vec4 v)
-{
-  return vec4(tonemap(vec3(v)), v.w);
-}
-
-VISRTX_DEVICE
-vec4 inverseTonemap(vec4 v)
-{
-  return vec4(inverseTonemap(vec3(v)), v.w);
-}
 
 template <typename T>
 VISRTX_DEVICE void accumValue(T *arr, size_t idx, const T &v)
@@ -392,18 +441,6 @@ VISRTX_DEVICE uint32_t pixelIndex(
     const FramebufferGPUData &fb, const uvec2 &pixel)
 {
   return pixel.x + pixel.y * fb.size.x;
-}
-
-VISRTX_DEVICE void writeOutputColor(
-    const FramebufferGPUData &fb, const vec4 &color, const uint32_t idx)
-{
-  if (fb.format == FrameFormat::SRGB) {
-    fb.buffers.outColorUint[idx] =
-        glm::packUnorm4x8(glm::convertLinearToSRGB(color));
-  } else if (fb.format == FrameFormat::UINT)
-    fb.buffers.outColorUint[idx] = glm::packUnorm4x8(color);
-  else
-    fb.buffers.outColorVec4[idx] = color;
 }
 
 } // namespace detail
@@ -446,48 +483,16 @@ VISRTX_DEVICE void accumPixelSample(const FrameGPUData &frame,
     const uvec2 &pixel,
     const vec4 &color,
     const vec3 &albedo,
-    const vec3 &normal,
-    const int frameIDOffset = 0)
+    const vec3 &normal)
 {
   const auto &fb = frame.fb;
   const uint32_t idx = detail::pixelIndex(fb, pixel);
-  const auto frameID = fb.frameID + frameIDOffset;
 
-  // Conditionally apply tonemapping during accumulation
-  if (frame.renderer.tonemap)
-    detail::accumValue(
-        fb.buffers.colorAccumulation, idx, detail::tonemap(color));
-  else
-    detail::accumValue(fb.buffers.colorAccumulation, idx, color);
+  detail::accumValue(fb.buffers.colorAccumulation,
+      idx,
+      frame.renderer.fireflyFilter ? detail::tonemap(color) : color);
   detail::accumValue(fb.buffers.albedo, idx, albedo);
   detail::accumValue(fb.buffers.normal, idx, normal);
-
-  const auto accumColor = fb.buffers.colorAccumulation[idx];
-  // Conditionally apply inverse tonemapping on output
-  const float frameDivisor = float(fb.frameID + frameIDOffset + 1);
-  const auto normalizedColor = accumColor / frameDivisor;
-  const auto outputColor = frame.renderer.tonemap
-      ? detail::inverseTonemap(normalizedColor)
-      : normalizedColor;
-
-  detail::writeOutputColor(fb, outputColor, idx);
-
-  if (fb.checkerboardID == 0 && frameID == 0) {
-    auto adjPix = uvec2(pixel.x + 1, pixel.y + 0);
-    if (!pixelOutOfFrame(adjPix, fb)) {
-      detail::writeOutputColor(fb, outputColor, detail::pixelIndex(fb, adjPix));
-    }
-
-    adjPix = uvec2(pixel.x + 0, pixel.y + 1);
-    if (!pixelOutOfFrame(adjPix, fb)) {
-      detail::writeOutputColor(fb, outputColor, detail::pixelIndex(fb, adjPix));
-    }
-
-    adjPix = uvec2(pixel.x + 1, pixel.y + 1);
-    if (!pixelOutOfFrame(adjPix, fb)) {
-      detail::writeOutputColor(fb, outputColor, detail::pixelIndex(fb, adjPix));
-    }
-  }
 }
 
 } // namespace visrtx

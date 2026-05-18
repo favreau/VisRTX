@@ -9,6 +9,11 @@
 #include "tsd/io/importers.hpp"
 #include "tsd/io/importers/detail/importer_common.hpp"
 #include "tsd/scene/algorithms/computeScalarRange.hpp"
+// std
+#include <algorithm>
+#include <set>
+#include <string_view>
+
 #if TSD_USE_VTK
 // vtk
 #include <vtkCell.h>
@@ -26,6 +31,8 @@
 #include <vtkXMLUnstructuredGridReader.h>
 #endif
 
+using namespace std::string_view_literals;
+
 namespace tsd::io {
 
 #if TSD_USE_VTK
@@ -38,7 +45,29 @@ static bool isSurfaceCell(int type)
 static bool isVolumeCell(int type)
 {
   return type == VTK_TETRA || type == VTK_VOXEL || type == VTK_HEXAHEDRON
-      || type == VTK_WEDGE || type == VTK_PYRAMID;
+      || type == VTK_WEDGE || type == VTK_PYRAMID || type == VTK_POLYHEDRON;
+}
+
+// Bookkeeping arrays that are useless for visualization.
+// Skipped during auto-selection; honored if explicitly requested.
+static const auto metadataArrayNames = std::set{
+    "CellID"sv,
+    "NodeID"sv,
+    "GlobalElementId"sv,
+    "GlobalNodeId"sv,
+    "ObjectId"sv,
+    "RegionId"sv,
+    "vtkOriginalPointIds"sv,
+    "vtkOriginalCellIds"sv,
+    "vtkGhostType"sv,
+    "vtkValidPointMask"sv,
+};
+
+static bool isMetadataArray(const std::string_view name)
+{
+  if (name.empty())
+    return false;
+  return metadataArrayNames.count(name) != 0;
 }
 
 static vtkSmartPointer<vtkUnstructuredGrid> loadVTUGrid(const char *filepath)
@@ -65,25 +94,6 @@ static vtkSmartPointer<vtkUnstructuredGrid> loadVTUGrid(const char *filepath)
   return grid;
 }
 
-static ArrayRef makeFloatArray1D(
-    Scene &scene, vtkDataArray *array, vtkIdType count)
-{
-  int numComponents = array->GetNumberOfComponents();
-  if (numComponents > 1) {
-    logWarning(
-        "[import_VTU] only single-component arrays are supported, "
-        "array '%s' has %d components -- only using first component",
-        array->GetName(),
-        numComponents);
-  }
-  auto arr = scene.createArray(ANARI_FLOAT32, count);
-  auto *buffer = arr->mapAs<float>();
-  for (vtkIdType i = 0; i < count; ++i)
-    buffer[i] = static_cast<float>(array->GetComponent(i, 0));
-  arr->unmap();
-  return arr;
-}
-
 static bool isScalarArray(const ArrayRef &a)
 {
   if (!a)
@@ -93,21 +103,39 @@ static bool isScalarArray(const ArrayRef &a)
   return !anari::isObject(type) && anari::componentsOf(type) == 1;
 }
 
-static ArrayRef firstScalarArray(const std::vector<ArrayRef> &arrays)
+static ArrayRef firstScalarArray(
+    const std::vector<ArrayRef> &arrays, bool skipMetadata = true)
 {
   for (const auto &a : arrays) {
-    if (isScalarArray(a))
-      return a;
+    if (!isScalarArray(a))
+      continue;
+    if (skipMetadata && isMetadataArray(a->name()))
+      continue;
+    return a;
   }
 
+  // Fall back: if all scalar arrays are metadata, return the first one anyway
+  if (skipMetadata)
+    return firstScalarArray(arrays, false);
   return {};
 }
 
-// Build a triangle surface from surface cells in the grid
+static ArrayRef findArrayByName(
+    const std::vector<ArrayRef> &arrays, const std::string &name)
+{
+  for (const auto &a : arrays) {
+    if (a && a->name() == name)
+      return a;
+  }
+  return {};
+}
+
+// Build a triangle surface from surface cells in the grid.
 static void createSurfaceFromGrid(Scene &scene,
     vtkUnstructuredGrid *grid,
     const char *filepath,
-    LayerNodeRef location)
+    LayerNodeRef location,
+    const std::optional<std::string> &propertyName = std::nullopt)
 {
   auto filename = fileOf(filepath);
 
@@ -239,11 +267,26 @@ static void createSurfaceFromGrid(Scene &scene,
       tokens::material::physicallyBased);
   mat->setName(("vtu_material | " + std::string(filename)).c_str());
 
-  if (auto colorArray = firstScalarArray(vertexDataArrays); colorArray) {
-    auto colorRange = tsd::scene::computeScalarRange(*colorArray);
-    mat->setParameterObject(
-        "baseColor", *makeDefaultColorMapSampler(scene, colorRange));
-  } else if (auto colorArray = firstScalarArray(faceDataArrays); colorArray) {
+  ArrayRef colorArray;
+  if (propertyName.has_value()) {
+    if (!propertyName->empty()) {
+      colorArray = findArrayByName(vertexDataArrays, *propertyName);
+      if (!colorArray)
+        colorArray = findArrayByName(faceDataArrays, *propertyName);
+      if (!colorArray)
+        logWarning(
+            "[import_VTU] requested property '%s' not found for "
+            "colormapping, rendering without colormap",
+            propertyName->c_str());
+    }
+    // else: explicit empty -> no colormap
+  } else {
+    colorArray = firstScalarArray(vertexDataArrays);
+    if (!colorArray)
+      colorArray = firstScalarArray(faceDataArrays);
+  }
+
+  if (colorArray) {
     auto colorRange = tsd::scene::computeScalarRange(*colorArray);
     mat->setParameterObject(
         "baseColor", *makeDefaultColorMapSampler(scene, colorRange));
@@ -258,12 +301,10 @@ static void createSurfaceFromGrid(Scene &scene,
 }
 
 // Build an unstructured spatial field from volume cells only.
-// All point-data arrays are exposed as named SpatialFields sharing topology:
-//   1-component → one field named after the array
-//   3-component → three fields named {arr}_x, {arr}_y, {arr}_z
-// Returns the first SpatialField created (used for the scene volume wrapper).
-static SpatialFieldRef createFieldFromVolumeCells(
-    Scene &scene, vtkUnstructuredGrid *grid, const char *filepath)
+static SpatialFieldRef createFieldFromVolumeCells(Scene &scene,
+    vtkUnstructuredGrid *grid,
+    const char *filepath,
+    const std::optional<std::string> &propertyName = std::nullopt)
 {
   vtkIdType numCells = grid->GetNumberOfCells();
 
@@ -278,7 +319,6 @@ static SpatialFieldRef createFieldFromVolumeCells(
     return {};
 
   vtkIdType numPoints = grid->GetNumberOfPoints();
-  vtkIdType numVolumeCells = static_cast<vtkIdType>(volumeCellIndices.size());
 
   // Build shared topology arrays
   auto vertexArray = scene.createArray(ANARI_FLOAT32_VEC3, numPoints);
@@ -292,6 +332,9 @@ static SpatialFieldRef createFieldFromVolumeCells(
   std::vector<uint32_t> connectivity;
   std::vector<uint32_t> cellIndex;
   std::vector<uint8_t> cellTypes;
+  // Track which volumeCellIndices were actually emitted (polyhedra with empty
+  // face streams are skipped, so this may be shorter than volumeCellIndices).
+  std::vector<vtkIdType> emittedCellIndices;
 
   for (vtkIdType idx : volumeCellIndices) {
     vtkCell *cell = grid->GetCell(idx);
@@ -313,11 +356,29 @@ static SpatialFieldRef createFieldFromVolumeCells(
       for (int j = 0; j < n; ++j)
         connectivity.push_back(static_cast<uint32_t>(pts[j]));
       cellTypes.push_back(static_cast<uint8_t>(VTK_HEXAHEDRON));
+    } else if (vtkType == VTK_POLYHEDRON) {
+      // Polyhedra use a face stream in the index array:
+      //   [numFaces, numPtsInFace0, pt0, pt1, ..., numPtsInFace1, ...]
+      auto faceList = vtkSmartPointer<vtkIdList>::New();
+      grid->GetFaceStream(idx, faceList);
+      vtkIdType streamLen = faceList->GetNumberOfIds();
+      if (streamLen == 0) {
+        logWarning(
+            "[import_VTU] empty face stream for polyhedron cell %lld, skipping",
+            static_cast<long long>(idx));
+        cellIndex.pop_back();
+        continue;
+      }
+      for (vtkIdType j = 0; j < streamLen; ++j)
+        connectivity.push_back(static_cast<uint32_t>(faceList->GetId(j)));
+      cellTypes.push_back(static_cast<uint8_t>(VTK_POLYHEDRON));
     } else {
       for (int j = 0; j < n; ++j)
         connectivity.push_back(static_cast<uint32_t>(cell->GetPointId(j)));
       cellTypes.push_back(static_cast<uint8_t>(vtkType));
     }
+
+    emittedCellIndices.push_back(idx);
   }
 
   auto indexArray = scene.createArray(ANARI_UINT32, connectivity.size());
@@ -330,7 +391,7 @@ static SpatialFieldRef createFieldFromVolumeCells(
   cellTypesArray->setData(cellTypes.data());
 
   // Helper: create a new unstructured SpatialField with shared topology
-  auto makeTopoField = [&](const std::string &name) -> SpatialFieldRef {
+  auto makeField = [&](const std::string &name) -> SpatialFieldRef {
     auto f = scene.createObject<tsd::scene::SpatialField>(
         tokens::spatial_field::unstructured);
     f->setName(name.c_str());
@@ -341,10 +402,27 @@ static SpatialFieldRef createFieldFromVolumeCells(
     return f;
   };
 
-  // Vertex data: expose all point arrays
-  vtkPointData *pointData = grid->GetPointData();
-  SpatialFieldRef firstField;
+  // Unified scan of point and cell data arrays. The tri-state `propertyName`
+  // selects exactly one target (vertex.data XOR cell.data); binding both would
+  // leave renderers guessing which attribute to consume.
   std::string baseName = fileOf(filepath);
+
+  enum class Source
+  {
+    Point,
+    Cell,
+  };
+  struct ArrayCandidate
+  {
+    Source source;
+    int index;
+    int component; // -1 = scalar, 0/1/2 = component of a 3-vec (point only)
+    std::string name;
+  };
+  std::vector<ArrayCandidate> candidates;
+
+  vtkPointData *pointData = grid->GetPointData();
+  vtkCellData *cellData = grid->GetCellData();
 
   for (int i = 0; i < pointData->GetNumberOfArrays(); ++i) {
     vtkDataArray *array = pointData->GetArray(i);
@@ -356,77 +434,116 @@ static SpatialFieldRef createFieldFromVolumeCells(
         : baseName;
 
     if (nComp == 1) {
-      auto dataArr = scene.createArray(ANARI_FLOAT32, numPoints);
-      auto *buf = dataArr->mapAs<float>();
-      for (vtkIdType j = 0; j < numPoints; ++j)
-        buf[j] = static_cast<float>(array->GetComponent(j, 0));
-      dataArr->unmap();
-      auto f = makeTopoField(arrName);
-      f->setParameterObject("vertex.data", *dataArr);
-      if (!firstField)
-        firstField = f;
+      candidates.push_back({Source::Point, i, 0, arrName});
     } else if (nComp == 3) {
       for (int c = 0; c < 3; ++c) {
         const char *suffix = (c == 0) ? "_x" : (c == 1) ? "_y" : "_z";
-        std::string compName = arrName + suffix;
-        auto dataArr = scene.createArray(ANARI_FLOAT32, numPoints);
-        auto *buf = dataArr->mapAs<float>();
-        for (vtkIdType j = 0; j < numPoints; ++j)
-          buf[j] = static_cast<float>(array->GetComponent(j, c));
-        dataArr->unmap();
-        auto f = makeTopoField(compName);
-        f->setParameterObject("vertex.data", *dataArr);
-        if (!firstField)
-          firstField = f;
+        candidates.push_back({Source::Point, i, c, arrName + suffix});
       }
-      logStatus(
-          "[import_VTU] split 3-component array '%s' into '%s_x', '%s_y', "
-          "'%s_z'",
-          arrName.c_str(),
-          arrName.c_str(),
-          arrName.c_str(),
-          arrName.c_str());
     } else {
       logWarning(
-          "[import_VTU] array '%s' has %d components (only 1 or 3 are "
+          "[import_VTU] point array '%s' has %d components (only 1 or 3 are "
           "supported) -- skipping",
           arrName.c_str(),
           nComp);
     }
   }
 
-  // Fallback: no point arrays → create a topology-only field
-  if (!firstField)
-    firstField = makeTopoField(baseName);
-
-  // Cell data: attach first scalar array to firstField for rendering
-  vtkCellData *cellData = grid->GetCellData();
-  for (int i = 0; i < std::min(1, cellData->GetNumberOfArrays()); ++i) {
+  for (int i = 0; i < cellData->GetNumberOfArrays(); ++i) {
     vtkDataArray *array = cellData->GetArray(i);
     if (!array)
       continue;
-    auto a = makeFloatArray1D(scene, array, numCells);
+    int nComp = array->GetNumberOfComponents();
+    std::string arrName = (array->GetName() && array->GetName()[0] != '\0')
+        ? array->GetName()
+        : baseName;
 
-    // Filter to volume cells only
-    auto filtered = scene.createArray(ANARI_FLOAT32, numVolumeCells);
-    auto *src = a->mapAs<float>();
-    auto *dst = filtered->mapAs<float>();
-    for (vtkIdType j = 0; j < numVolumeCells; ++j)
-      dst[j] = src[volumeCellIndices[j]];
-    a->unmap();
-    filtered->unmap();
-
-    firstField->setParameterObject("cell.data", *filtered);
+    if (nComp == 1) {
+      candidates.push_back({Source::Cell, i, 0, arrName});
+    } else if (nComp == 3) {
+      for (int c = 0; c < 3; ++c) {
+        const char *suffix = (c == 0) ? "_x" : (c == 1) ? "_y" : "_z";
+        candidates.push_back({Source::Cell, i, c, arrName + suffix});
+      }
+    } else {
+      logWarning(
+          "[import_VTU] cell array '%s' has %d components (only 1 or 3 are "
+          "supported) -- skipping",
+          arrName.c_str(),
+          nComp);
+    }
   }
 
-  return firstField;
+  // Tri-state selection: nullopt = auto, "" = topology only, "name" = by name.
+  const ArrayCandidate *selected = nullptr;
+
+  if (propertyName.has_value()) {
+    if (!propertyName->empty()) {
+      for (auto &c : candidates) {
+        if (c.name == *propertyName) {
+          selected = &c;
+          break;
+        }
+      }
+      if (!selected)
+        logWarning(
+            "[import_VTU] requested property '%s' not found, "
+            "loading topology only",
+            propertyName->c_str());
+    }
+    // else: explicit empty -> topology-only (selected stays null)
+  } else {
+    for (auto &c : candidates) {
+      if (!isMetadataArray(c.name)) {
+        selected = &c;
+        break;
+      }
+    }
+    if (!selected && !candidates.empty())
+      selected = &candidates[0];
+  }
+
+  // Materialize the selected candidate into exactly one of vertex.data /
+  // cell.data, or produce a topology-only field if nothing was selected.
+  SpatialFieldRef selectedField;
+
+  if (selected) {
+    selectedField = makeField(selected->name);
+
+    if (selected->source == Source::Point) {
+      vtkDataArray *array = pointData->GetArray(selected->index);
+      auto dataArr = scene.createArray(ANARI_FLOAT32, numPoints);
+      auto *buf = dataArr->mapAs<float>();
+      for (vtkIdType j = 0; j < numPoints; ++j)
+        buf[j] =
+            static_cast<float>(array->GetComponent(j, selected->component));
+      dataArr->unmap();
+      selectedField->setParameterObject("vertex.data", *dataArr);
+    } else {
+      vtkDataArray *array = cellData->GetArray(selected->index);
+      vtkIdType numEmittedCells =
+          static_cast<vtkIdType>(emittedCellIndices.size());
+      auto filtered = scene.createArray(ANARI_FLOAT32, numEmittedCells);
+      auto *dst = filtered->mapAs<float>();
+      for (vtkIdType j = 0; j < numEmittedCells; ++j)
+        dst[j] =
+            static_cast<float>(array->GetComponent(emittedCellIndices[j], 0));
+      filtered->unmap();
+      selectedField->setParameterObject("cell.data", *filtered);
+    }
+  } else {
+    selectedField = makeField(baseName);
+  }
+
+  return selectedField;
 }
 
 // Full-scene importer: surfaces + volumes
 void import_VTU(Scene &scene,
     tsd::animation::AnimationManager &animMgr,
     const char *filepath,
-    LayerNodeRef location)
+    LayerNodeRef location,
+    std::optional<std::string> propertyName)
 {
   (void)animMgr;
   auto grid = loadVTUGrid(filepath);
@@ -459,10 +576,11 @@ void import_VTU(Scene &scene,
       fileOf(filepath).c_str());
 
   if (hasSurface)
-    createSurfaceFromGrid(scene, grid, filepath, root);
+    createSurfaceFromGrid(scene, grid, filepath, root, propertyName);
 
   if (hasVolume) {
-    auto field = createFieldFromVolumeCells(scene, grid, filepath);
+    auto field =
+        createFieldFromVolumeCells(scene, grid, filepath, propertyName);
     if (field) {
       tsd::math::float2 valueRange = field->computeValueRange();
       auto [inst, volume] = scene.insertNewChildObjectNode<tsd::scene::Volume>(
@@ -477,14 +595,15 @@ void import_VTU(Scene &scene,
   }
 }
 
-// Spatial field-only importer (backward compatible, used by -volume)
-SpatialFieldRef import_VTU(Scene &scene, const char *filepath)
+// Spatial field-only importer
+SpatialFieldRef import_VTU(
+    Scene &scene, const char *filepath, std::optional<std::string> propertyName)
 {
   auto grid = loadVTUGrid(filepath);
   if (!grid)
     return {};
 
-  return createFieldFromVolumeCells(scene, grid, filepath);
+  return createFieldFromVolumeCells(scene, grid, filepath, propertyName);
 }
 
 #else
@@ -492,14 +611,18 @@ SpatialFieldRef import_VTU(Scene &scene, const char *filepath)
 void import_VTU(Scene &scene,
     tsd::animation::AnimationManager &animMgr,
     const char *filepath,
-    LayerNodeRef location)
+    LayerNodeRef location,
+    std::optional<std::string> propertyName)
 {
   (void)animMgr;
+  (void)propertyName;
   logError("[import_VTU] VTK not enabled in TSD build.");
 }
 
-SpatialFieldRef import_VTU(Scene &scene, const char *filepath)
+SpatialFieldRef import_VTU(
+    Scene &scene, const char *filepath, std::optional<std::string> propertyName)
 {
+  (void)propertyName;
   logError("[import_VTU] VTK not enabled in TSD build.");
   return {};
 }

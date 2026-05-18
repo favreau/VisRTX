@@ -41,12 +41,16 @@ struct Denoiser : public Object
   Denoiser(DeviceGlobalState *s);
   ~Denoiser() override;
 
-  void setup(
-      uvec2 size, HostDeviceArray<uint8_t> &pixelBuffer, ANARIDataType format,
-    DeviceBuffer &accumAlbedo, DeviceBuffer &accumNormal);
+  void setup(uvec2 size,
+      HostDeviceArray<uint8_t> &outputBuffer,
+      ANARIDataType format,
+      DeviceBuffer &input,
+      DeviceBuffer &albedo,
+      DeviceBuffer &normal);
   void cleanup();
 
   void launch();
+  void convertOutput();
 
   void *mapColorBuffer();
   void *mapGPUColorBuffer();

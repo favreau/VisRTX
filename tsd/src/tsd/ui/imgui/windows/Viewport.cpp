@@ -26,6 +26,29 @@
 
 namespace tsd::ui::imgui {
 
+namespace {
+
+bool deviceSupportsExtension(anari::Device d, const char *extension)
+{
+  if (!d || !extension)
+    return false;
+
+  auto list = (const char *const *)anariGetObjectInfo(
+      d, ANARI_DEVICE, "default", "extension", ANARI_STRING_LIST);
+
+  if (!list)
+    return false;
+
+  for (const char *const *i = list; *i != nullptr; ++i) {
+    if (std::string(*i) == extension)
+      return true;
+  }
+
+  return false;
+}
+
+} // namespace
+
 Viewport::Viewport(
     Application *app, tsd::rendering::Manipulator *m, const char *name)
     : BaseViewport(app, name)
@@ -33,7 +56,7 @@ Viewport::Viewport(
   m_viewport.resolutionScale = 0.75f;
   BaseViewport::setManipulator(m);
   m_defragToken = appContext()->tsd.scene.addDefragCallback(
-      [this](const auto &) { m_refreshDeviceNextFrame = true; });
+      [this](const auto &) { refreshCurrentDevice(); });
 }
 
 Viewport::~Viewport()
@@ -44,34 +67,18 @@ Viewport::~Viewport()
 
 void Viewport::buildUI()
 {
-  const bool setupPipeline = BaseViewport::viewport_isActive()
-      && !BaseViewport::imagePipeline_isSetup();
-  if (setupPipeline)
-    BaseViewport::imagePipeline_setup();
-
-  if (m_refreshDeviceNextFrame) {
-    if (!m_libName.empty()) {
-      auto lib = m_libName; // setLibrary() clears m_libName
-      setLibrary(lib);
-    }
-    m_refreshDeviceNextFrame = false;
-  }
-
-  BaseViewport::buildUI();
-
-  if (m_prevRenderer != m_renderers.current
-      || m_prevCamera != m_camera.current) {
+  if (BaseViewport::viewport_isActive()) {
+    BaseViewport::buildUI();
     updateFrame();
+    updateImage();
+    BaseViewport::camera_update();
   }
-
-  updateImage();
-  BaseViewport::camera_update();
 
   ui_menubar();
 
-  ImGui::BeginDisabled(!BaseViewport::imagePipeline_isSetup());
+  ImGui::BeginDisabled(!BaseViewport::viewport_isActive());
 
-  if (m_outputPass) {
+  if (BaseViewport::viewport_isActive()) {
     ImGui::Image((ImTextureID)m_outputPass->getTexture(),
         ImGui::GetContentRegionAvail(),
         ImVec2(0, 1),
@@ -93,9 +100,13 @@ void Viewport::buildUI()
   ImGui::EndDisabled();
 
   if (m_anariPass && !didPick) {
+    const bool doPrimitiveOutline = m_outlinePrimitives
+        && m_deviceSupportsPrimitiveId
+        && m_visualizeAOV == tsd::rendering::AOVType::NONE;
     bool needIDs = appContext()->getFirstSelected().valid()
         || m_visualizeAOV == tsd::rendering::AOVType::EDGES
-        || m_visualizeAOV == tsd::rendering::AOVType::OBJECT_ID;
+        || m_visualizeAOV == tsd::rendering::AOVType::OBJECT_ID
+        || doPrimitiveOutline;
     m_anariPass->setEnableIDs(needIDs);
   }
 
@@ -104,12 +115,12 @@ void Viewport::buildUI()
     if (kind != m_lastIndexKind) {
       tsd::core::logWarning("render index setting changed: resetting viewport");
       m_lastIndexKind = kind;
-      m_refreshDeviceNextFrame = true;
+      refreshCurrentDevice();
     }
   }
 }
 
-void Viewport::setLibrary(const std::string &libName, bool doAsync)
+void Viewport::setLibrary(const std::string &libName)
 {
   teardownDevice();
 
@@ -132,6 +143,15 @@ void Viewport::setLibrary(const std::string &libName, bool doAsync)
     m_maxFL.reset();
 
     if (d) {
+      m_device = d;
+      m_deviceSupportsPrimitiveId =
+          deviceSupportsExtension(d, "ANARI_KHR_FRAME_CHANNEL_PRIMITIVE_ID");
+
+      if (!m_deviceSupportsPrimitiveId
+          && m_visualizeAOV == tsd::rendering::AOVType::PRIMITIVE_ID) {
+        m_visualizeAOV = tsd::rendering::AOVType::NONE;
+      }
+
       tsd::core::logStatus("[viewport] setting up renderer objects...");
 
       m_renderers.objects = scene.renderersOfDevice(libName);
@@ -144,14 +164,11 @@ void Viewport::setLibrary(const std::string &libName, bool doAsync)
       m_rIdx = adm.acquireRenderIndex(scene, libName, d);
       setSelectionVisibilityFilterEnabled(m_showOnlySelected);
 
-      tsd::core::logStatus("[viewport] getting scene bounds...");
-
-      m_device = d;
-      viewport_setActive(true);
-
       static bool firstFrame = true;
       if (firstFrame && appContext()->commandLine.loadedFromStateFile)
         firstFrame = false;
+
+      tsd::core::logStatus("[viewport] setting up camera...");
 
       if (!m_camera.current)
         BaseViewport::camera_setCurrent(scene.defaultCamera());
@@ -160,13 +177,26 @@ void Viewport::setLibrary(const std::string &libName, bool doAsync)
           *m_camera.arcball, *m_camera.current);
 
       if (firstFrame || m_camera.arcball->distance() == tsd::math::inf) {
+        tsd::core::logStatus(
+            "[viewport] getting scene bounds to init camera...");
         camera_resetView(true);
-        if (appContext()->view.poses.empty()) {
-          tsd::core::logStatus("[viewport] adding 'default' camera pose");
-          appContext()->addCurrentViewToCameraPoses("default");
-        }
         firstFrame = false;
       }
+
+      tsd::core::logStatus("[viewport] setting up image pipeline...");
+
+      BaseViewport::imagePipeline_setup();
+
+      // ensure first frame is rendered before we proceed
+      m_anariPass->setWorld(m_rIdx->world());
+      BaseViewport::camera_update(true);
+      updateFrame();
+
+      tsd::core::logStatus("[viewport] warming up first frame...");
+
+      m_rIdx->computeDefaultView();
+      m_anariPass->startFirstFrame(true);
+      viewport_setActive(true);
 
       tsd::core::logStatus("[viewport] ...device load complete");
     }
@@ -178,10 +208,7 @@ void Viewport::setLibrary(const std::string &libName, bool doAsync)
       m_deviceChangeCb(m_libName);
   };
 
-  if (doAsync)
-    m_initFuture = std::async(updateLibrary);
-  else
-    updateLibrary();
+  m_app->showTaskModal(updateLibrary, "Loading Device...");
 }
 
 void Viewport::setLibraryToDefault()
@@ -209,7 +236,7 @@ void Viewport::setExternalInstances(
 void Viewport::setCustomFrameParameter(
     const char *name, const tsd::core::Any &value)
 {
-  if (!m_anariPass) {
+  if (!BaseViewport::viewport_isActive()) {
     tsd::core::logWarning(
         "[viewport] cannot set custom frame parameter '%s': no frame yet",
         name);
@@ -221,6 +248,14 @@ void Viewport::setCustomFrameParameter(
   anari::commitParameters(m_device, f);
 }
 
+void Viewport::refreshCurrentDevice()
+{
+  if (BaseViewport::viewport_isActive()) {
+    auto lib = m_libName; // setLibrary() clears m_libName
+    setLibrary(lib);
+  }
+}
+
 void Viewport::saveSettings(tsd::core::DataNode &root)
 {
   root["anariLibrary"] = m_libName;
@@ -230,7 +265,7 @@ void Viewport::saveSettings(tsd::core::DataNode &root)
   root["showOverlay"] = m_showOverlay;
   root["showOnlySelected"] = m_showOnlySelected;
   root["highlightSelection"] = m_highlightSelection;
-  root["showOnlySelected"] = m_showOnlySelected;
+  root["outlinePrimitives"] = m_outlinePrimitives;
   root["visualizeAOV"] = static_cast<int>(m_visualizeAOV);
   root["depthVisualMinimum"] = m_depthVisualMinimum;
   root["depthVisualMaximum"] = m_depthVisualMaximum;
@@ -259,7 +294,7 @@ void Viewport::loadSettings(tsd::core::DataNode &root)
   root["showOverlay"].getValue(ANARI_BOOL, &m_showOverlay);
   root["showOnlySelected"].getValue(ANARI_BOOL, &m_showOnlySelected);
   root["highlightSelection"].getValue(ANARI_BOOL, &m_highlightSelection);
-  root["showOnlySelected"].getValue(ANARI_BOOL, &m_showOnlySelected);
+  root["outlinePrimitives"].getValue(ANARI_BOOL, &m_outlinePrimitives);
   int aovType = static_cast<int>(m_visualizeAOV);
   root["visualizeAOV"].getValue(ANARI_INT32, &aovType);
   m_visualizeAOV = static_cast<tsd::rendering::AOVType>(aovType);
@@ -300,6 +335,7 @@ void Viewport::imagePipeline_populate(tsd::rendering::ImagePipeline &p)
       m_timeToLoadDevice);
 
   m_anariPass = p.emplace_back<tsd::rendering::AnariSceneRenderPass>(m_device);
+  m_anariPass->setUseImplicitAspectRatio(m_camera.useImplicitAspectRatio);
 
   m_saveToFilePass = p.emplace_back<tsd::rendering::SaveToFilePass>();
   m_saveToFilePass->setEnabled(false);
@@ -409,6 +445,9 @@ void Viewport::imagePipeline_populate(tsd::rendering::ImagePipeline &p)
   m_visualizeAOVPass->setEnabled(false);
   m_visualizeAOVPass->setEdgeInvert(m_edgeInvert);
 
+  m_primitiveOutlinePass =
+      p.emplace_back<tsd::rendering::PrimitiveOutlineRenderPass>();
+
   m_outlinePass = p.emplace_back<tsd::rendering::OutlineRenderPass>();
 
   m_outputPass = p.emplace_back<tsd::rendering::CopyToSDLTexturePass>(
@@ -419,8 +458,6 @@ void Viewport::imagePipeline_populate(tsd::rendering::ImagePipeline &p)
 
 void Viewport::camera_resetView(bool resetAzEl)
 {
-  if (!BaseViewport::viewport_isActive())
-    return;
   auto axis = m_camera.arcball->axis();
   auto azel =
       resetAzEl ? tsd::math::float2(0.f, 20.f) : m_camera.arcball->azel();
@@ -479,13 +516,12 @@ void Viewport::renderer_resetParameterDefaults()
 
 void Viewport::teardownDevice()
 {
-  if (m_initFuture.valid())
-    m_initFuture.get();
-
   if (!BaseViewport::imagePipeline_isSetup())
     return;
 
+  BaseViewport::viewport_setActive(false);
   BaseViewport::imagePipeline_teardown();
+  BaseViewport::viewport_reshape(tsd::math::int2(1, 1));
 
   m_anariPass = nullptr;
   m_pickPass = nullptr;
@@ -493,11 +529,12 @@ void Viewport::teardownDevice()
   m_autoExposurePass = nullptr;
   m_toneMapPass = nullptr;
   m_outputTransformPass = nullptr;
+  m_primitiveOutlinePass = nullptr;
   m_outlinePass = nullptr;
   m_outputPass = nullptr;
   m_saveToFilePass = nullptr;
 
-  appContext()->anari.releaseRenderIndex(m_device);
+  appContext()->anari.releaseRenderIndex(appContext()->tsd.scene, m_device);
   m_rIdx = nullptr;
   m_libName.clear();
 
@@ -511,8 +548,7 @@ void Viewport::teardownDevice()
   m_prevRenderer = {};
 
   m_device = nullptr;
-
-  BaseViewport::viewport_setActive(false);
+  m_deviceSupportsPrimitiveId = false;
 }
 
 void Viewport::pick(tsd::math::int2 l, bool selectObject)
@@ -521,6 +557,11 @@ void Viewport::pick(tsd::math::int2 l, bool selectObject)
   m_pickCoord = l;
   m_pickPass->setEnabled(true);
   m_anariPass->setEnableIDs(true);
+
+  // Render synchronous frame to ensure pick pass has available AOVs available
+  m_anariPass->setRunAsync(false);
+  BaseViewport::imagePipeline_render();
+  m_anariPass->setRunAsync(true);
 }
 
 void Viewport::setSelectionVisibilityFilterEnabled(bool enabled)
@@ -538,17 +579,25 @@ void Viewport::setSelectionVisibilityFilterEnabled(bool enabled)
   }
 }
 
+void Viewport::camera_setUseImplicitAspectRatio(bool on)
+{
+  BaseViewport::camera_setUseImplicitAspectRatio(on);
+  if (m_anariPass)
+    m_anariPass->setUseImplicitAspectRatio(on);
+}
+
 void Viewport::updateFrame()
 {
-  if (!m_anariPass)
+  if (m_prevRenderer == m_renderers.current && m_prevCamera == m_camera.current)
     return;
 
   if (!m_camera.current)
     m_camera.current = appContext()->tsd.scene.defaultCamera();
 
-  m_anariPass->setWorld(m_rIdx->world());
-  if (m_camera.current)
+  if (m_camera.current) {
     m_anariPass->setCamera(m_rIdx->camera(m_camera.current->index()));
+    m_prevCamera = m_camera.current;
+  }
   if (m_renderers.current) {
     m_anariPass->setRenderer(m_rIdx->renderer(m_renderers.current->index()));
     m_prevRenderer = m_renderers.current;
@@ -557,9 +606,6 @@ void Viewport::updateFrame()
 
 void Viewport::updateImage()
 {
-  if (!m_anariPass)
-    return;
-
   auto frame = m_anariPass->getFrame();
 
   float progress = 0.f;
@@ -618,16 +664,24 @@ void Viewport::syncImagePassState()
       m_visualizeAOV == tsd::rendering::AOVType::ALBEDO);
   m_anariPass->setEnableNormals(
       m_visualizeAOV == tsd::rendering::AOVType::NORMAL);
-  m_anariPass->setEnablePrimitiveId(
-      m_visualizeAOV == tsd::rendering::AOVType::PRIMITIVE_ID);
+  const bool doPrimitiveOutline = m_outlinePrimitives
+      && m_deviceSupportsPrimitiveId
+      && m_visualizeAOV == tsd::rendering::AOVType::NONE;
+  m_anariPass->setEnablePrimitiveId(m_deviceSupportsPrimitiveId
+      && (m_visualizeAOV == tsd::rendering::AOVType::PRIMITIVE_ID
+          || doPrimitiveOutline));
   m_anariPass->setEnableInstanceId(
       m_visualizeAOV == tsd::rendering::AOVType::INSTANCE_ID);
 
   const auto selectedNode = appContext()->getFirstSelected();
   const bool needIDs = selectedNode.valid()
       || m_visualizeAOV == tsd::rendering::AOVType::EDGES
-      || m_visualizeAOV == tsd::rendering::AOVType::OBJECT_ID;
+      || m_visualizeAOV == tsd::rendering::AOVType::OBJECT_ID
+      || doPrimitiveOutline;
   m_anariPass->setEnableIDs(needIDs);
+
+  if (m_primitiveOutlinePass)
+    m_primitiveOutlinePass->setEnabled(doPrimitiveOutline);
 
   updateDisplayPassState();
 }
@@ -677,7 +731,7 @@ void Viewport::ui_menubar_Device()
     }
     ImGui::Separator();
     if (ImGui::MenuItem("Reload Current Device"))
-      m_refreshDeviceNextFrame = true;
+      refreshCurrentDevice();
     ImGui::EndMenu();
   }
 }
@@ -755,12 +809,24 @@ void Viewport::ui_menubar_Viewport()
           "object ID",
           "primitive ID",
           "instance ID"};
-      if (int aov = int(m_visualizeAOV);
-          ImGui::Combo("AOV", &aov, aovItems, IM_ARRAYSIZE(aovItems))) {
-        if (aov != int(m_visualizeAOV)) {
-          m_visualizeAOV = static_cast<tsd::rendering::AOVType>(aov);
-          syncImagePassState();
+      const int primitiveIdAOV = int(tsd::rendering::AOVType::PRIMITIVE_ID);
+      if (ImGui::BeginCombo("AOV", aovItems[int(m_visualizeAOV)])) {
+        for (int i = 0; i < IM_ARRAYSIZE(aovItems); ++i) {
+          const bool isSelected = i == int(m_visualizeAOV);
+          const bool supported =
+              i != primitiveIdAOV || m_deviceSupportsPrimitiveId;
+          if (!supported)
+            ImGui::BeginDisabled();
+          if (ImGui::Selectable(aovItems[i], isSelected) && supported) {
+            m_visualizeAOV = static_cast<tsd::rendering::AOVType>(i);
+            syncImagePassState();
+          }
+          if (isSelected)
+            ImGui::SetItemDefaultFocus();
+          if (!supported)
+            ImGui::EndDisabled();
         }
+        ImGui::EndCombo();
       }
 
       ImGui::BeginDisabled(m_visualizeAOV != tsd::rendering::AOVType::DEPTH);
@@ -864,6 +930,11 @@ void Viewport::ui_menubar_Viewport()
 
       ImGui::BeginDisabled(m_showOnlySelected);
       ImGui::Checkbox("Highlight Selected", &m_highlightSelection);
+      ImGui::EndDisabled();
+
+      ImGui::BeginDisabled(!m_deviceSupportsPrimitiveId);
+      if (ImGui::Checkbox("Outline Primitives", &m_outlinePrimitives))
+        syncImagePassState();
       ImGui::EndDisabled();
 
       if (ImGui::Checkbox("Only Show Selected", &m_showOnlySelected))

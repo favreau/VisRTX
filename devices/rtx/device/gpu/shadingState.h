@@ -49,11 +49,18 @@
 
 namespace visrtx {
 
-// Describes the next ray to be traced, as a result of the EvaluateNextRay call
+enum NextRayFlags : uint32_t
+{
+  NEXT_RAY_NONE = 0u,
+  NEXT_RAY_CONTINUES_THROUGH_SURFACE = 1u << 0
+};
+
+// Describes the next ray to be traced, as a result of the EvaluateNextRay call.
 struct NextRay
 {
   vec3 direction;
   vec3 contributionWeight;
+  uint32_t flags{NEXT_RAY_NONE};
 };
 
 // Matte
@@ -73,8 +80,27 @@ struct PhysicallyBasedShadingState
   float metallic;
   float roughness;
   float transmission;
-  float ior;
+  // Refraction ratio n1/n2 from the incident side: init() stores 1/md->ior
+  // for front-facing hits and md->ior for back-facing hits, so this can be
+  // plugged directly into glm::refract and Schlick's F0 formula.
+  float eta;
   vec3 emission;
+
+  float occlusion;
+  float specular;
+  vec3 specularColor;
+  uint32_t useSpecular;
+  float clearcoat;
+  float clearcoatRoughness;
+  vec3 clearcoatNormal;
+  float thickness;
+  float attenuationDistance;
+  vec3 attenuationColor;
+  vec3 sheenColor;
+  float sheenRoughness;
+  float iridescence;
+  float iridescenceIor;
+  float iridescenceThickness;
 };
 
 #ifdef USE_MDL

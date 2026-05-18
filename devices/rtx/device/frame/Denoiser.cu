@@ -50,15 +50,16 @@ Denoiser::~Denoiser()
 }
 
 void Denoiser::setup(uvec2 size,
-    HostDeviceArray<uint8_t> &pixelBuffer,
+    HostDeviceArray<uint8_t> &outputBuffer,
     ANARIDataType format,
-    DeviceBuffer &accumAlbedo,
-    DeviceBuffer &accumNormal)
+    DeviceBuffer &input,
+    DeviceBuffer &albedo,
+    DeviceBuffer &normal)
 {
-  init(accumAlbedo, accumNormal);
+  init(albedo, normal);
   auto &state = *deviceState();
 
-  m_pixelBuffer = &pixelBuffer;
+  m_pixelBuffer = &outputBuffer;
 
   m_format = format;
 
@@ -83,22 +84,24 @@ void Denoiser::setup(uvec2 size,
       (CUdeviceptr)m_scratch.ptr(),
       m_scratch.bytes()));
 
-  m_layer.input.data = (CUdeviceptr)pixelBuffer.dataDevice();
+  m_layer.input.data = (CUdeviceptr)input.ptr();
   m_layer.input.width = size.x;
   m_layer.input.height = size.y;
   m_layer.input.pixelStrideInBytes = 0;
   m_layer.input.rowStrideInBytes = 4 * sizeof(float) * size.x;
   m_layer.input.format = OPTIX_PIXEL_FORMAT_FLOAT4;
-  std::memcpy(&m_layer.output, &m_layer.input, sizeof(m_layer.output));
 
-  m_guideLayer.albedo.data = (CUdeviceptr)accumAlbedo.ptr();
+  m_layer.output = m_layer.input;
+  m_layer.output.data = (CUdeviceptr)outputBuffer.dataDevice();
+
+  m_guideLayer.albedo.data = (CUdeviceptr)albedo.ptr();
   m_guideLayer.albedo.width = size.x;
   m_guideLayer.albedo.height = size.y;
   m_guideLayer.albedo.pixelStrideInBytes = 3 * sizeof(float);
   m_guideLayer.albedo.rowStrideInBytes = 3 * sizeof(float) * size.x;
   m_guideLayer.albedo.format = OPTIX_PIXEL_FORMAT_FLOAT3;
 
-  m_guideLayer.normal.data = (CUdeviceptr)accumNormal.ptr();
+  m_guideLayer.normal.data = (CUdeviceptr)normal.ptr();
   m_guideLayer.normal.width = size.x;
   m_guideLayer.normal.height = size.y;
   m_guideLayer.normal.pixelStrideInBytes = 3 * sizeof(float);
@@ -130,30 +133,33 @@ void Denoiser::launch()
       (CUdeviceptr)m_scratch.ptr(),
       static_cast<unsigned int>(m_scratch.bytes())));
   instrument::rangePop(); // optixDenoiserInvoke()
+}
 
-  if (m_format != ANARI_FLOAT32_VEC4) {
-    instrument::rangePush("denoiser transform pixels");
-    auto numPixels =
-        size_t(m_layer.output.width) * size_t(m_layer.output.height);
-    auto begin = thrust::device_ptr<vec4>((vec4 *)m_pixelBuffer->dataDevice());
-    auto end = begin + numPixels;
-    if (m_format == ANARI_UFIXED8_RGBA_SRGB) {
-      thrust::transform(thrust::cuda::par.on(state.stream),
-          begin,
-          end,
-          thrust::device_pointer_cast<uint32_t>(m_uintPixels.dataDevice()),
-          [] __device__(const vec4 &in) {
-            return glm::packUnorm4x8(glm::convertLinearToSRGB(in));
-          });
-    } else {
-      thrust::transform(thrust::cuda::par.on(state.stream),
-          begin,
-          end,
-          thrust::device_pointer_cast<uint32_t>(m_uintPixels.dataDevice()),
-          [] __device__(const vec4 &in) { return glm::packUnorm4x8(in); });
-    }
-    instrument::rangePop(); // denoiser transform pixels
+void Denoiser::convertOutput()
+{
+  if (m_format == ANARI_FLOAT32_VEC4)
+    return;
+  auto &state = *deviceState();
+  instrument::rangePush("denoiser transform pixels");
+  auto numPixels = size_t(m_layer.output.width) * size_t(m_layer.output.height);
+  auto begin = thrust::device_ptr<vec4>((vec4 *)m_pixelBuffer->dataDevice());
+  auto end = begin + numPixels;
+  if (m_format == ANARI_UFIXED8_RGBA_SRGB) {
+    thrust::transform(thrust::cuda::par.on(state.stream),
+        begin,
+        end,
+        thrust::device_pointer_cast<uint32_t>(m_uintPixels.dataDevice()),
+        [] __device__(const vec4 &in) {
+          return glm::packUnorm4x8(glm::convertLinearToSRGB(in));
+        });
+  } else {
+    thrust::transform(thrust::cuda::par.on(state.stream),
+        begin,
+        end,
+        thrust::device_pointer_cast<uint32_t>(m_uintPixels.dataDevice()),
+        [] __device__(const vec4 &in) { return glm::packUnorm4x8(in); });
   }
+  instrument::rangePop(); // denoiser transform pixels
 }
 
 void *Denoiser::mapColorBuffer()
@@ -185,7 +191,6 @@ void Denoiser::init(
     m_denoiser = {};
   }
 
-  auto &state = *deviceState();
   m_usingAlbedo = useAlbedo;
   m_usingNormal = useNormal;
 
@@ -193,10 +198,13 @@ void Denoiser::init(
   options.guideAlbedo = m_usingAlbedo;
   options.guideNormal = m_usingNormal;
 
-  OPTIX_CHECK(optixDenoiserCreate(state.optixContext,
-      OPTIX_DENOISER_MODEL_KIND_AOV,
-      &options,
-      &m_denoiser));
+  if (!m_denoiser) {
+    auto &state = *deviceState();
+    OPTIX_CHECK(optixDenoiserCreate(state.optixContext,
+        OPTIX_DENOISER_MODEL_KIND_AOV,
+        &options,
+        &m_denoiser));
+  }
 }
 
 } // namespace visrtx

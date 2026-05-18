@@ -48,12 +48,23 @@ VISRTX_CALLABLE void __direct_callable__init(MatteShadingState *shadingState,
   shadingState->normal = hit->Ns;
   shadingState->opacity =
       adjustedMaterialOpacity(color.w * opacity, md->alphaMode, md->cutoff);
+
+  // Fall back to the geometric normal if hit->Ns is NaN (e.g. coincident
+  // curve control points) or zero-length. Negated comparison catches both
+  // since NaN compares false to anything.
+  if (!(glm::dot(shadingState->normal, shadingState->normal) > 1e-12f))
+    shadingState->normal = hit->Ng;
 }
 
 VISRTX_CALLABLE NextRay __direct_callable__nextRay(
     const MatteShadingState *shadingState, const Ray *ray, RandState *rs)
 {
-  return NextRay{vec3(0.0f, 0.0f, 0.0f), vec3(0.0f, 0.0f, 0.0f)};
+  // Before anything, check for opacity. If below, then we just pass through
+  if (curand_uniform(rs) > shadingState->opacity) {
+    return NextRay{ray->dir, vec3(1.0f), NEXT_RAY_CONTINUES_THROUGH_SURFACE};
+  }
+
+  return NextRay{vec3(0.0f), vec3(0.0f)};
 }
 
 VISRTX_CALLABLE

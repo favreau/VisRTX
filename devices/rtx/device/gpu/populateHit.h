@@ -197,9 +197,11 @@ VISRTX_DEVICE const VolumeGPUData &volumeData(const FrameGPUData &frameData)
   return frameData.registry.volumes[idx];
 }
 
-VISRTX_DEVICE const SpatialFieldGPUData &fieldData(const FrameGPUData &frameData, const VolumeGPUData &volumeData)
+VISRTX_DEVICE const SpatialFieldGPUData &fieldData(
+    const FrameGPUData &frameData, const VolumeGPUData &volumeData)
 {
-  // Currently only TF1D volume type is supported, so assume this is what we have
+  // Currently only TF1D volume type is supported, so assume this is what we
+  // have
   return frameData.registry.fields[volumeData.data.tf1d.field];
 }
 
@@ -223,40 +225,56 @@ VISRTX_DEVICE void computeTangentSpace(
     if (!optixIsFrontFaceHit())
       hit.Ng = -hit.Ng;
 
+    vec3 n0, n1, n2;
+    bool hasVertexNormals = true;
     if (ggd.tri.vertexNormalsFV != nullptr) {
-      const uvec3 idx = uvec3(0, 1, 2) + (hit.primID * 3);
-
-      const vec3 n0 = ggd.tri.vertexNormalsFV[idx.x];
-      const vec3 n1 = ggd.tri.vertexNormalsFV[idx.y];
-      const vec3 n2 = ggd.tri.vertexNormalsFV[idx.z];
-      hit.Ns = b.x * n0 + b.y * n1 + b.z * n2;
+      const uvec3 nidx = uvec3(0, 1, 2) + (hit.primID * 3);
+      n0 = ggd.tri.vertexNormalsFV[nidx.x];
+      n1 = ggd.tri.vertexNormalsFV[nidx.y];
+      n2 = ggd.tri.vertexNormalsFV[nidx.z];
     } else if (ggd.tri.vertexNormals != nullptr) {
-      const vec3 n0 = ggd.tri.vertexNormals[idx.x];
-      const vec3 n1 = ggd.tri.vertexNormals[idx.y];
-      const vec3 n2 = ggd.tri.vertexNormals[idx.z];
+      n0 = ggd.tri.vertexNormals[idx.x];
+      n1 = ggd.tri.vertexNormals[idx.y];
+      n2 = ggd.tri.vertexNormals[idx.z];
+    } else {
+      hasVertexNormals = false;
+    }
+
+    if (hasVertexNormals)
       hit.Ns = b.x * n0 + b.y * n1 + b.z * n2;
-    } else
+    else
       hit.Ns = hit.Ng;
 
     hit.Ns = normalize(hit.Ns);
 
-    if (ggd.tri.vertexTangentsFV != nullptr) {
-      const uvec3 idx = uvec3(0, 1, 2) + (hit.primID * 3);
+    const bool hasTangentsFV = ggd.tri.vertexTangentsFV != nullptr;
+    const bool hasTangentsV = ggd.tri.vertexTangents != nullptr;
+    if (hasTangentsFV || hasTangentsV) {
+      const uvec3 tIdx = hasTangentsFV
+          ? uvec3(0, 1, 2) + (hit.primID * 3)
+          : idx;
+      const vec4 *tArr = hasTangentsFV
+          ? ggd.tri.vertexTangentsFV
+          : ggd.tri.vertexTangents;
+      const vec4 t0 = tArr[tIdx.x];
+      const vec4 t1 = tArr[tIdx.y];
+      const vec4 t2 = tArr[tIdx.z];
 
-      const vec3 t0 = ggd.tri.vertexTangentsFV[idx.x];
-      const vec3 t1 = ggd.tri.vertexTangentsFV[idx.y];
-      const vec3 t2 = ggd.tri.vertexTangentsFV[idx.z];
-      const float handedness = ggd.tri.vertexTangentsFV[idx.x].w;
+      // At UV mirror seams the sign flips between adjacent vertices;
+      // barycentric-summing the signs and applying a single sign at the
+      // hit point would carve seam edges into the tangent frame.
+      // Build each vertex's bitangent with its own sign and normal,
+      // then blend B and T independently — same convention
+      // as glTF Sample Renderer, PBRT, Filament.
+      const vec3 N0 = hasVertexNormals ? n0 : hit.Ng;
+      const vec3 N1 = hasVertexNormals ? n1 : hit.Ng;
+      const vec3 N2 = hasVertexNormals ? n2 : hit.Ng;
+      const vec3 B0 = t0.w * cross(N0, vec3(t0));
+      const vec3 B1 = t1.w * cross(N1, vec3(t1));
+      const vec3 B2 = t2.w * cross(N2, vec3(t2));
+
       hit.tU = normalize(b.x * vec3(t0) + b.y * vec3(t1) + b.z * vec3(t2));
-      hit.tV = handedness * normalize(cross(hit.Ns, hit.tU));
-    } else if (ggd.tri.vertexTangents != nullptr) {
-      const vec3 t0 = ggd.tri.vertexTangents[idx.x];
-      const vec3 t1 = ggd.tri.vertexTangents[idx.y];
-      const vec3 t2 = ggd.tri.vertexTangents[idx.z];
-      const float handedness = ggd.tri.vertexTangents[idx.x].w;
-
-      hit.tU = normalize(b.x * t0 + b.y * t1 + b.z * t2);
-      hit.tV = handedness * normalize(cross(hit.Ns, hit.tU));
+      hit.tV = normalize(b.x * B0 + b.y * B1 + b.z * B2);
     } else {
       auto tangentSpace = computeOrthonormalBasis(hit.Ng);
       hit.tU = tangentSpace[0];
@@ -383,7 +401,7 @@ VISRTX_DEVICE void populateSurfaceHit(SurfaceHit &hit)
   hit.primID = ray::primID();
   hit.objID = sd.id;
   hit.instID = isd.id;
-  hit.epsilon = epsilonFrom(ray::hitpoint(), ray::direction(), ray::t());
+  hit.epsilon = epsilonFrom(hit.hitpoint);
   ray::computeTangentSpace(gd, ray::primID(), hit);
 
   const auto &handle = optixGetTransformListHandle(0);

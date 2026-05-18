@@ -14,6 +14,7 @@
 #include "tsd/rendering/pipeline/passes/AutoExposurePass.h"
 #include "tsd/rendering/pipeline/passes/CopyToSDLTexturePass.h"
 #include "tsd/rendering/pipeline/passes/OutlineRenderPass.h"
+#include "tsd/rendering/pipeline/passes/PrimitiveOutlineRenderPass.h"
 #include "tsd/rendering/pipeline/passes/OutputTransformPass.h"
 #include "tsd/rendering/pipeline/passes/PickPass.h"
 #include "tsd/rendering/pipeline/passes/SaveToFilePass.h"
@@ -24,7 +25,6 @@
 #include <anari/frontend/anari_enums.h>
 // std
 #include <functional>
-#include <future>
 #include <limits>
 #include <optional>
 #include <string>
@@ -41,7 +41,7 @@ struct Viewport : public BaseViewport
   ~Viewport();
 
   void buildUI() override;
-  void setLibrary(const std::string &libName, bool doAsync = true);
+  void setLibrary(const std::string &libName);
   void setLibraryToDefault();
   void setDeviceChangeCb(ViewportDeviceChangeCb cb);
   void setExternalInstances(
@@ -49,11 +49,14 @@ struct Viewport : public BaseViewport
   void setCustomFrameParameter(const char *name, const tsd::core::Any &value);
 
  private:
+  void refreshCurrentDevice();
+
   void saveSettings(tsd::core::DataNode &thisWindowRoot) override;
   void loadSettings(tsd::core::DataNode &thisWindowRoot) override;
 
   void imagePipeline_populate(tsd::rendering::ImagePipeline &p) override;
 
+  void camera_setUseImplicitAspectRatio(bool on) override;
   void camera_resetView(bool resetAzEl = true) override;
   void camera_centerView() override;
 
@@ -84,17 +87,17 @@ struct Viewport : public BaseViewport
 
   ViewportDeviceChangeCb m_deviceChangeCb;
   float m_timeToLoadDevice{0.f};
-  std::future<void> m_initFuture;
   std::string m_libName;
   tsd::rendering::RenderIndex *m_rIdx{nullptr};
   tsd::app::RenderIndexKind m_lastIndexKind{
       tsd::app::RenderIndexKind::ALL_LAYERS};
 
-  bool m_refreshDeviceNextFrame{false};
   bool m_showOverlay{true};
   bool m_highlightSelection{true};
+  bool m_outlinePrimitives{false};
   bool m_showOnlySelected{false};
   std::optional<float> m_frameProgress{0.f};
+  bool m_deviceSupportsPrimitiveId{false};
 
   tsd::rendering::AOVType m_visualizeAOV{tsd::rendering::AOVType::NONE};
   float m_depthVisualMinimum{0.f};
@@ -130,6 +133,7 @@ struct Viewport : public BaseViewport
   tsd::rendering::AutoExposurePass *m_autoExposurePass{nullptr};
   tsd::rendering::ToneMapPass *m_toneMapPass{nullptr};
   tsd::rendering::OutputTransformPass *m_outputTransformPass{nullptr};
+  tsd::rendering::PrimitiveOutlineRenderPass *m_primitiveOutlinePass{nullptr};
   tsd::rendering::OutlineRenderPass *m_outlinePass{nullptr};
   tsd::rendering::CopyToSDLTexturePass *m_outputPass{nullptr};
   tsd::rendering::SaveToFilePass *m_saveToFilePass{nullptr};

@@ -31,7 +31,7 @@ class Application : public TSDApplication
   Application(int argc, const char *argv[]) : TSDApplication(argc, argv) {}
   ~Application() override = default;
 
-  anari_viewer::WindowArray setupWindows() override
+  tsd::ui::imgui::WindowArray setupWindows() override
   {
     auto windows = TSDApplication::setupWindows();
 
@@ -104,11 +104,7 @@ class Application : public TSDApplication
       }
     };
 
-#if 1
     showTaskModal(populateScene, "Please Wait: Loading Scene...");
-#else
-    populateScene();
-#endif
 
     return windows;
   }

@@ -105,7 +105,7 @@ struct OrthographicCameraGPUData
 
 struct CameraGPUData
 {
-  CameraType type{CameraType::UNKNOWN};
+  CameraType type;
   vec4 region;
   vec3 pos;
   vec3 dir;
@@ -363,6 +363,23 @@ struct MaterialGPUData
     MaterialParameter transmission;
 
     float ior;
+
+    // KHR_materials_* extensions
+    DeviceObjectIndex occlusionSampler;
+    MaterialParameter specular;
+    MaterialParameter specularColor;
+    uint32_t useSpecular;
+    MaterialParameter clearcoat;
+    MaterialParameter clearcoatRoughness;
+    DeviceObjectIndex clearcoatNormalSampler;
+    MaterialParameter thickness;
+    float attenuationDistance;
+    vec3 attenuationColor;
+    MaterialParameter sheenColor;
+    MaterialParameter sheenRoughness;
+    MaterialParameter iridescence;
+    float iridescenceIor;
+    MaterialParameter iridescenceThickness;
   };
 
   struct MDL
@@ -715,9 +732,10 @@ struct RendererGPUData
   float inverseVolumeSamplingRate;
   float occlusionDistance;
   bool cullTriangleBF;
-  bool premultiplyBackground;
-  bool tonemap; // enable internal tonemapping during sample accumulation
-  glm::vec4 cutPlane; // cutting plane (nx,ny,nz,d); disabled when all zero (GPU default)
+  bool premultipliedAlpha;
+  bool fireflyFilter; // enable internal tonemapping during sample accumulation
+  glm::vec4 cutPlane; // cutting plane (nx,ny,nz,d); disabled when all zero (GPU
+                      // default)
 };
 
 // Frame //
@@ -733,8 +751,6 @@ enum class FrameFormat
 struct FrameBuffers
 {
   glm::vec4 *colorAccumulation;
-  glm::vec4 *outColorVec4;
-  uint32_t *outColorUint;
   float *depth;
   uint32_t *primID;
   uint32_t *objID;
@@ -749,7 +765,6 @@ struct FramebufferGPUData
   int frameID;
   int checkerboardID;
   float invFrameID;
-  FrameFormat format;
   glm::uvec2 size;
   glm::vec2 invSize;
 };
@@ -759,7 +774,7 @@ struct FrameGPUData
   FramebufferGPUData fb;
   RendererGPUData renderer;
   WorldGPUData world;
-  CameraGPUData *camera;
+  CameraGPUData camera;
 
   // Objects //
 

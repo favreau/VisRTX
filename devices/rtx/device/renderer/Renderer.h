@@ -74,7 +74,7 @@ struct Renderer : public Object
   bool denoise() const;
   bool denoiseUsingAlbedo() const;
   bool denoiseUsingNormal() const;
-  bool tonemap() const;
+  bool filterFireflies() const;
   int sampleLimit() const;
 
   static Renderer *createInstance(
@@ -90,11 +90,11 @@ struct Renderer : public Object
   bool m_denoise{false};
   bool m_denoiseAlbedo{false};
   bool m_denoiseNormal{false};
-  bool m_tonemap{
+  bool m_fireflyFilter{
       true}; // enable internal tonemapping during sample accumulation
   int m_sampleLimit{0};
   bool m_cullTriangleBF{false};
-  bool m_premultiplyBackground{false};
+  bool m_premultipliedAlpha{false};
   float m_volumeSamplingRate{1.f};
   vec4 m_cutPlane{0.f};
 

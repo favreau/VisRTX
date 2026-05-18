@@ -12,15 +12,20 @@
 #include "mikktspace.h"
 // stb_image
 #include "stb_image.h"
+#ifndef _WIN32
+#include "tinyexr.h"
+#endif
 // anari
 #include <anari/anari_cpp/ext/linalg.h>
 // std
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 using U64Vec2 = tsd::math::vec<std::uint64_t, 2>;
 namespace anari {
@@ -85,6 +90,11 @@ std::vector<std::string> splitString(const std::string &s, char delim)
   return result;
 }
 
+std::string makeTextureCacheKey(const std::string &textureId, bool isLinear)
+{
+  return textureId + (isLinear ? "_linear" : "_srgb");
+}
+
 tsd::scene::ArrayRef readArray(
     tsd::scene::Scene &scene, anari::DataType elementType, std::FILE *fp)
 {
@@ -103,23 +113,58 @@ tsd::scene::ArrayRef readArray(
   return retval;
 }
 
-SamplerRef importDdsTexture(
-    Scene &scene, std::string filepath, TextureCache &cache)
+static SamplerRef makeTextureSampler(
+    Scene &scene, ArrayRef dataArray, const std::string &displayName)
 {
-  auto dataArray = cache[filepath];
+  auto tex = scene.createObject<Sampler>(tokens::sampler::image2D);
+
+  tex->setParameterObject("image", *dataArray);
+  tex->setParameter("inAttribute", "attribute0");
+  tex->setParameter("wrapMode1", "repeat");
+  tex->setParameter("wrapMode2", "repeat");
+  tex->setParameter("filter", "linear");
+  tex->setName(fileOf(displayName).c_str());
+
+  return tex;
+}
+
+static SamplerRef makeCompressedTextureSampler(
+    Scene &scene, ArrayRef dataArray, const std::string &displayName)
+{
+  auto compressedFormat =
+      dataArray->getMetadataValue("compressedFormat").getString();
+
+  auto tex = scene.createObject<Sampler>(tokens::sampler::compressedImage2D);
+  tex->setParameterObject("image", *dataArray);
+  tex->setParameter("format", compressedFormat.c_str());
+  tex->setParameter(
+      "size", dataArray->getMetadataValue("imageSize").get<U64Vec2>());
+  tex->setParameter("inAttribute", "attribute0");
+  tex->setParameter("wrapMode1", "repeat");
+  tex->setParameter("wrapMode2", "repeat");
+  tex->setParameter("filter", "linear");
+  tex->setName(fileOf(displayName).c_str());
+
+  return tex;
+}
+
+static ArrayRef importDdsTextureArray(Scene &scene,
+    const void *data,
+    size_t numBytes,
+    const std::string &textureId,
+    TextureCache &cache)
+{
+  auto dataArray = cache[textureId];
   if (!dataArray.valid()) {
-    std::ifstream ifs(filepath, std::ios::in | std::ios::binary);
-    if (!ifs.is_open()) {
-      logError("[importDdsTexture] failed to open file '%s'", filepath.c_str());
+    if (numBytes < sizeof(dds::DdsFile)) {
+      logError("[importDdsTexture] invalid DDS buffer '%s'", textureId.c_str());
       return {};
     }
 
-    std::vector<char> buffer((std::istreambuf_iterator<char>(ifs)),
-        std::istreambuf_iterator<char>());
-    auto dds = reinterpret_cast<const dds::DdsFile *>(data(buffer));
+    auto dds = reinterpret_cast<const dds::DdsFile *>(data);
     if (dds->magic != dds::DDS_MAGIC
         || dds->header.size != sizeof(dds::DdsHeader)) {
-      logError("[importDdsTexture] invalid DDS file '%s'", filepath.c_str());
+      logError("[importDdsTexture] invalid DDS buffer '%s'", textureId.c_str());
       return {};
     }
 
@@ -127,13 +172,13 @@ SamplerRef importDdsTexture(
     constexpr const auto baseReqFlags = dds::DDSD_CAPS | dds::DDSD_HEIGHT
         | dds::DDSD_WIDTH | dds::DDSD_PIXELFORMAT;
     if ((dds->header.flags & baseReqFlags) != baseReqFlags) {
-      logError("[importDdsTexture] invalid DDS file '%s'", filepath.c_str());
+      logError("[importDdsTexture] invalid DDS buffer '%s'", textureId.c_str());
       return {};
     }
 
     constexpr const auto textureReqFlags = dds::DDSCAPS_TEXTURE;
     if ((dds->header.caps & textureReqFlags) != textureReqFlags) {
-      logError("[importDdsTexture] invalid DDS file '%s'", filepath.c_str());
+      logError("[importDdsTexture] invalid DDS buffer '%s'", textureId.c_str());
       return {};
     }
 
@@ -213,13 +258,12 @@ SamplerRef importDdsTexture(
     }
 
     default: {
-      logError(
-          "[importDdsTexture] unsupported DDS format '%c%c%c%c' for file '%s'",
+      logError("[importDdsTexture] unsupported DDS format '%c%c%c%c' for '%s'",
           dds->header.pixelFormat.fourCC & 0xff,
           (dds->header.pixelFormat.fourCC >> 8) & 0xff,
           (dds->header.pixelFormat.fourCC >> 16) & 0xff,
           (dds->header.pixelFormat.fourCC >> 24) & 0xff,
-          filepath.c_str());
+          textureId.c_str());
       break;
     }
     }
@@ -235,7 +279,7 @@ SamplerRef importDdsTexture(
             "[importDdsTexture] ignoring invalid linear size %u (should be %u) for compressed texture '%s'",
             dds->header.pitchOrLinearSize,
             linearSize,
-            filepath.c_str());
+            textureId.c_str());
       }
 
       dataArray = scene.createArray(ANARI_INT8, linearSize);
@@ -243,33 +287,44 @@ SamplerRef importDdsTexture(
       dataArray->setMetadataValue("compressedFormat", compressedFormat.value());
       dataArray->setMetadataValue(
           "imageSize", U64Vec2(dds->header.width, dds->header.height));
+      cache[textureId] = dataArray;
     } else {
-      logError("Unspported texture format for '%s'", filepath.c_str());
+      logError("Unspported texture format for '%s'", textureId.c_str());
       return {};
     }
   }
 
-  auto compressedFormat =
-      dataArray->getMetadataValue("compressedFormat").getString();
-
-  auto tex = scene.createObject<Sampler>(tokens::sampler::compressedImage2D);
-  tex->setParameterObject("image", *dataArray);
-  tex->setParameter("format", compressedFormat.c_str());
-  tex->setParameter(
-      "size", dataArray->getMetadataValue("imageSize").get<U64Vec2>());
-  tex->setParameter("inAttribute", "attribute0");
-  tex->setParameter("wrapMode1", "repeat");
-  tex->setParameter("wrapMode2", "repeat");
-  tex->setParameter("filter", "linear");
-  tex->setName(fileOf(filepath).c_str());
-
-  return tex;
+  return dataArray;
 }
 
-SamplerRef importStbTexture(
-    Scene &scene, std::string filepath, TextureCache &cache, bool isLinear)
+SamplerRef importDdsTexture(
+    Scene &scene, std::string filepath, TextureCache &cache)
 {
-  auto dataArray = cache[filepath];
+  if (auto dataArray = cache[filepath]; dataArray.valid())
+    return makeCompressedTextureSampler(scene, dataArray, filepath);
+
+  std::ifstream ifs(filepath, std::ios::in | std::ios::binary);
+  if (!ifs.is_open()) {
+    logError("[importDdsTexture] failed to open file '%s'", filepath.c_str());
+    return {};
+  }
+
+  std::vector<char> buffer(
+      (std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+  auto dataArray = importDdsTextureArray(
+      scene, buffer.data(), buffer.size(), filepath, cache);
+  return dataArray ? makeCompressedTextureSampler(scene, dataArray, filepath)
+                   : SamplerRef{};
+}
+
+static ArrayRef importStbTextureArray(Scene &scene,
+    const void *data,
+    size_t numBytes,
+    const std::string &textureId,
+    TextureCache &cache,
+    bool isLinear)
+{
+  auto dataArray = cache[textureId];
   if (!dataArray.valid()) {
     int width, height, n;
     if (isLinear) {
@@ -279,15 +334,21 @@ SamplerRef importStbTexture(
       stbi_ldr_to_hdr_scale(1.0f);
       stbi_ldr_to_hdr_gamma(2.2f);
     }
-    void *data = stbi_loadf(filepath.c_str(), &width, &height, &n, 0);
+    void *decodedData =
+        stbi_loadf_from_memory(static_cast<const stbi_uc *>(data),
+            int(numBytes),
+            &width,
+            &height,
+            &n,
+            0);
 
-    if (!data || n < 1) {
-      if (!data) {
+    if (!decodedData || n < 1) {
+      if (!decodedData) {
         logError(
-            "[importTexture] failed to import texture '%s'", filepath.c_str());
+            "[importTexture] failed to import texture '%s'", textureId.c_str());
       } else {
         logWarning("[importTexture] texture '%s' with %i channels not imported",
-            filepath.c_str(),
+            textureId.c_str(),
             n);
       }
       return {};
@@ -302,22 +363,70 @@ SamplerRef importStbTexture(
       texelType = ANARI_FLOAT32;
 
     dataArray = scene.createArray(texelType, width, height);
-    dataArray->setData(data);
+    dataArray->setData(decodedData);
+    cache[textureId] = dataArray;
 
-    stbi_image_free(data);
+    stbi_image_free(decodedData);
   }
 
-  auto tex = scene.createObject<Sampler>(tokens::sampler::image2D);
-
-  tex->setParameterObject("image", *dataArray);
-  tex->setParameter("inAttribute", "attribute0");
-  tex->setParameter("wrapMode1", "repeat");
-  tex->setParameter("wrapMode2", "repeat");
-  tex->setParameter("filter", "linear");
-  tex->setName(fileOf(filepath).c_str());
-
-  return tex;
+  return dataArray;
 }
+
+SamplerRef importStbTexture(
+    Scene &scene, std::string filepath, TextureCache &cache, bool isLinear)
+{
+  auto cacheKey = makeTextureCacheKey(filepath, isLinear);
+  if (auto dataArray = cache[cacheKey]; dataArray.valid())
+    return makeTextureSampler(scene, dataArray, filepath);
+
+  std::ifstream ifs(filepath, std::ios::in | std::ios::binary);
+  if (!ifs.is_open()) {
+    logError("[importTexture] failed to open texture '%s'", filepath.c_str());
+    return {};
+  }
+
+  std::vector<char> buffer(
+      (std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+  auto dataArray = importStbTextureArray(
+      scene, buffer.data(), buffer.size(), cacheKey, cache, isLinear);
+  return dataArray ? makeTextureSampler(scene, dataArray, filepath)
+                   : SamplerRef{};
+}
+
+#ifndef _WIN32
+// Follow actual HDRI importer: tinyexr is excluded on Windows; to be
+// investigated.
+static SamplerRef importExrTexture(
+    Scene &scene, const std::string &filepath, TextureCache &cache)
+{
+  // EXR is always linear (no sRGB encoding); collapse both cache buckets onto
+  // the linear key so a .exr can't be imported twice as srgb vs linear.
+  auto cacheKey = makeTextureCacheKey(filepath, /*isLinear=*/true);
+  if (auto dataArray = cache[cacheKey]; dataArray.valid())
+    return makeTextureSampler(scene, dataArray, filepath);
+
+  float *rgba = nullptr;
+  int width = 0;
+  int height = 0;
+  const char *err = nullptr;
+  int ret = LoadEXR(&rgba, &width, &height, filepath.c_str(), &err);
+  if (ret != TINYEXR_SUCCESS) {
+    logError("[importTexture] failed to load EXR '%s': %s",
+        filepath.c_str(),
+        err ? err : "unknown error");
+    if (err)
+      FreeEXRErrorMessage(err);
+    return {};
+  }
+
+  auto dataArray = scene.createArray(ANARI_FLOAT32_VEC4, width, height);
+  dataArray->setData(rgba);
+  cache[cacheKey] = dataArray;
+  free(rgba);
+
+  return makeTextureSampler(scene, dataArray, filepath);
+}
+#endif
 
 SamplerRef importTexture(
     Scene &scene, std::string filepath, TextureCache &cache, bool isLinear)
@@ -327,14 +436,73 @@ SamplerRef importTexture(
         return c == '\\' ? '/' : c;
       });
 
+  auto ext = extensionOf(filepath);
+  std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
+    return std::tolower(c);
+  });
+
   SamplerRef tex;
-  if (filepath.size() > 4 && filepath.substr(filepath.size() - 4) == ".dds") {
+  if (ext == ".dds") {
     tex = importDdsTexture(scene, filepath, cache);
+#ifndef _WIN32
+  } else if (ext == ".exr") {
+    tex = importExrTexture(scene, filepath, cache);
+#endif
   } else {
     tex = importStbTexture(scene, filepath, cache, isLinear);
   }
 
   return tex;
+}
+
+SamplerRef importTextureFromMemory(Scene &scene,
+    const std::string &cacheKey,
+    const std::string &displayName,
+    const void *data,
+    size_t numBytes,
+    TextureCache &cache,
+    bool isLinear,
+    const std::string &formatHint)
+{
+  std::string format = formatHint;
+  std::transform(
+      format.begin(), format.end(), format.begin(), [](unsigned char c) {
+        return std::tolower(c);
+      });
+
+  if (format == "dds") {
+    auto dataArray =
+        importDdsTextureArray(scene, data, numBytes, cacheKey, cache);
+    return dataArray
+        ? makeCompressedTextureSampler(scene, dataArray, displayName)
+        : SamplerRef{};
+  }
+
+  auto dataArray =
+      importStbTextureArray(scene, data, numBytes, cacheKey, cache, isLinear);
+  return dataArray ? makeTextureSampler(scene, dataArray, displayName)
+                   : SamplerRef{};
+}
+
+SamplerRef importRawTexture2D(Scene &scene,
+    const std::string &cacheKey,
+    const std::string &displayName,
+    const void *data,
+    size_t width,
+    size_t height,
+    TextureCache &cache,
+    bool isLinear)
+{
+  auto dataArray = cache[cacheKey];
+
+  if (!dataArray.valid()) {
+    auto format = isLinear ? ANARI_UFIXED8_VEC4 : ANARI_UFIXED8_RGBA_SRGB;
+    dataArray = scene.createArray(format, width, height);
+    dataArray->setData(data);
+    cache[cacheKey] = dataArray;
+  }
+
+  return makeTextureSampler(scene, dataArray, displayName);
 }
 
 SamplerRef makeDefaultColorMapSampler(Scene &scene, const float2 &range)
@@ -363,7 +531,9 @@ bool calcTangentsForTriangleMesh(const uint3 *indices,
     const float2 *texCoords,
     float4 *tangents,
     size_t numIndices,
-    size_t numVertices)
+    size_t numVertices,
+    bool flipTexCoordY,
+    bool faceVaryingTangents)
 {
   if (!texCoords)
     return false;
@@ -378,6 +548,8 @@ bool calcTangentsForTriangleMesh(const uint3 *indices,
     const float3 *vertexNormals;
     const float2 *texCoords;
     float4 *tangents;
+    bool flipTexCoordY;
+    bool faceVaryingTangents;
     size_t numIndices;
     size_t numVertices;
   } mesh;
@@ -387,6 +559,8 @@ bool calcTangentsForTriangleMesh(const uint3 *indices,
   mesh.vertexNormals = vertexNormals;
   mesh.texCoords = texCoords;
   mesh.tangents = tangents;
+  mesh.flipTexCoordY = flipTexCoordY;
+  mesh.faceVaryingTangents = faceVaryingTangents;
   mesh.numIndices = numIndices;
   mesh.numVertices = numVertices;
 
@@ -453,7 +627,9 @@ bool calcTangentsForTriangleMesh(const uint3 *indices,
 
     assert(mesh->texCoords);
     unsigned vID = index[vertID];
-    oc = {mesh->texCoords[vID].x, 1.0f - mesh->texCoords[vID].y};
+    oc = {mesh->texCoords[vID].x,
+        mesh->flipTexCoordY ? 1.0f - mesh->texCoords[vID].y
+                            : mesh->texCoords[vID].y};
   };
 
   // callback to assign output tangents
@@ -467,6 +643,8 @@ bool calcTangentsForTriangleMesh(const uint3 *indices,
     uint3 index = mesh->indices[faceID];
 
     unsigned vID = index[vertID];
+    if (mesh->faceVaryingTangents)
+      vID = faceID * 3 + vertID;
 
     float4 &outtangent = mesh->tangents[vID];
 
@@ -553,7 +731,7 @@ static core::TransferFunction importParaViewTransferFunction(
         filepath.c_str());
     return {};
   } else if (const auto arrayStart = jsonContent.find("[", rgbPointsPos);
-             arrayStart == std::string::npos) {
+      arrayStart == std::string::npos) {
     logError(
         "[importParaViewTransferFunction] Invalid RGBPoints format in file: %s",
         filepath.c_str());
@@ -638,7 +816,7 @@ static core::TransferFunction importParaViewTransferFunction(
           std::istringstream opacitySS(opacityContent);
 
           for (std::string opacityToken;
-               std::getline(opacitySS, opacityToken, ',');) {
+              std::getline(opacitySS, opacityToken, ',');) {
             // Trim whitespace
             if (const auto first = opacityToken.find_first_not_of(" \t\n\r");
                 first != std::string::npos) {

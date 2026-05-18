@@ -77,15 +77,13 @@ struct SampleDetails
 
 VISRTX_DEVICE void accumPixelSample(const FrameGPUData &frame,
     const uvec2 &pixel,
-    const SampleDetails &sample,
-    const int frameIDOffset = 0)
+    const SampleDetails &sample)
 {
   accumPixelSample(frame,
       pixel,
       vec4(sample.color, sample.opacity),
       sample.albedo,
-      sample.normal,
-      frameIDOffset);
+      sample.normal);
 }
 
 VISRTX_DEVICE vec3 surfaceAttenuation(ScreenSample &ss, Ray r)
@@ -143,27 +141,32 @@ VISRTX_DEVICE LightSample sampleLights(ScreenSample &ss,
 
   // curand_uniform returns (0,1], invert to get [0,numLights).
   // Clamp to handle float rounding when curand returns a subnormal.
-  const size_t selectedIdx = glm::min(
-      size_t((1.0f - curand_uniform(&ss.rs)) * float(numLights)),
-      numLights - 1);
+  const size_t selectedIdx =
+      glm::min(size_t((1.0f - curand_uniform(&ss.rs)) * float(numLights)),
+          numLights - 1);
 
-  const float radianceWeight = float(numLights);
+  // Uniform light pick: P(light) = 1/numLights. Fold that into the returned
+  // pdf rather than into radiance so MIS weights see the full joint pdf
+  // P(dir, light) = P(dir | light) * (1/numLights).
+  const float lightPickPdf = 1.0f / float(numLights);
 
   // last index is reserved for ambient light if it exists
   if (selectedIdx == world.numLightInstances) {
     const auto &rendererParams = frameData.renderer;
+    // Fold the hemisphere-sample pdf cos(theta)/pi with the uniform light pick.
+    const vec3 dir = sampleHemisphere(ss.rs, normal);
+    const float cosNs = fmaxf(0.f, dot(dir, normal));
     return LightSample{
-        radianceWeight * rendererParams.ambientColor
-            * rendererParams.ambientIntensity,
-        sampleHemisphere(ss.rs, normal),
+        rendererParams.ambientColor * rendererParams.ambientIntensity,
+        dir,
         std::numeric_limits<float>::max(),
-        1.0f / (2.0f * float(M_PI)),
+        lightPickPdf * cosNs * float(M_1_PI),
     };
   } else {
     const auto &lightInstance = world.lightInstances[selectedIdx];
     auto ls =
         sampleLight(ss, origin, lightInstance.lightIndex, lightInstance.xfm);
-    ls.radiance *= radianceWeight;
+    ls.pdf *= lightPickPdf;
     return ls;
   }
 }
@@ -271,7 +274,6 @@ VISRTX_GLOBAL void __raygen__()
         vec3(0.0f), 0.0f, vec3(0.0f), ray.t.upper, vec3(0.0f)};
 
     auto sampleContribution = vec3(1.0f);
-    bool firstHitAssigned = false;
 
     for (int d = 0; d < qualityParams.maxRayDepth; ++d) {
       const bool isFirstBounce = d == 0;
@@ -317,7 +319,7 @@ VISRTX_GLOBAL void __raygen__()
         if (shouldTerminatePath(ss, d, sampleContribution, true))
           break;
 
-        if (isFirstBounce && !firstHitAssigned) {
+        if (isFirstBounce) {
           setPixelIds(frameData.fb,
               ss.pixel,
               volumeSample.depth,
@@ -330,7 +332,6 @@ VISRTX_GLOBAL void __raygen__()
               ? volumeSample.normal
               : -ray.dir;
           sample.normal = volumeNormal;
-          firstHitAssigned = true;
         }
 
         const vec3 scatterDir = randomDir(ss.rs);
@@ -348,7 +349,7 @@ VISRTX_GLOBAL void __raygen__()
         const vec3 materialTint = materialEvaluateTint(shadingState);
         const float materialOpacity = materialEvaluateOpacity(shadingState);
 
-        if (isFirstBounce && !firstHitAssigned) {
+        if (isFirstBounce) {
           setPixelIds(frameData.fb,
               ss.pixel,
               surfaceHit.t,
@@ -358,17 +359,25 @@ VISRTX_GLOBAL void __raygen__()
           sample.depth = surfaceHit.t;
           sample.normal = materialEvaluateNormal(shadingState);
           sample.albedo = materialTint;
-          firstHitAssigned = true;
         }
 
         sample.color += sampleContribution * materialEmission * materialOpacity;
+        // Sample around the shading normal so the cosine-weighted hemisphere's
+        // pdf matches the BRDF's NdotL (which uses Ns). Sampling around Ng
+        // would bias the Lambertian estimator by cos_Ns/cos_Ng on smooth or
+        // bump-mapped surfaces.
+        const vec3 shadowOrigin =
+            shadingHitpoint(surfaceHit) + surfaceHit.Ng * surfaceHit.epsilon;
         LightSample lightSample =
-            sampleLights(ss, frameData, surfaceHit.hitpoint, surfaceHit.Ng);
+            sampleLights(ss, frameData, shadowOrigin, surfaceHit.Ns);
         if (lightSample.pdf >= ATTENUATION_EPSILON && lightSample.dist > 0.0f) {
-          const float lightDotNg = dot(lightSample.dir, surfaceHit.Ng);
-          if (lightDotNg > 0.0f) {
+          // Gate on the shading normal so the terminator follows the smooth
+          // surface; gating on Ng would carve the per-triangle facet shape
+          // into the lit/unlit boundary at grazing light angles.
+          const float lightDotNs = dot(lightSample.dir, surfaceHit.Ns);
+          if (lightDotNs > 0.0f) {
             const Ray shadowRay = {
-                surfaceHit.hitpoint + surfaceHit.Ng * surfaceHit.epsilon,
+                shadowOrigin,
                 lightSample.dir,
                 {surfaceHit.epsilon, lightSample.dist},
             };
@@ -382,29 +391,28 @@ VISRTX_GLOBAL void __raygen__()
           }
         }
 
-        accumulateValue(sample.opacity, materialOpacity, sample.opacity);
-
         auto nextRay = materialNextRay(shadingState, ray, ss.rs);
         sampleContribution *= nextRay.contributionWeight;
+
+        if (!continuesThroughSurface(nextRay))
+          accumulateValue(sample.opacity, 1.0f, sample.opacity);
 
         if (shouldTerminatePath(ss, d, sampleContribution, true))
           break;
 
-        ray = Ray{
-            surfaceHit.hitpoint
-                + surfaceHit.Ng
-                    * std::copysignf(surfaceHit.epsilon,
-                        dot(surfaceHit.Ns, nextRay.direction)),
-            normalize(vec3(nextRay.direction)),
-        };
+        const float side = continuesThroughSurface(nextRay) ? -1.0f : 1.0f;
+        ray =
+            Ray{surfaceHit.hitpoint + surfaceHit.Ng * surfaceHit.epsilon * side,
+                normalize(vec3(nextRay.direction))};
       }
 
-      if (!surfaceHit.foundHit) {
-        const auto bg = getBackground(frameData, ss.screen, ray.dir);
-        sample.color += sampleContribution * vec3(bg) * bg.a;
-        accumulateValue(sample.opacity, bg.a, sample.opacity);
+      if (!surfaceHit.foundHit && !volumeSample.didScatter) {
+        if (vec3 hdri; getBackgroundLight(frameData, ray.dir, hdri)) {
+          sample.color += sampleContribution * hdri;
+          accumulateValue(sample.opacity, 1.f, sample.opacity);
+        }
 
-        if (isFirstBounce && !firstHitAssigned) {
+        if (isFirstBounce) {
           setPixelIds(frameData.fb, ss.pixel, ray.t.upper, ~0u, ~0u, ~0u);
         }
 
@@ -412,7 +420,7 @@ VISRTX_GLOBAL void __raygen__()
       }
     }
 
-    accumPixelSample(frameData, ss.pixel, sample, i);
+    accumPixelSample(frameData, ss.pixel, sample);
   }
 }
 

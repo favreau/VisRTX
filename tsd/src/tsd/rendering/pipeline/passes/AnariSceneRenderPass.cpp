@@ -4,6 +4,10 @@
 #include "AnariSceneRenderPass.h"
 #include "tsd/core/Logging.hpp"
 // tsd_algorithms
+#include "tsd/algorithms/cpu/clearBuffers.hpp"
+#ifdef TSD_ALGORITHMS_HAS_CUDA
+#include "tsd/algorithms/cuda/clearBuffers.hpp"
+#endif
 #include "tsd/algorithms/cpu/depthCompositeFrame.hpp"
 #ifdef TSD_ALGORITHMS_HAS_CUDA
 #include "tsd/algorithms/cuda/depthCompositeFrame.hpp"
@@ -76,11 +80,7 @@ void AnariSceneRenderPass::setCamera(anari::Camera c)
   anari::commitParameters(m_device, m_frame);
   anari::release(m_device, m_camera);
   m_camera = c;
-  if (m_camera) {
-    auto size = getDimensions();
-    anari::setParameter(m_device, m_camera, "aspect", size.x / float(size.y));
-    anari::commitParameters(m_device, m_camera);
-  }
+  updateCameraAspect();
 }
 
 void AnariSceneRenderPass::setRenderer(anari::Renderer r)
@@ -119,24 +119,19 @@ void AnariSceneRenderPass::setEnableIDs(bool on)
 
   if (on) {
     tsd::core::logInfo("[ImagePipeline] enabling objectId frame channel");
-
-    anari::discard(m_device, m_frame);
-    anari::wait(m_device, m_frame);
-
     anari::setParameter(m_device, m_frame, "channel.objectId", ANARI_UINT32);
-    anari::commitParameters(m_device, m_frame);
-
-    anari::render(m_device, m_frame);
-    anari::wait(m_device, m_frame);
   } else {
     tsd::core::logInfo("[ImagePipeline] disabling objectId frame channel");
     anari::unsetParameter(m_device, m_frame, "channel.objectId");
-    anari::commitParameters(m_device, m_frame);
-
     auto size = getDimensions();
     const size_t totalSize = size_t(size.x) * size_t(size.y);
     std::fill(m_buffers.objectId, m_buffers.objectId + totalSize, ~0u);
   }
+
+  anari::commitParameters(m_device, m_frame);
+
+  if (on)
+    restartFrame();
 }
 
 void AnariSceneRenderPass::setEnablePrimitiveId(bool on)
@@ -148,24 +143,20 @@ void AnariSceneRenderPass::setEnablePrimitiveId(bool on)
 
   if (on) {
     tsd::core::logInfo("[ImagePipeline] enabling primitiveId frame channel");
-
-    anari::discard(m_device, m_frame);
-    anari::wait(m_device, m_frame);
-
     anari::setParameter(m_device, m_frame, "channel.primitiveId", ANARI_UINT32);
-    anari::commitParameters(m_device, m_frame);
-
-    anari::render(m_device, m_frame);
-    anari::wait(m_device, m_frame);
   } else {
     tsd::core::logInfo("[ImagePipeline] disabling primitiveId frame channel");
     anari::unsetParameter(m_device, m_frame, "channel.primitiveId");
-    anari::commitParameters(m_device, m_frame);
 
     auto size = getDimensions();
     const size_t totalSize = size_t(size.x) * size_t(size.y);
     std::fill(m_buffers.primitiveId, m_buffers.primitiveId + totalSize, ~0u);
   }
+
+  anari::commitParameters(m_device, m_frame);
+
+  if (on)
+    restartFrame();
 }
 
 void AnariSceneRenderPass::setEnableInstanceId(bool on)
@@ -177,24 +168,20 @@ void AnariSceneRenderPass::setEnableInstanceId(bool on)
 
   if (on) {
     tsd::core::logInfo("[ImagePipeline] enabling instanceId frame channel");
-
-    anari::discard(m_device, m_frame);
-    anari::wait(m_device, m_frame);
-
     anari::setParameter(m_device, m_frame, "channel.instanceId", ANARI_UINT32);
-    anari::commitParameters(m_device, m_frame);
-
-    anari::render(m_device, m_frame);
-    anari::wait(m_device, m_frame);
   } else {
     tsd::core::logInfo("[ImagePipeline] disabling instanceId frame channel");
     anari::unsetParameter(m_device, m_frame, "channel.instanceId");
-    anari::commitParameters(m_device, m_frame);
 
     auto size = getDimensions();
     const size_t totalSize = size_t(size.x) * size_t(size.y);
     std::fill(m_buffers.instanceId, m_buffers.instanceId + totalSize, ~0u);
   }
+
+  anari::commitParameters(m_device, m_frame);
+
+  if (on)
+    restartFrame();
 }
 
 void AnariSceneRenderPass::setEnableAlbedo(bool on)
@@ -206,21 +193,14 @@ void AnariSceneRenderPass::setEnableAlbedo(bool on)
 
   if (on) {
     tsd::core::logInfo("[ImagePipeline] enabling albedo frame channel");
-
-    anari::discard(m_device, m_frame);
-    anari::wait(m_device, m_frame);
-
     anari::setParameter(
         m_device, m_frame, "channel.albedo", ANARI_FLOAT32_VEC3);
-    anari::commitParameters(m_device, m_frame);
-
-    anari::render(m_device, m_frame);
-    anari::wait(m_device, m_frame);
   } else {
     tsd::core::logInfo("[ImagePipeline] disabling albedo frame channel");
     anari::unsetParameter(m_device, m_frame, "channel.albedo");
-    anari::commitParameters(m_device, m_frame);
   }
+
+  anari::commitParameters(m_device, m_frame);
 }
 
 void AnariSceneRenderPass::setEnableNormals(bool on)
@@ -232,26 +212,41 @@ void AnariSceneRenderPass::setEnableNormals(bool on)
 
   if (on) {
     tsd::core::logInfo("[ImagePipeline] enabling normal frame channel");
-
-    anari::discard(m_device, m_frame);
-    anari::wait(m_device, m_frame);
-
     anari::setParameter(
         m_device, m_frame, "channel.normal", ANARI_FLOAT32_VEC3);
-    anari::commitParameters(m_device, m_frame);
-
-    anari::render(m_device, m_frame);
-    anari::wait(m_device, m_frame);
   } else {
     tsd::core::logInfo("[ImagePipeline] disabling normal frame channel");
     anari::unsetParameter(m_device, m_frame, "channel.normal");
-    anari::commitParameters(m_device, m_frame);
   }
+
+  anari::commitParameters(m_device, m_frame);
+}
+
+void AnariSceneRenderPass::setUseImplicitAspectRatio(bool on)
+{
+  if (on == m_useImplicitAspectRatio)
+    return;
+
+  m_useImplicitAspectRatio = on;
+  updateCameraAspect();
+}
+
+void AnariSceneRenderPass::startFirstFrame(bool waitForCompletion)
+{
+  if (!m_firstFrame)
+    return;
+  auto dims = getDimensions();
+  anari::render(m_device, m_frame);
+  if (waitForCompletion)
+    anari::wait(m_device, m_frame);
+  m_firstFrame = false;
 }
 
 void AnariSceneRenderPass::setRunAsync(bool on)
 {
   m_runAsync = on;
+  if (!on)
+    anari::wait(m_device, m_frame);
 }
 
 anari::Frame AnariSceneRenderPass::getFrame() const
@@ -266,10 +261,7 @@ void AnariSceneRenderPass::updateSize()
   anari::setParameter(m_device, m_frame, "size", size);
   anari::commitParameters(m_device, m_frame);
 
-  if (m_camera) {
-    anari::setParameter(m_device, m_camera, "aspect", size.x / float(size.y));
-    anari::commitParameters(m_device, m_camera);
-  }
+  updateCameraAspect();
 
   const size_t totalSize = size_t(size.x) * size_t(size.y);
   m_buffers.color = detail::allocate<uint32_t>(totalSize);
@@ -282,24 +274,56 @@ void AnariSceneRenderPass::updateSize()
   m_buffers.normal = detail::allocate<tsd::math::float3>(totalSize);
 }
 
+void AnariSceneRenderPass::updateCameraAspect()
+{
+  auto size = getDimensions();
+  if (!m_camera || size.y == 0)
+    return;
+
+  if (m_useImplicitAspectRatio)
+    anari::unsetParameter(m_device, m_camera, "aspect");
+  else
+    anari::setParameter(m_device, m_camera, "aspect", size.x / float(size.y));
+
+  anari::commitParameters(m_device, m_camera);
+}
+
+void AnariSceneRenderPass::restartFrame()
+{
+  if (!m_device || m_firstFrame)
+    return;
+  anari::discard(m_device, m_frame);
+  anari::wait(m_device, m_frame);
+  anari::render(m_device, m_frame);
+  anari::wait(m_device, m_frame);
+}
+
 void AnariSceneRenderPass::render(ImageBuffers &b, int stageId)
 {
   m_buffers.stream = b.stream;
 
-  if (m_firstFrame)
-    anari::render(m_device, m_frame);
+  startFirstFrame(false);
 
-  if (m_firstFrame || !m_runAsync) {
+  if (!m_runAsync)
     anari::wait(m_device, m_frame);
-    m_firstFrame = false;
-  }
 
   if (anari::isReady(m_device, m_frame)) {
     copyFrameData();
     anari::render(m_device, m_frame);
   }
 
-  composite(b, stageId);
+  if (!m_firstFrame)
+    composite(b, stageId);
+  else {
+    const auto size = getDimensions();
+    const uint32_t totalPixels = uint32_t(size.x) * uint32_t(size.y);
+#ifdef TSD_ALGORITHMS_HAS_CUDA
+    if (b.stream)
+      tsd::algorithms::cuda::fill(b.stream, b.color, totalPixels, 0);
+#else
+    tsd::algorithms::cpu::fill(b.color, totalPixels, 0);
+#endif
+  }
 }
 
 void AnariSceneRenderPass::copyFrameData()
@@ -326,46 +350,53 @@ void AnariSceneRenderPass::copyFrameData()
 
   const tsd::math::uint2 size(getDimensions());
   const size_t totalSize = size.x * size.y;
-  if (totalSize > 0 && size.x == color.width && size.y == color.height) {
-    if (color.pixelType == ANARI_FLOAT32_VEC4) {
-      detail::copy(m_buffers.hdrColor, (float *)color.data, totalSize * 4);
-      detail::convertFloatColorBuffer_(m_buffers.stream,
-          (const float *)color.data,
-          (uint8_t *)m_buffers.color,
-          totalSize * 4);
-    } else
-      detail::copy(m_buffers.color, (uint32_t *)color.data, totalSize);
+  const bool valid = totalSize > 0 && size.x == color.width
+      && size.y == color.height && color.data != nullptr
+      && depth.data != nullptr && color.pixelType != ANARI_UNKNOWN;
+  if (!valid) {
+    anari::unmap(m_device, m_frame, colorChannel);
+    anari::unmap(m_device, m_frame, depthChannel);
+    return;
+  }
 
-    detail::copy(m_buffers.depth, depth.data, totalSize);
-    if (m_enableIDs) {
-      auto objectId = anari::map<uint32_t>(m_device, m_frame, objectIdChannel);
-      if (objectId.data)
-        detail::copy(m_buffers.objectId, objectId.data, totalSize);
-    }
-    if (m_enablePrimitiveId) {
-      auto primitiveId =
-          anari::map<uint32_t>(m_device, m_frame, primitiveIdChannel);
-      if (primitiveId.data)
-        detail::copy(m_buffers.primitiveId, primitiveId.data, totalSize);
-    }
-    if (m_enableInstanceId) {
-      auto instanceId =
-          anari::map<uint32_t>(m_device, m_frame, instanceIdChannel);
-      if (instanceId.data)
-        detail::copy(m_buffers.instanceId, instanceId.data, totalSize);
-    }
-    if (m_enableAlbedo) {
-      auto albedo =
-          anari::map<tsd::math::float3>(m_device, m_frame, albedoChannel);
-      if (albedo.data)
-        detail::copy(m_buffers.albedo, albedo.data, totalSize);
-    }
-    if (m_enableNormals) {
-      auto normal =
-          anari::map<tsd::math::float3>(m_device, m_frame, normalChannel);
-      if (normal.data)
-        detail::copy(m_buffers.normal, normal.data, totalSize);
-    }
+  if (color.pixelType == ANARI_FLOAT32_VEC4) {
+    detail::copy(m_buffers.hdrColor, (float *)color.data, totalSize * 4);
+    detail::convertFloatColorBuffer_(m_buffers.stream,
+        (const float *)color.data,
+        (uint8_t *)m_buffers.color,
+        totalSize * 4);
+  } else
+    detail::copy(m_buffers.color, (uint32_t *)color.data, totalSize);
+
+  detail::copy(m_buffers.depth, depth.data, totalSize);
+  if (m_enableIDs) {
+    auto objectId = anari::map<uint32_t>(m_device, m_frame, objectIdChannel);
+    if (objectId.data)
+      detail::copy(m_buffers.objectId, objectId.data, totalSize);
+  }
+  if (m_enablePrimitiveId) {
+    auto primitiveId =
+        anari::map<uint32_t>(m_device, m_frame, primitiveIdChannel);
+    if (primitiveId.data)
+      detail::copy(m_buffers.primitiveId, primitiveId.data, totalSize);
+  }
+  if (m_enableInstanceId) {
+    auto instanceId =
+        anari::map<uint32_t>(m_device, m_frame, instanceIdChannel);
+    if (instanceId.data)
+      detail::copy(m_buffers.instanceId, instanceId.data, totalSize);
+  }
+  if (m_enableAlbedo) {
+    auto albedo =
+        anari::map<tsd::math::float3>(m_device, m_frame, albedoChannel);
+    if (albedo.data)
+      detail::copy(m_buffers.albedo, albedo.data, totalSize);
+  }
+  if (m_enableNormals) {
+    auto normal =
+        anari::map<tsd::math::float3>(m_device, m_frame, normalChannel);
+    if (normal.data)
+      detail::copy(m_buffers.normal, normal.data, totalSize);
   }
 
   anari::unmap(m_device, m_frame, colorChannel);

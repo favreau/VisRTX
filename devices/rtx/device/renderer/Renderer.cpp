@@ -164,12 +164,14 @@ void Renderer::commitParameters()
       (denoiseMode == "colorAlbedo" || denoiseMode == "colorAlbedoNormal");
   m_denoiseNormal = (denoiseMode == "colorAlbedoNormal");
 
-  m_tonemap = getParam<bool>("tonemap", true);
+  m_fireflyFilter =
+      getParam<bool>("fireflyFilter", getParam<bool>("tonemap", true));
   m_sampleLimit = getParam<int>("sampleLimit", 128);
   m_cullTriangleBF = getParam<bool>("cullTriangleBackfaces", false);
   m_volumeSamplingRate =
       std::clamp(getParam<float>("volumeSamplingRate", 0.125f), 1e-3f, 10.f);
-  m_premultiplyBackground = getParam<bool>("premultiplyBackground", false);
+  m_premultipliedAlpha = getParam<bool>(
+      "premultipliedAlpha", getParam<bool>("premultiplyBackground", false));
   m_cutPlane = getParam<vec4>("cutPlane", vec4(0.f));
   if (m_checkerboard)
     m_spp = 1;
@@ -207,10 +209,10 @@ void Renderer::populateFrameData(FrameGPUData &fd) const
   fd.renderer.ambientIntensity = m_ambientIntensity;
   fd.renderer.occlusionDistance = m_occlusionDistance;
   fd.renderer.cullTriangleBF = m_cullTriangleBF;
-  fd.renderer.tonemap = m_tonemap;
+  fd.renderer.fireflyFilter = m_fireflyFilter;
   fd.renderer.inverseVolumeSamplingRate = 1.f / m_volumeSamplingRate;
   fd.renderer.numIterations = std::max(m_spp, 1);
-  fd.renderer.premultiplyBackground = m_premultiplyBackground;
+  fd.renderer.premultipliedAlpha = m_premultipliedAlpha;
   fd.renderer.cutPlane = m_cutPlane;
 }
 
@@ -951,9 +953,9 @@ void Renderer::cleanup()
   }
 }
 
-bool Renderer::tonemap() const
+bool Renderer::filterFireflies() const
 {
-  return m_tonemap;
+  return m_fireflyFilter;
 }
 
 } // namespace visrtx

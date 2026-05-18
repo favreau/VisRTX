@@ -33,6 +33,7 @@
 #include "gpu/evalShading.h"
 #include "gpu/gpu_math.h"
 #include "gpu/gpu_objects.h"
+#include "gpu/gpu_util.h"
 #include "gpu/intersectRay.h"
 #include "gpu/renderer/common.h"
 #include "gpu/renderer/raygen_helpers.h"
@@ -86,17 +87,18 @@ struct InteractiveShadingPolicy
         * materialEvaluateTint(shadingState);
 
     // Handle all lights contributions
+    const vec3 shadowOrigin = shadingHitpoint(hit) + hit.Ng * hit.epsilon;
     for (size_t i = 0; i < world.numLightInstances; i++) {
       const auto &light = world.lightInstances[i];
       const auto lightSample =
-          sampleLight(ss, hit.hitpoint, light.lightIndex, light.xfm);
+          sampleLight(ss, shadowOrigin, light.lightIndex, light.xfm);
 
       if (lightSample.pdf == 0.0f)
         continue;
 
       // Shadowing
       const Ray shadowRay = {
-          hit.hitpoint + hit.Ng * hit.epsilon,
+          shadowOrigin,
           lightSample.dir,
           {hit.epsilon, lightSample.dist},
       };
@@ -124,13 +126,10 @@ struct InteractiveShadingPolicy
     NextRay nextRay = materialNextRay(shadingState, ray, ss.rs);
     if (glm::any(glm::greaterThan(
             nextRay.contributionWeight, glm::vec3(MIN_CONTRIBUTION_EPSILON)))) {
+      const float side = continuesThroughSurface(nextRay) ? -1.0f : 1.0f;
       Ray bounceRay = {
-          bounceHit.hitpoint
-              + bounceHit.Ng
-                  * std::copysignf(
-                      bounceHit.epsilon, dot(bounceHit.Ns, nextRay.direction)),
-          normalize(nextRay.direction),
-      };
+          bounceHit.hitpoint + bounceHit.Ng * bounceHit.epsilon * side,
+          normalize(nextRay.direction)};
 
       // Only check for intersecting surfaces and background as secondary light
       // interactions
@@ -150,15 +149,13 @@ struct InteractiveShadingPolicy
             * rendererParams.ambientColor * rendererParams.ambientIntensity;
         contrib += color * nextRay.contributionWeight;
       } else {
-        // No hit, get background contribution directly (no surface to weight
-        // against)
-        const auto color = getBackground(frameData, ss.screen, bounceRay.dir);
-        contrib += vec3(color) * nextRay.contributionWeight;
+        vec3 hdri;
+        if (getBackgroundLight(frameData, bounceRay.dir, hdri))
+          contrib += hdri * nextRay.contributionWeight;
       }
     }
 
-    float opacity = evaluateOpacity(shadingState);
-    return vec4(contrib, opacity);
+    return vec4(contrib, materialEvaluateOpacity(shadingState));
   }
 };
 
@@ -185,7 +182,7 @@ VISRTX_GLOBAL void __anyhit__shadow()
 
     MaterialShadingState shadingState;
     materialInitShading(&shadingState, frameData, *hit.material, hit);
-    auto opacity = evaluateOpacity(shadingState);
+    auto opacity = materialEvaluateOpacity(shadingState);
 
     auto &o = ray::rayData<float>();
 

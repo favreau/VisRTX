@@ -18,10 +18,7 @@ namespace tsd::app {
 
 TSDState::TSDState() : animationMgr(&scene) {}
 
-Context::Context() : anari(&m_logging.verbose)
-{
-  tsd.scene.setUpdateDelegate(&anari.getUpdateDelegate());
-}
+Context::Context() : anari(&m_logging.verbose) {}
 
 Context::~Context()
 {
@@ -83,6 +80,8 @@ void Context::parseCommandLine(std::vector<std::string> &args)
       importerType = tsd::io::ImporterType::OBJ;
     else if (arg == "-pdb")
       importerType = tsd::io::ImporterType::PDB;
+    else if (arg == "-pbrt")
+      importerType = tsd::io::ImporterType::PBRT;
     else if (arg == "-ply")
       importerType = tsd::io::ImporterType::PLY;
     else if (arg == "-pointsbin") {
@@ -106,6 +105,8 @@ void Context::parseCommandLine(std::vector<std::string> &args)
       importerType = tsd::io::ImporterType::VTP;
     else if (arg == "-vtu")
       importerType = tsd::io::ImporterType::VTU;
+    else if (arg == "-vtu_property")
+      this->commandLine.vtuProperty = args[++i];
     else if (arg == "-xyzdp")
       importerType = tsd::io::ImporterType::XYZDP;
     else if (arg == "-volume")
@@ -130,10 +131,17 @@ void Context::parseCommandLine(std::vector<std::string> &args)
             this->commandLine.animationLayerNames.push_back(
                 this->commandLine.currentLayerName);
           }
-          this->commandLine.currentAnimationSequence->second.push_back(arg);
+          auto file = arg;
+          if (importerType == tsd::io::ImporterType::VOLUME_ANIMATION
+              && !this->commandLine.vtuProperty.empty())
+            file += ';' + this->commandLine.vtuProperty;
+          this->commandLine.currentAnimationSequence->second.push_back(file);
         } else {
-          this->commandLine.filenames.push_back(
-              {importerType, arg + ';' + this->commandLine.currentLayerName});
+          auto file = arg + ';' + this->commandLine.currentLayerName;
+          if (importerType == tsd::io::ImporterType::VTU
+              && !this->commandLine.vtuProperty.empty())
+            file += ';' + this->commandLine.vtuProperty;
+          this->commandLine.filenames.push_back({importerType, file});
           this->commandLine.currentAnimationSequence = nullptr;
         }
       } else {
@@ -239,7 +247,7 @@ void Context::setSelected(tsd::scene::LayerNodeRef node)
 void Context::setSelected(const std::vector<tsd::scene::LayerNodeRef> &nodes)
 {
   tsd.selectedNodes = nodes;
-  anari.getUpdateDelegate().signalObjectFilteringChanged();
+  tsd.scene.updateDelegate().signalObjectFilteringChanged();
 }
 
 void Context::setSelected(const tsd::scene::Object *obj)
@@ -295,7 +303,7 @@ void Context::addToSelection(tsd::scene::LayerNodeRef node)
   }
 
   tsd.selectedNodes.push_back(node);
-  anari.getUpdateDelegate().signalObjectFilteringChanged();
+  tsd.scene.updateDelegate().signalObjectFilteringChanged();
 }
 
 void Context::removeFromSelection(tsd::scene::LayerNodeRef node)
@@ -303,7 +311,7 @@ void Context::removeFromSelection(tsd::scene::LayerNodeRef node)
   auto it = std::find(tsd.selectedNodes.begin(), tsd.selectedNodes.end(), node);
   if (it != tsd.selectedNodes.end()) {
     tsd.selectedNodes.erase(it);
-    anari.getUpdateDelegate().signalObjectFilteringChanged();
+    tsd.scene.updateDelegate().signalObjectFilteringChanged();
   }
 }
 
@@ -317,7 +325,7 @@ void Context::clearSelected()
 {
   if (!tsd.selectedNodes.empty()) {
     tsd.selectedNodes.clear();
-    anari.getUpdateDelegate().signalObjectFilteringChanged();
+    tsd.scene.updateDelegate().signalObjectFilteringChanged();
   }
 }
 std::vector<tsd::scene::LayerNodeRef> Context::getParentOnlySelectedNodes()

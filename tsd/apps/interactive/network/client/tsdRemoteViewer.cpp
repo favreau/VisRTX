@@ -26,7 +26,7 @@ struct Application : public TSDApplication
   Application();
   ~Application() override;
 
-  anari_viewer::WindowArray setupWindows() override;
+  tsd::ui::imgui::WindowArray setupWindows() override;
   void uiMainMenuBar() override;
   void teardown() override;
   const char *getDefaultLayout() const override;
@@ -35,7 +35,7 @@ struct Application : public TSDApplication
   void connect();
   void disconnect();
 
-  std::unique_ptr<tsd::network::NetworkUpdateDelegate> m_updateDelegate;
+  tsd::network::NetworkUpdateDelegate *m_updateDelegate{nullptr};
   tsd::ui::imgui::RemoteViewport *m_viewport{nullptr};
   std::shared_ptr<tsd::network::NetworkClient> m_client;
   std::string m_host{"127.0.0.1"};
@@ -52,8 +52,9 @@ Application::Application()
 
   m_client = std::make_shared<tsd::network::NetworkClient>();
 
-  m_updateDelegate = std::make_unique<tsd::network::NetworkUpdateDelegate>(
-      &ctx->tsd.scene, m_client.get());
+  m_updateDelegate =
+      ctx->tsd.scene.updateDelegate().emplace<tsd::network::NetworkUpdateDelegate>(
+          &ctx->tsd.scene, m_client.get());
 
   ctx->tsd.animationMgr.setTimeChangedCallback([this](float time) {
     if (m_timeUpdatesEnabled)
@@ -100,13 +101,16 @@ Application::Application()
         m_timeUpdatesEnabled = true;
       });
 
-  ctx->tsd.scene.setUpdateDelegate(m_updateDelegate.get());
   ctx->tsd.sceneLoadComplete = false;
 }
 
-Application::~Application() = default;
+Application::~Application()
+{
+  if (m_updateDelegate)
+    appContext()->tsd.scene.updateDelegate().erase(m_updateDelegate);
+}
 
-anari_viewer::WindowArray Application::setupWindows()
+tsd::ui::imgui::WindowArray Application::setupWindows()
 {
   auto windows = TSDApplication::setupWindows();
 
