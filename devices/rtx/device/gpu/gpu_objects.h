@@ -36,8 +36,10 @@
 
 // optix
 #include <optix.h>
-// curand
-#include <curand_kernel.h>
+// cuda runtime — cudaTextureObject_t and friends
+#include <cuda_runtime.h>
+// PCG RNG, see gpu/pcg.h
+#include "gpu/pcg.h"
 // anari
 #include <anari/anari_cpp.hpp>
 #include <glm/ext/matrix_float3x4.hpp>
@@ -57,7 +59,7 @@
 
 namespace visrtx {
 
-using RandState = curandStatePhilox4_32_10_t;
+using RandState = PCGState;
 using DeviceObjectIndex = int32_t;
 
 enum class MaterialAttribute : uint8_t
@@ -127,8 +129,53 @@ enum class GeometryType
   CURVE,
   CONE,
   SPHERE,
+  SDF,
   NEURAL,
   UNKNOWN
+};
+
+enum class SDFType : uint8_t
+{
+  SPHERE = 0,
+  PILL = 1,
+  CONE_PILL = 2,
+  CONE_PILL_SIGMOID = 3,
+  CONE = 4,
+  TORUS = 5,
+  CUT_SPHERE = 6,
+  VESICA = 7,
+  ELLIPSOID = 8
+};
+
+// Byte-exact layout shared between C++ host and CUDA device code.
+// sizeof(SDFPrimitive) == 72, verified by static_assert in SDF.cpp.
+struct SDFPrimitive
+{
+  uint64_t userData{0};
+  vec3 userParams{0.f}; // x=displacement amplitude, y=frequency, z=unused
+  vec3 p0{0.f};
+  vec3 p1{0.f};
+  float r0{-1.f};
+  float r1{-1.f};
+  uint32_t _pad{0};
+  uint64_t neighboursIndex{0};
+  uint8_t numNeighbours{0};
+  uint8_t type{0};
+  uint8_t _pad2[6]{};
+};
+
+struct SDFGeometryData
+{
+  const SDFPrimitive *geometries;
+  const uint64_t *neighbours;
+  uint32_t numGeometries;
+  float epsilon;
+  uint32_t nbMarchIterations;
+  float blendFactor;
+  float blendLerpFactor;
+  float omega;
+  float distanceFromCamera;
+  float noiseFactor; // [0,1]: 0=no noise, 1=max organic surface noise
 };
 
 struct AttributeData
@@ -227,6 +274,7 @@ struct GeometryGPUData
     CurveGeometryData curve;
     ConeGeometryData cone;
     SphereGeometryData sphere;
+    SDFGeometryData sdf;
 #ifdef VISRTX_USE_NEURAL
     NeuralGeometryData neural;
 #endif
@@ -393,6 +441,11 @@ struct MaterialGPUData
 
   uint32_t callableBaseIndex{~0u};
 
+  // Static shadow attenuator: OPAQUE alphaMode, opacity + alpha channels
+  // constant 1.0, transmission constant 0.0, no opacity/transmission
+  // sampler. Shadow anyhit short-circuits via optixTerminateRay.
+  bool isFullyOpaque{false};
+
   union MaterialData
   {
     Matte matte;
@@ -417,9 +470,10 @@ struct SurfaceGPUData
 struct UniformGridData
 {
   ivec3 dims;
-  box3 worldBounds;
+  box3 objectBounds;
   box1 *valueRanges; // min/max ranges
-  float *maxOpacities; // used for adaptive sampling/space skipping
+  float2 *opacityBounds; // Per-cell α bounds (.x = min, .y = max) over the TF
+                         // lookup.
 };
 
 struct StructuredRegularData
@@ -445,6 +499,8 @@ struct NVdbRegularData
   const void *gridData;
   bool cellCentered;
   SpatialFieldFilter filter;
+  // Host-precomputed 1 / (2 · voxelSize). Keeps Vec3d off the device init.
+  vec3 invTwoVoxelSize;
 
   NVdbRegularData() = default;
 };
@@ -634,6 +690,10 @@ struct LightGPUData
 
 struct InstanceSurfaceGPUData
 {
+  // Pre-computed at instance commit (World.cpp's buildInstance*GPUData).
+  mat3x4 objectToWorld;
+  mat3x4 worldToObject;
+
   const DeviceObjectIndex *surfaces;
   AttributeDataSet attrUniformArray;
   AttributeDataSetUniform attrUniform;
@@ -645,6 +705,9 @@ struct InstanceSurfaceGPUData
 
 struct InstanceVolumeGPUData
 {
+  mat3x4 objectToWorld;
+  mat3x4 worldToObject;
+
   const DeviceObjectIndex *volumes;
   uint32_t id;
 };
@@ -690,6 +753,7 @@ struct FastRendererGPUData
 struct QualityRendererGPUData
 {
   int maxRayDepth;
+  int maxTransparencyDepth;
 };
 
 struct InteractiveRendererGPUData
@@ -715,6 +779,15 @@ enum class BackgroundMode
   IMAGE
 };
 
+// Per-sample firefly suppression strategy applied during accumulation.
+enum class FireflyFilterMode
+{
+  NONE, // accumulate raw radiance (unbiased)
+  TONEMAP, // reversible Reinhard round-trip (legacy; dims highlights)
+  CLAMP, // per-pixel Welford luminance clamp (energy-preserving)
+  TRIM // adaptive upper-trimmed mean (consistent; near-unbiased at high spp)
+};
+
 union RendererBackgroundGPUData
 {
   glm::vec4 color;
@@ -732,8 +805,11 @@ struct RendererGPUData
   float inverseVolumeSamplingRate;
   float occlusionDistance;
   bool cullTriangleBF;
-  bool premultipliedAlpha;
-  bool fireflyFilter; // enable internal tonemapping during sample accumulation
+  bool premultiplyBackground;
+  FireflyFilterMode fireflyFilterMode; // per-sample outlier suppression strategy
+  float fireflyFilterSigma; // CLAMP/TRIM: k in threshold = mean + k*stddev
+  int fireflyFilterWarmup; // CLAMP mode: samples before the Welford cap engages
+  int fireflyFilterTrim; // TRIM mode: count of brightest samples tracked/trimmed
   glm::vec4 cutPlane; // cutting plane (nx,ny,nz,d); disabled when all zero (GPU
                       // default)
 };
@@ -748,9 +824,29 @@ enum class FrameFormat
   UNKNOWN
 };
 
+// Per-pixel running Welford statistics for firefly suppression, tracked per RGB
+// channel so a single-channel (chromatic) outlier is caught even when its
+// luminance is unremarkable. `n` is the shared sample count — kept here because
+// checkerboarding makes frameID a poor proxy for "how many samples this pixel
+// has seen". CLAMP uses all three channels; TRIM uses only the luminance Welford
+// in channel x and reads n as its sample divisor.
+struct PixelLumStats
+{
+  glm::vec3 mean; // per-channel running mean
+  glm::vec3 m2; // per-channel sum of squared deltas
+  float n; // sample count (shared across channels and with TRIM)
+};
+
 struct FrameBuffers
 {
   glm::vec4 *colorAccumulation;
+  PixelLumStats *lumStats;
+  // TRIM mode: the `trim` brightest samples seen per pixel, laid out
+  // [pixel*trim + slot] as (rgb in xyz, luminance in w; w < 0 marks an empty
+  // slot). At resolve the trimmed mean removes the outliers among these from
+  // the running colorAccumulation sum, so it needs only O(trim) memory per
+  // pixel. The sample count lives in lumStats->n.
+  glm::vec4 *trimTopK;
   float *depth;
   uint32_t *primID;
   uint32_t *objID;
@@ -800,6 +896,12 @@ struct ScreenSample
   glm::vec2 screen;
   mutable RandState rs;
   const FrameGPUData *frameData;
+  // Adaptive shadow ratio-tracking knob. Set by the raygen before each
+  // shadow trace to (max pre-attenuation contribution) / RR_BASE, capped
+  // at 1.0. Smaller values raise the RR threshold inside
+  // applyShadowRussianRoulette so dim-contribution shadow rays terminate
+  // sooner. Default 1.0 = full-precision RR (current behaviour).
+  float shadowContribWeight;
 };
 
 } // namespace visrtx

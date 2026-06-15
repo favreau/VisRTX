@@ -74,7 +74,7 @@ struct Renderer : public Object
   bool denoise() const;
   bool denoiseUsingAlbedo() const;
   bool denoiseUsingNormal() const;
-  bool filterFireflies() const;
+  FireflyFilterMode fireflyFilterMode() const;
   int sampleLimit() const;
 
   static Renderer *createInstance(
@@ -90,11 +90,13 @@ struct Renderer : public Object
   bool m_denoise{false};
   bool m_denoiseAlbedo{false};
   bool m_denoiseNormal{false};
-  bool m_fireflyFilter{
-      true}; // enable internal tonemapping during sample accumulation
+  FireflyFilterMode m_fireflyFilterMode{FireflyFilterMode::TONEMAP};
+  float m_fireflyFilterSigma{8.f}; // CLAMP mode: k in cap = mean + k*stddev
+  int m_fireflyFilterWarmup{4}; // CLAMP mode: samples before the Welford cap
+  int m_fireflyFilterTrim{4}; // TRIM mode: brightest samples tracked/tested (ESD bound)
   int m_sampleLimit{0};
   bool m_cullTriangleBF{false};
-  bool m_premultipliedAlpha{false};
+  bool m_premultiplyBackground{false};
   float m_volumeSamplingRate{1.f};
   vec4 m_cutPlane{0.f};
 

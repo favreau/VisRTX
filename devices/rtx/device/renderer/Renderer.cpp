@@ -76,6 +76,20 @@ using MaterialRecord = SbtRecord<void>;
 
 // Helper functions ///////////////////////////////////////////////////////////
 
+// Map the fireflyFilterMode string to the enum. Unknown strings (and "none")
+// resolve to NONE. The default-when-unset is decided by the caller and passed
+// in as the string, so this stays a pure lookup with no special cases.
+static FireflyFilterMode parseFireflyFilterMode(const std::string &mode)
+{
+  if (mode == "tonemap")
+    return FireflyFilterMode::TONEMAP;
+  if (mode == "clamp")
+    return FireflyFilterMode::CLAMP;
+  if (mode == "trim")
+    return FireflyFilterMode::TRIM;
+  return FireflyFilterMode::NONE;
+}
+
 static std::string longestBeginningMatch(
     const std::string_view &first, const std::string_view &second)
 {
@@ -164,14 +178,26 @@ void Renderer::commitParameters()
       (denoiseMode == "colorAlbedo" || denoiseMode == "colorAlbedoNormal");
   m_denoiseNormal = (denoiseMode == "colorAlbedoNormal");
 
-  m_fireflyFilter =
-      getParam<bool>("fireflyFilter", getParam<bool>("tonemap", true));
+  // Default to tonemap, matching the pre-enum behaviour.
+  m_fireflyFilterMode =
+      parseFireflyFilterMode(getParamString("fireflyFilterMode", "tonemap"));
+  // Default k=8: the cap is mean + k*stddev with σ estimated from clamped
+  // samples (outliers excluded), so a moderate k bites without one firefly
+  // raising its own threshold. Lower clamps harder (more bias); raise for more
+  // energy fidelity at the cost of leaking brighter fireflies.
+  m_fireflyFilterSigma =
+      std::max(0.f, getParam<float>("fireflyFilterSigma", 8.f));
+  m_fireflyFilterWarmup = std::max(1, getParam<int>("fireflyFilterWarmup", 4));
+  // TRIM tracks this many of the brightest samples per pixel and trims the ones
+  // a base-excluding threshold flags as outliers. Small: per-pixel memory is
+  // trim*vec4 and a handful covers the firefly count of any one pixel.
+  m_fireflyFilterTrim =
+      std::clamp(getParam<int>("fireflyFilterTrim", 4), 1, 8);
   m_sampleLimit = getParam<int>("sampleLimit", 128);
   m_cullTriangleBF = getParam<bool>("cullTriangleBackfaces", false);
   m_volumeSamplingRate =
       std::clamp(getParam<float>("volumeSamplingRate", 0.125f), 1e-3f, 10.f);
-  m_premultipliedAlpha = getParam<bool>(
-      "premultipliedAlpha", getParam<bool>("premultiplyBackground", false));
+  m_premultiplyBackground = getParam<bool>("premultiplyBackground", false);
   m_cutPlane = getParam<vec4>("cutPlane", vec4(0.f));
   if (m_checkerboard)
     m_spp = 1;
@@ -209,10 +235,13 @@ void Renderer::populateFrameData(FrameGPUData &fd) const
   fd.renderer.ambientIntensity = m_ambientIntensity;
   fd.renderer.occlusionDistance = m_occlusionDistance;
   fd.renderer.cullTriangleBF = m_cullTriangleBF;
-  fd.renderer.fireflyFilter = m_fireflyFilter;
+  fd.renderer.fireflyFilterMode = m_fireflyFilterMode;
+  fd.renderer.fireflyFilterSigma = m_fireflyFilterSigma;
+  fd.renderer.fireflyFilterWarmup = m_fireflyFilterWarmup;
+  fd.renderer.fireflyFilterTrim = m_fireflyFilterTrim;
   fd.renderer.inverseVolumeSamplingRate = 1.f / m_volumeSamplingRate;
   fd.renderer.numIterations = std::max(m_spp, 1);
-  fd.renderer.premultipliedAlpha = m_premultipliedAlpha;
+  fd.renderer.premultiplyBackground = m_premultiplyBackground;
   fd.renderer.cutPlane = m_cutPlane;
 }
 
@@ -512,6 +541,11 @@ void Renderer::initOptixPipeline()
     callableDescs[SBT_CALLABLE_MATTE_OFFSET
         + int(SurfaceShaderEntryPoints::Shade)] = callableDesc;
 
+    callableDesc.callables.entryFunctionNameDC =
+        "__direct_callable__evaluatePdf";
+    callableDescs[SBT_CALLABLE_MATTE_OFFSET
+        + int(SurfaceShaderEntryPoints::EvaluatePdf)] = callableDesc;
+
     // Physically Based
     callableDesc.callables.moduleDC =
         deviceState()->materialShaders.physicallyBased;
@@ -554,6 +588,11 @@ void Renderer::initOptixPipeline()
     callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
         + int(SurfaceShaderEntryPoints::Shade)] = callableDesc;
 
+    callableDesc.callables.entryFunctionNameDC =
+        "__direct_callable__evaluatePdf";
+    callableDescs[SBT_CALLABLE_PHYSICALLYBASED_OFFSET
+        + int(SurfaceShaderEntryPoints::EvaluatePdf)] = callableDesc;
+
     // Spatial Field Samplers
     OptixProgramGroupDesc samplerDesc = {};
     samplerDesc.kind = OPTIX_PROGRAM_GROUP_KIND_CALLABLES;
@@ -570,6 +609,19 @@ void Renderer::initOptixPipeline()
         "__direct_callable__sampleStructuredRegular";
     callableDescs[SBT_CALLABLE_SPATIAL_FIELD_REGULAR_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleDistanceStructuredRegular";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_REGULAR_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::SampleDistance)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__ratioTrackTransmittanceStructuredRegular";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_REGULAR_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RatioTrackTransmittance)] =
+        samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__rayMarchVolumeStructuredRegular";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_REGULAR_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RayMarchVolume)] = samplerDesc;
 
     // NanoVDB samplers
     samplerDesc.callables.moduleDC = state.fieldSamplers.nvdb;
@@ -594,6 +646,19 @@ void Renderer::initOptixPipeline()
         "__direct_callable__sampleNvdbFp4";
     callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP4_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleDistanceNvdbFp4";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP4_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::SampleDistance)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__ratioTrackTransmittanceNvdbFp4";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP4_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RatioTrackTransmittance)] =
+        samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__rayMarchVolumeNvdbFp4";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP4_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RayMarchVolume)] = samplerDesc;
 
     // Fp8
     samplerDesc.callables.entryFunctionNameDC =
@@ -604,6 +669,19 @@ void Renderer::initOptixPipeline()
         "__direct_callable__sampleNvdbFp8";
     callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP8_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleDistanceNvdbFp8";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP8_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::SampleDistance)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__ratioTrackTransmittanceNvdbFp8";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP8_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RatioTrackTransmittance)] =
+        samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__rayMarchVolumeNvdbFp8";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP8_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RayMarchVolume)] = samplerDesc;
 
     // Fp16
     samplerDesc.callables.entryFunctionNameDC =
@@ -614,6 +692,19 @@ void Renderer::initOptixPipeline()
         "__direct_callable__sampleNvdbFp16";
     callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP16_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleDistanceNvdbFp16";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP16_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::SampleDistance)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__ratioTrackTransmittanceNvdbFp16";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP16_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RatioTrackTransmittance)] =
+        samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__rayMarchVolumeNvdbFp16";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FP16_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RayMarchVolume)] = samplerDesc;
 
     // FpN
     samplerDesc.callables.entryFunctionNameDC =
@@ -624,6 +715,19 @@ void Renderer::initOptixPipeline()
         "__direct_callable__sampleNvdbFpN";
     callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FPN_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleDistanceNvdbFpN";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FPN_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::SampleDistance)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__ratioTrackTransmittanceNvdbFpN";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FPN_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RatioTrackTransmittance)] =
+        samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__rayMarchVolumeNvdbFpN";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FPN_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RayMarchVolume)] = samplerDesc;
 
     // Float
     samplerDesc.callables.entryFunctionNameDC =
@@ -634,6 +738,19 @@ void Renderer::initOptixPipeline()
         "__direct_callable__sampleNvdbFloat";
     callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FLOAT_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleDistanceNvdbFloat";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FLOAT_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::SampleDistance)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__ratioTrackTransmittanceNvdbFloat";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FLOAT_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RatioTrackTransmittance)] =
+        samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__rayMarchVolumeNvdbFloat";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_FLOAT_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RayMarchVolume)] = samplerDesc;
 
     // StructuredRectilinear sampler
     samplerDesc.callables.moduleDC = state.fieldSamplers.structuredRectilinear;
@@ -648,6 +765,19 @@ void Renderer::initOptixPipeline()
         "__direct_callable__sampleStructuredRectilinear";
     callableDescs[SBT_CALLABLE_SPATIAL_FIELD_RECTILINEAR_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleDistanceStructuredRectilinear";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_RECTILINEAR_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::SampleDistance)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__ratioTrackTransmittanceStructuredRectilinear";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_RECTILINEAR_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RatioTrackTransmittance)] =
+        samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__rayMarchVolumeStructuredRectilinear";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_RECTILINEAR_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RayMarchVolume)] = samplerDesc;
 
     // NanoVDB rectilinear samplers
     samplerDesc.callables.moduleDC = state.fieldSamplers.nvdbRectilinear;
@@ -672,6 +802,19 @@ void Renderer::initOptixPipeline()
         "__direct_callable__sampleNvdbRectilinearFp4";
     callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP4_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleDistanceNvdbRectilinearFp4";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP4_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::SampleDistance)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__ratioTrackTransmittanceNvdbRectilinearFp4";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP4_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RatioTrackTransmittance)] =
+        samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__rayMarchVolumeNvdbRectilinearFp4";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP4_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RayMarchVolume)] = samplerDesc;
 
     // Fp8
     samplerDesc.callables.entryFunctionNameDC =
@@ -682,6 +825,19 @@ void Renderer::initOptixPipeline()
         "__direct_callable__sampleNvdbRectilinearFp8";
     callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP8_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleDistanceNvdbRectilinearFp8";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP8_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::SampleDistance)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__ratioTrackTransmittanceNvdbRectilinearFp8";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP8_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RatioTrackTransmittance)] =
+        samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__rayMarchVolumeNvdbRectilinearFp8";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP8_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RayMarchVolume)] = samplerDesc;
 
     // Fp16
     samplerDesc.callables.entryFunctionNameDC =
@@ -692,6 +848,19 @@ void Renderer::initOptixPipeline()
         "__direct_callable__sampleNvdbRectilinearFp16";
     callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP16_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleDistanceNvdbRectilinearFp16";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP16_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::SampleDistance)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__ratioTrackTransmittanceNvdbRectilinearFp16";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP16_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RatioTrackTransmittance)] =
+        samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__rayMarchVolumeNvdbRectilinearFp16";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FP16_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RayMarchVolume)] = samplerDesc;
 
     // FpN
     samplerDesc.callables.entryFunctionNameDC =
@@ -702,6 +871,19 @@ void Renderer::initOptixPipeline()
         "__direct_callable__sampleNvdbRectilinearFpN";
     callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FPN_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleDistanceNvdbRectilinearFpN";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FPN_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::SampleDistance)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__ratioTrackTransmittanceNvdbRectilinearFpN";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FPN_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RatioTrackTransmittance)] =
+        samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__rayMarchVolumeNvdbRectilinearFpN";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FPN_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RayMarchVolume)] = samplerDesc;
 
     // Float
     samplerDesc.callables.entryFunctionNameDC =
@@ -712,6 +894,19 @@ void Renderer::initOptixPipeline()
         "__direct_callable__sampleNvdbRectilinearFloat";
     callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FLOAT_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleDistanceNvdbRectilinearFloat";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FLOAT_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::SampleDistance)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__ratioTrackTransmittanceNvdbRectilinearFloat";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FLOAT_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RatioTrackTransmittance)] =
+        samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__rayMarchVolumeNvdbRectilinearFloat";
+    callableDescs[SBT_CALLABLE_SPATIAL_FIELD_NVDB_REC_FLOAT_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RayMarchVolume)] = samplerDesc;
 
     // Custom field sampler (from devices/visrtx)
     // A single callable pair handles all custom field subtypes via type
@@ -728,6 +923,19 @@ void Renderer::initOptixPipeline()
         "__direct_callable__sampleCustom";
     callableDescs[SBT_CALLABLE_CUSTOM_OFFSET
         + int(SpatialFieldSamplerEntryPoints::Sample)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__sampleDistanceCustom";
+    callableDescs[SBT_CALLABLE_CUSTOM_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::SampleDistance)] = samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__ratioTrackTransmittanceCustom";
+    callableDescs[SBT_CALLABLE_CUSTOM_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RatioTrackTransmittance)] =
+        samplerDesc;
+    samplerDesc.callables.entryFunctionNameDC =
+        "__direct_callable__rayMarchVolumeCustom";
+    callableDescs[SBT_CALLABLE_CUSTOM_OFFSET
+        + int(SpatialFieldSamplerEntryPoints::RayMarchVolume)] = samplerDesc;
 
 #ifdef USE_MDL
     if (state.mdl) {
@@ -799,6 +1007,10 @@ void Renderer::initOptixPipeline()
 
         callableDesc.callables.entryFunctionNameDC =
             "__direct_callable__shadeSurface";
+        callableDescs.push_back(callableDesc);
+
+        callableDesc.callables.entryFunctionNameDC =
+            "__direct_callable__evaluatePdf";
         callableDescs.push_back(callableDesc);
       }
 
@@ -953,9 +1165,9 @@ void Renderer::cleanup()
   }
 }
 
-bool Renderer::filterFireflies() const
+FireflyFilterMode Renderer::fireflyFilterMode() const
 {
-  return m_fireflyFilter;
+  return m_fireflyFilterMode;
 }
 
 } // namespace visrtx

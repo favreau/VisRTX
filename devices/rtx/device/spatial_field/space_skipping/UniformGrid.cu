@@ -38,7 +38,7 @@
 
 namespace visrtx {
 
-__global__ void computeMaxOpacitiesGPU(float *maxOpacities,
+__global__ void computeOpacityBoundsGPU(float2 *opacityBounds,
     const box1 *valueRanges,
     cudaTextureObject_t colorMap,
     size_t numMCs,
@@ -53,35 +53,36 @@ __global__ void computeMaxOpacitiesGPU(float *maxOpacities,
   box1 valueRange = valueRanges[threadID];
 
   if (valueRange.upper < valueRange.lower) {
-    maxOpacities[threadID] = 0.f;
+    opacityBounds[threadID] = float2{0.f, 0.f};
     return;
   }
 
   const float xfRangeSize = xfRange.upper - xfRange.lower;
   if (xfRangeSize <= 0.f) {
-    maxOpacities[threadID] = 0.f;
+    opacityBounds[threadID] = float2{0.f, 0.f};
     return;
   }
 
-  float normalizedLo = (valueRange.lower - xfRange.lower) / xfRangeSize;
-  float normalizedHi = (valueRange.upper - xfRange.lower) / xfRangeSize;
+  const float normalizedLo = (valueRange.lower - xfRange.lower) / xfRangeSize;
+  const float normalizedHi = (valueRange.upper - xfRange.lower) / xfRangeSize;
 
-  const float tfEntrySize = 1.0f / float(numColors);
-  normalizedLo -= tfEntrySize;
-  normalizedHi += tfEntrySize;
-
-  int lo =
-      glm::clamp(int(normalizedLo * (numColors - 1)), 0, int(numColors - 1));
-  int hi = glm::clamp(
-      int(normalizedHi * (numColors - 1)) + 1, 0, int(numColors - 1));
-
+  // Tight texel range under linear filtering: any sample t ∈ [Lo, Hi] blends
+  // texels floor(t·N − 0.5) .. ceil(t·N − 0.5).
+  const float N = float(numColors);
+  const int lo =
+      glm::clamp(int(::floorf(normalizedLo * N - 0.5f)), 0, int(numColors - 1));
+  const int hi =
+      glm::clamp(int(::ceilf(normalizedHi * N - 0.5f)), 0, int(numColors - 1));
+  float minOpacity = 1.f;
   float maxOpacity = 0.f;
   for (int i = lo; i <= hi; ++i) {
-    float tc = (i + .5f) / numColors;
-    maxOpacity = fmaxf(maxOpacity, tex1D<::float4>(colorMap, tc).w);
+    // Sample at the texel center: linear filter weight is 1.0 on texel i.
+    float a = tex1D<::float4>(colorMap, (i + 0.5f) / N).w;
+    minOpacity = fminf(minOpacity, a);
+    maxOpacity = fmaxf(maxOpacity, a);
   }
 
-  maxOpacities[threadID] = maxOpacity;
+  opacityBounds[threadID] = float2{minOpacity, maxOpacity};
 }
 
 template <typename VoxelAccessor>
@@ -141,21 +142,21 @@ size_t UniformGrid::numCells() const
   return m_dims.x * size_t(m_dims.y) * m_dims.z;
 }
 
-void UniformGrid::init(ivec3 dims, box3 worldBounds)
+void UniformGrid::init(ivec3 dims, box3 objectBounds)
 {
   m_fieldDims = dims;
   m_dims = ivec3(iDivUp(dims.x, MACROCELL_SIZE),
       iDivUp(dims.y, MACROCELL_SIZE),
       iDivUp(dims.z, MACROCELL_SIZE));
-  m_worldBounds = worldBounds;
+  m_objectBounds = objectBounds;
 
   size_t n = numCells();
 
   cudaFree(m_valueRanges);
-  cudaFree(m_maxOpacities);
+  cudaFree(m_opacityBounds);
 
   cudaMalloc(&m_valueRanges, n * sizeof(box1));
-  cudaMalloc(&m_maxOpacities, n * sizeof(float));
+  cudaMalloc(&m_opacityBounds, n * sizeof(float2));
 }
 
 void UniformGrid::computeValueRanges(const SpatialFieldGPUData &sfgd)
@@ -221,29 +222,29 @@ void UniformGrid::computeValueRanges(const SpatialFieldGPUData &sfgd)
 void UniformGrid::cleanup()
 {
   cudaFree(m_valueRanges);
-  cudaFree(m_maxOpacities);
+  cudaFree(m_opacityBounds);
 
   m_valueRanges = nullptr;
-  m_maxOpacities = nullptr;
+  m_opacityBounds = nullptr;
 }
 
 UniformGridData UniformGrid::gpuData() const
 {
   UniformGridData grid;
   grid.dims = m_dims;
-  grid.worldBounds = m_worldBounds;
+  grid.objectBounds = m_objectBounds;
   grid.valueRanges = m_valueRanges;
-  grid.maxOpacities = m_maxOpacities;
+  grid.opacityBounds = m_opacityBounds;
   return grid;
 }
 
-void UniformGrid::computeMaxOpacities(
+void UniformGrid::computeOpacityBounds(
     CUstream stream, cudaTextureObject_t cm, size_t cmSize, box1 cmRange)
 {
   size_t n = numCells();
   size_t numThreads = 1024;
-  computeMaxOpacitiesGPU<<<iDivUp(n, numThreads), numThreads, 0, stream>>>(
-      m_maxOpacities, m_valueRanges, cm, n, cmSize, cmRange);
+  computeOpacityBoundsGPU<<<iDivUp(n, numThreads), numThreads, 0, stream>>>(
+      m_opacityBounds, m_valueRanges, cm, n, cmSize, cmRange);
 }
 
 } // namespace visrtx

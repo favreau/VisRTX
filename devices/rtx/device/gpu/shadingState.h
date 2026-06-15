@@ -37,6 +37,7 @@
 
 #ifdef USE_MDL
 #include <mi/neuraylib/target_code_types.h>
+#include "libmdl/MDLBackendConfig.h"
 #endif
 
 // nanovdb
@@ -60,6 +61,12 @@ struct NextRay
 {
   vec3 direction;
   vec3 contributionWeight;
+  // Solid-angle pdf of `direction`, used for balance-heuristic environment MIS.
+  // +inf marks a lobe whose env contribution the escape estimator owns outright
+  // (primary ray, transmission); 0 marks a dead ray. Must equal the value the
+  // material's EvaluatePdf callable returns for the same direction on the
+  // reflection side, so NEE-side and escape-side MIS weights partition to 1.
+  float pdf{INFINITY};
   uint32_t flags{NEXT_RAY_NONE};
 };
 
@@ -111,7 +118,7 @@ struct PhysicallyBasedShadingState
 struct TextureHandler : mi::neuraylib::Texture_handler_base
 {
   const visrtx::FrameGPUData *fd;
-  visrtx::DeviceObjectIndex samplers[32];
+  const visrtx::DeviceObjectIndex *samplers;
   unsigned int numSamplers;
 };
 
@@ -126,15 +133,13 @@ struct alignas(8) MDLShadingState
   TextureHandler textureHandler;
   ResourceData resData;
 
-  glm::mat3x4 objectToWorld;
-  glm::mat3x4 worldToObject;
-
-  // The maximum number of samplers we support.
-  // See MDLCompiler.cpp numTextureSpaces and numTextureResults.
-  glm::vec4 textureResults[32];
-  glm::vec3 textureCoords[4];
-  glm::vec3 textureTangentsU[4];
-  glm::vec3 textureTangentsV[4];
+  // Sized to match the MDL backend's num_texture_spaces / num_texture_results
+  // options — see libmdl/MDLBackendConfig.h. The two sides must agree because
+  // MDL's generated PTX indexes these arrays directly.
+  glm::vec4 textureResults[libmdl::kNumTextureResults];
+  glm::vec3 textureCoords[libmdl::kNumTextureSpaces];
+  glm::vec3 textureTangentsU[libmdl::kNumTextureSpaces];
+  glm::vec3 textureTangentsV[libmdl::kNumTextureSpaces];
 
   bool isFrontFace;
 };
@@ -183,7 +188,9 @@ template <typename T>
 struct NvdbRegularSamplerState
 {
   using GridType = nanovdb::Grid<nanovdb::NanoTree<T>>;
-  using AccessorType = typename GridType::AccessorType;
+  // Purposefully use ReadAccessor<> as below instead of default
+  // GridType::ReadAccessor. Keeps less cache state that we never hit anyway.
+  using AccessorType = nanovdb::ReadAccessor<T, 0, -1, -1>;
   using NearestSamplerType = nanovdb::math::SampleFromVoxels<AccessorType, 0>;
   using LinearSamplerType = nanovdb::math::SampleFromVoxels<AccessorType, 1>;
 
@@ -199,6 +206,7 @@ struct NvdbRegularSamplerState
   nanovdb::Vec3f scale;
   nanovdb::Vec3f indexMin;
   nanovdb::Vec3f indexMax;
+  nanovdb::Vec3f invTwoVoxelSize;
   SpatialFieldFilter filter;
 };
 
@@ -207,7 +215,9 @@ template <typename T>
 struct NvdbRectilinearSamplerState
 {
   using GridType = nanovdb::Grid<nanovdb::NanoTree<T>>;
-  using AccessorType = typename GridType::AccessorType;
+  // Purposefully use ReadAccessor<> as below instead of default
+  // GridType::ReadAccessor. Keeps less cache state that we never hit anyway.
+  using AccessorType = nanovdb::ReadAccessor<T, 0, -1, -1>;
   using NearestSamplerType = nanovdb::math::SampleFromVoxels<AccessorType, 0>;
   using LinearSamplerType = nanovdb::math::SampleFromVoxels<AccessorType, 1>;
 

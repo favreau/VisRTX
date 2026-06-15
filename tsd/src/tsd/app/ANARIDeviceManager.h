@@ -35,9 +35,11 @@ using DeviceInitParam = std::pair<std::string, tsd::core::Any>;
 struct ANARIDeviceManager
 {
   ANARIDeviceManager(const bool *verboseFlag = nullptr);
+  ~ANARIDeviceManager();
 
   const std::vector<std::string> &libraryList() const;
   void setLibraryList(const std::vector<std::string> &libs);
+  bool isLoadableLibrary(const std::string &libName) const;
 
   anari::Device loadDevice(const std::string &libName,
       const std::vector<DeviceInitParam> &initialDeviceParams = {});
@@ -55,6 +57,8 @@ struct ANARIDeviceManager
   void loadSettings(tsd::core::DataNode &root);
 
  private:
+  void unloadAllLibraries();
+
   const bool *m_verboseFlag{nullptr};
   struct LiveAnariIndex
   {
@@ -63,6 +67,7 @@ struct ANARIDeviceManager
     tsd::rendering::RenderIndex *idx{nullptr};
   };
   std::map<anari::Device, LiveAnariIndex> m_rIdxs;
+  std::map<std::string, anari::Library> m_loadedLibraries;
   std::map<std::string, anari::Device> m_loadedDevices;
   std::map<std::string, anari::Extensions> m_loadedDeviceExtensions;
   std::vector<std::string> m_libraryList;

@@ -10,6 +10,9 @@ namespace detail {
 tsd::math::float3 interpolateColor(
     const std::vector<ColorPoint> &controlPoints, float x)
 {
+  if (controlPoints.empty())
+    return tsd::math::float3(0.f);
+
   auto first = controlPoints.front();
   if (x <= first.x)
     return tsd::math::float3(first.y, first.z, first.w);
@@ -25,13 +28,16 @@ tsd::math::float3 interpolateColor(
   }
 
   auto last = controlPoints.back();
-  return tsd::math::float3(last.x, last.y, last.z);
+  return tsd::math::float3(last.y, last.z, last.w);
 }
 
 float interpolateOpacity(
     const std::vector<OpacityPoint> &controlPoints, float x)
 
 {
+  if (controlPoints.empty())
+    return 0.f;
+
   auto first = controlPoints.front();
   if (x <= first.x)
     return first.y;
@@ -50,6 +56,21 @@ float interpolateOpacity(
 }
 
 } // namespace detail
+
+TransferFunction makeDefaultTransferFunction()
+{
+  TransferFunction tf;
+  const auto &viridis = colormap::viridis;
+  const float denom = float(viridis.size() - 1);
+  tf.colorPoints.reserve(viridis.size());
+  for (size_t i = 0; i < viridis.size(); ++i) {
+    const auto &c = viridis[i];
+    tf.colorPoints.push_back({float(i) / denom, c.x, c.y, c.z});
+  }
+  tf.opacityPoints = {{0.0f, 0.0f}, {1.0f, 1.0f}};
+  tf.range = {};
+  return tf;
+}
 
 std::vector<math::float4> makeDefaultColorMap(size_t size)
 {

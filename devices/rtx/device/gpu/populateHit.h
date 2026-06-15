@@ -310,7 +310,8 @@ VISRTX_DEVICE void computeTangentSpace(
   case GeometryType::SPHERE:
   case GeometryType::CONE:
   case GeometryType::NEURAL:
-  case GeometryType::CYLINDER: {
+  case GeometryType::CYLINDER:
+  case GeometryType::SDF: {
     hit.Ng = hit.Ns = vec3(bit_cast<float>(optixGetAttribute_1()),
         bit_cast<float>(optixGetAttribute_2()),
         bit_cast<float>(optixGetAttribute_3()));
@@ -401,20 +402,8 @@ VISRTX_DEVICE void populateSurfaceHit(SurfaceHit &hit)
   hit.primID = ray::primID();
   hit.objID = sd.id;
   hit.instID = isd.id;
-  hit.epsilon = epsilonFrom(hit.hitpoint);
+  hit.epsilon = epsilonFrom(ray::hitpoint(), ray::direction(), ray::t());
   ray::computeTangentSpace(gd, ray::primID(), hit);
-
-  const auto &handle = optixGetTransformListHandle(0);
-  const ::float4 *tW = optixGetInstanceTransformFromHandle(handle);
-  const ::float4 *tO = optixGetInstanceInverseTransformFromHandle(handle);
-
-  hit.objectToWorld[0] = bit_cast<vec4>(tW[0]);
-  hit.objectToWorld[1] = bit_cast<vec4>(tW[1]);
-  hit.objectToWorld[2] = bit_cast<vec4>(tW[2]);
-
-  hit.worldToObject[0] = bit_cast<vec4>(tO[0]);
-  hit.worldToObject[1] = bit_cast<vec4>(tO[1]);
-  hit.worldToObject[2] = bit_cast<vec4>(tO[2]);
 }
 
 VISRTX_DEVICE void populateVolumeHit(VolumeHit &hit)
@@ -433,18 +422,6 @@ VISRTX_DEVICE void populateVolumeHit(VolumeHit &hit)
   hit.localRay.dir = ray::volume_local_direction();
   hit.localRay.t.lower = ray::t();
   hit.localRay.t.upper = ray::volume_out_t();
-
-  const auto &handle = optixGetTransformListHandle(0);
-  const ::float4 *tW = optixGetInstanceTransformFromHandle(handle);
-  const ::float4 *tO = optixGetInstanceInverseTransformFromHandle(handle);
-
-  hit.objectToWorld[0] = bit_cast<vec4>(tW[0]);
-  hit.objectToWorld[1] = bit_cast<vec4>(tW[1]);
-  hit.objectToWorld[2] = bit_cast<vec4>(tW[2]);
-
-  hit.worldToObject[0] = bit_cast<vec4>(tO[0]);
-  hit.worldToObject[1] = bit_cast<vec4>(tO[1]);
-  hit.worldToObject[2] = bit_cast<vec4>(tO[2]);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

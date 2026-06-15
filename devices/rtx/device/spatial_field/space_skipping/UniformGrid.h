@@ -36,17 +36,20 @@
 
 namespace visrtx {
 
-constexpr int MACROCELL_SIZE = 16;
+constexpr int MACROCELL_SIZE = 8;
 
 struct UniformGrid
 {
-  void init(ivec3 dims, box3 worldBounds);
+  void init(ivec3 dims, box3 objectBounds);
 
   void computeValueRanges(const SpatialFieldGPUData &sfgd);
 
   void cleanup();
   UniformGridData gpuData() const;
-  void computeMaxOpacities(CUstream stream,
+  // Compute both per-cell min and max opacity over the TF in one scan. Min is
+  // used as a constant lower bound for residual / decomposition tracking; max
+  // is the Woodcock majorant.
+  void computeOpacityBounds(CUstream stream,
       cudaTextureObject_t cm,
       size_t cmSize,
       box1 cmRange = {0.f, 1.f});
@@ -54,10 +57,10 @@ struct UniformGrid
   size_t numCells() const;
 
   box1 *m_valueRanges = nullptr;
-  float *m_maxOpacities = nullptr;
+  float2 *m_opacityBounds = nullptr; // .x = min, .y = max
   ivec3 m_dims;
   ivec3 m_fieldDims;
-  box3 m_worldBounds;
+  box3 m_objectBounds;
 };
 
 } // namespace visrtx

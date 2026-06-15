@@ -42,6 +42,7 @@ PRIVATE
   importers/import_SILO.cpp
   importers/import_SMESH.cpp
   importers/import_SWC.cpp
+  importers/import_SWC_SDF.cpp
   importers/import_TRK.cpp
   importers/import_volume.cpp
   importers/import_VTI.cpp
@@ -63,6 +64,7 @@ PRIVATE
   serialization/NanoVdbSidecar.cpp
   serialization/export_SceneToUSD.cpp
   serialization/serialization_datatree.cpp
+  serialization/serialization_object.cpp
 )
 
 project_include_directories(

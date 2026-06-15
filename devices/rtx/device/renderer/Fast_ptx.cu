@@ -55,12 +55,20 @@ VISRTX_GLOBAL void __anyhit__shadow()
   SurfaceHit hit;
   ray::populateSurfaceHit(hit);
 
+  auto &o = ray::rayData<float>();
+
+  // Fully opaque material: skip the init/opacity callable chain.
+  if (hit.material->isFullyOpaque) {
+    o = 1.0f;
+    optixTerminateRay();
+    return;
+  }
+
   const auto &fd = frameData;
   const auto &md = *hit.material;
   MaterialShadingState shadingState;
   materialInitShading(&shadingState, fd, md, hit);
 
-  auto &o = ray::rayData<float>();
   accumulateValue(o, materialEvaluateOpacity(shadingState), o);
   if (o >= OPACITY_THRESHOLD)
     optixTerminateRay();
@@ -88,7 +96,7 @@ VISRTX_GLOBAL void __miss__()
 
 struct FastShadingPolicy
 {
-  static VISRTX_DEVICE vec4 shadeSurface(const MaterialShadingState &shadingState,
+  static VISRTX_DEVICE vec3 shadeSurface(const MaterialShadingState &shadingState,
       ScreenSample &ss,
       const Ray &ray,
       const SurfaceHit &hit)
@@ -105,18 +113,16 @@ struct FastShadingPolicy
               hit,
               rendererParams.occlusionDistance,
               aoParams.aoSamples,
-              &surfaceAttenuation)
+              &surfaceShadowOpacity)
         : 1.f;
 
     auto materialBaseColor = materialEvaluateTint(shadingState);
-    auto materialOpacity = materialEvaluateOpacity(shadingState);
 
     const float lighting = glm::mix(ndotl,
         aoFactor * rendererParams.ambientIntensity,
         aoParams.aoBlend);
 
-    return vec4(materialBaseColor * lighting * rendererParams.ambientColor,
-        materialOpacity);
+    return materialBaseColor * lighting * rendererParams.ambientColor;
   }
 };
 

@@ -32,6 +32,7 @@
 #pragma once
 
 #include "gpu/evalShading.h"
+#include "gpu/gpu_util.h"
 #include "gpu/intersectRay.h"
 #include "gpu/renderer/common.h"
 #include "gpu/shadingState.h"
@@ -41,9 +42,11 @@
 
 namespace visrtx {
 
-// Compute surface attenuation for shadow/occlusion rays
-// Uses the standard SHADOW ray type for consistency across all renderers
-VISRTX_DEVICE float surfaceAttenuation(ScreenSample &ss, const Ray &r)
+// Surface SHADOW ray → accumulated opacity (0 = unblocked, 1 = blocked).
+// Float payload init 0, accumulateValue(o, α, o) in __anyhit__shadow. The
+// path-tracing renderer uses vec3 transmittance instead — see
+// shadowTransmittance.h.
+VISRTX_DEVICE float surfaceShadowOpacity(ScreenSample &ss, const Ray &r)
 {
   float a = 0.0f;
   intersectSurface(
@@ -51,41 +54,46 @@ VISRTX_DEVICE float surfaceAttenuation(ScreenSample &ss, const Ray &r)
   return a;
 }
 
-// Compute volume attenuation for shadow rays
-// Uses the standard SHADOW ray type for consistency across all renderers
-VISRTX_DEVICE float volumeAttenuation(ScreenSample &ss, const Ray &r)
+// Volume SHADOW ray opacity. Same payload convention as surfaceShadowOpacity.
+VISRTX_DEVICE float volumeShadowOpacity(ScreenSample &ss, const Ray &r)
 {
-  float attenuation = 0.0f;
+  float a = 0.0f;
   intersectVolume(
-      ss, r, RayType::SHADOW, &attenuation, OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT);
-  return attenuation;
+      ss, r, RayType::SHADOW, &a, OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT);
+  return a;
 }
 
 // Templated rendering loop
 // ShadingPolicy must implement:
-//   static VISRTX_DEVICE vec4 shadeSurface(
+//   static VISRTX_DEVICE vec3 shadeSurface(
 //       const MaterialShadingState &shadingState,
 //       ScreenSample &ss,
 //       const Ray &ray,
 //       const SurfaceHit &hit)
+// returning a vec3 of reflected + emitted radiance (coverage/transmission are
+// queried by the loop, not returned)
 template <typename ShadingPolicy>
 VISRTX_DEVICE void renderPixel(FrameGPUData &frameData, ScreenSample ss)
 {
   auto &rendererParams = frameData.renderer;
 
   for (int i = 0; i < frameData.renderer.numIterations; i++) {
-    // First go with the main ray, pixel centered if first frame.
-    // Jittered samples are produced by next iterations.
     bool isVeryFirstRay = i == 0 && ss.frameData->fb.frameID == 0;
-    auto ray = makePrimaryRay(ss, isVeryFirstRay);
+    const uint32_t sampleIdx = uint32_t(ss.frameData->fb.frameID)
+            * uint32_t(rendererParams.numIterations)
+        + uint32_t(i);
+    auto ray = makePrimaryRay(ss, sampleIdx, isVeryFirstRay);
     applyCuttingPlane(rendererParams.cutPlane, ray);
     float tmax = ray.t.upper;
 
-    // Output accumulators
+    // Output accumulators. outputOpacity is the scalar coverage track driving
+    // AOVs + framebuffer alpha; remainingT is the colored straight-through
+    // transmittance driving radiance compositing + loop termination.
     vec3 outputColor(0.f);
     vec3 outputAlbedo(0.f);
     vec3 outputNormal(0.f);
     float outputOpacity = 0.f;
+    vec3 remainingT(1.f);
 
     // First hit metadata (for picking)
     float depth = std::numeric_limits<float>::max();
@@ -93,11 +101,14 @@ VISRTX_DEVICE void renderPixel(FrameGPUData &frameData, ScreenSample ss)
     uint32_t objID = ~0u;
     uint32_t instID = ~0u;
 
-    // Transparency traversal loop
-    while (outputOpacity < OPACITY_THRESHOLD) {
+    constexpr float MIN_NORMAL_LENGTH = 1e-6f;
+    const vec3 FALLBACK_NORMAL(0.f, 0.f, 0.f);
+
+    // Transparency traversal loop. For T=0 (opaque), luminance(remainingT) ==
+    // 1 - outputOpacity.
+    while (luminance(remainingT) > 1.f - OPACITY_THRESHOLD) {
       ray.t.upper = tmax;
 
-      // Find next surface
       SurfaceHit surfaceHit;
       surfaceHit.foundHit = false;
       intersectSurface(ss,
@@ -108,7 +119,6 @@ VISRTX_DEVICE void renderPixel(FrameGPUData &frameData, ScreenSample ss)
 
       float hitDist = surfaceHit.foundHit ? surfaceHit.t : ray.t.upper;
 
-      // Ray march volumes up to this surface hit
       vec3 volumeColor(0.f);
       vec3 volumeNormal(0.f);
       float volumeOpacity = 0.f;
@@ -126,19 +136,17 @@ VISRTX_DEVICE void renderPixel(FrameGPUData &frameData, ScreenSample ss)
           volInstID,
           &volumeNormal);
 
-      // Accumulate volume contribution if any
       bool volumeHit = volumeDepth < hitDist;
-      constexpr float MIN_NORMAL_LENGTH = 1e-6f;
-      const vec3 FALLBACK_NORMAL(0.f, 0.f, 0.f);
       if (volumeHit) {
         const float volumeNormalLength = glm::length(volumeNormal);
         const vec3 outputVolumeNormal = volumeNormalLength > MIN_NORMAL_LENGTH
             ? volumeNormal * (1.f / volumeNormalLength)
             : FALLBACK_NORMAL;
-        accumulateValue(outputColor, volumeColor, outputOpacity);
+        outputColor += remainingT * volumeColor;
         accumulateValue(outputAlbedo, volumeColor, outputOpacity);
         accumulateNormal(outputNormal, outputVolumeNormal, outputOpacity);
         accumulateValue(outputOpacity, volumeOpacity, outputOpacity);
+        remainingT *= (1.f - volumeOpacity);
 
         depth = volumeDepth;
         objID = volObjID;
@@ -146,21 +154,22 @@ VISRTX_DEVICE void renderPixel(FrameGPUData &frameData, ScreenSample ss)
         primID = volObjID;
       }
 
-      // Handle surface hit if any
       if (surfaceHit.foundHit) {
         MaterialShadingState shadingState;
         materialInitShading(
             &shadingState, frameData, *surfaceHit.material, surfaceHit);
 
-        // Call the renderer-specific shading function
-        const vec4 surfaceColor =
+        const float alpha = materialEvaluateOpacity(shadingState);
+        const vec3 transmission = materialEvaluateTransmission(shadingState);
+
+        // Reflected + emitted radiance from this surface.
+        const vec3 refl =
             ShadingPolicy::shadeSurface(shadingState, ss, ray, surfaceHit);
 
-        // Accumulate surface contribution
-        accumulateValue(
-            outputColor, vec3(surfaceColor) * surfaceColor.a, outputOpacity);
+        outputColor += remainingT * (alpha * refl);
+        // AOVs stay on the scalar coverage track (not the colored remainingT).
         accumulateValue(outputAlbedo,
-            materialEvaluateTint(shadingState) * surfaceColor.a,
+            materialEvaluateTint(shadingState) * alpha,
             outputOpacity);
         const vec3 materialNormal = materialEvaluateNormal(shadingState);
         const float materialNormalLength = glm::length(materialNormal);
@@ -169,9 +178,9 @@ VISRTX_DEVICE void renderPixel(FrameGPUData &frameData, ScreenSample ss)
             ? materialNormal * (1.f / materialNormalLength)
             : FALLBACK_NORMAL;
         accumulateNormal(outputNormal, outputMaterialNormal, outputOpacity);
-        accumulateValue(outputOpacity, surfaceColor.a, outputOpacity);
+        accumulateValue(outputOpacity, alpha, outputOpacity);
+        remainingT *= (1.f - alpha * (1.f - transmission));
 
-        // Track first hit from surface
         if (!volumeHit) {
           depth = surfaceHit.t;
           primID = surfaceHit.primID;
@@ -179,30 +188,26 @@ VISRTX_DEVICE void renderPixel(FrameGPUData &frameData, ScreenSample ss)
           instID = surfaceHit.instID;
         }
 
-        // Advance ray past this surface for next iteration
+        // Advance straight through to the next surface (no bending).
         ray.t.lower = surfaceHit.t + surfaceHit.epsilon;
       }
 
-      // Record first hit metadata
       if (isVeryFirstRay) {
         setPixelIds(frameData.fb, ss.pixel, depth, primID, objID, instID);
       }
 
-      // Exit if the current ray left the scene
       if (!surfaceHit.foundHit)
         break;
-
-      // Otherwise, continue through transparent surface
     }
 
-    // Accumulate HDRI sky — marks sky pixels as opaque so the background
-    // compositing pass does not bleed through HDRI-covered pixels.
+    // HDRI background fills the remaining transmittance and marks the pixel
+    // covered for the AOV/alpha track.
     if (vec3 hdri; getBackgroundLight(frameData, ray.dir, hdri)) {
-      accumulateValue(outputColor, hdri, outputOpacity);
+      outputColor += remainingT * hdri;
+      remainingT = vec3(0.f);
       accumulateValue(outputOpacity, 1.f, outputOpacity);
     }
 
-    // Write accumulated sample to framebuffer
     accumPixelSample(frameData,
         ss.pixel,
         vec4(outputColor, outputOpacity),

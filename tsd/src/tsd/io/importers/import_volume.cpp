@@ -12,6 +12,7 @@
 #include "tsd/io/importers/detail/importer_common.hpp"
 // std
 #include <cstdio>
+#include <optional>
 
 namespace tsd::io {
 
@@ -19,10 +20,21 @@ using namespace tsd::core;
 
 // Helper functions ///////////////////////////////////////////////////////////
 
-void applyTransferFunction(Scene &scene,
-    VolumeRef volume,
-    const tsd::core::TransferFunction &transferFunction)
+void applyTransferFunction(
+    Scene &scene, VolumeRef volume, const tsd::core::TransferFunction &tf)
 {
+  if (!volume) {
+    logError(
+        "[applyTransferFunction] cannot apply transfer function to null volume");
+    return;
+  }
+
+  if (tf.colorPoints.empty() || tf.opacityPoints.empty()) {
+    logError(
+        "[applyTransferFunction] transfer function must have color and opacity control points");
+    return;
+  }
+
   // Build RGBA colors with evenly-spaced positions
   std::vector<tsd::math::float4> colormap;
 
@@ -31,23 +43,22 @@ void applyTransferFunction(Scene &scene,
   for (size_t i = 0; i < numRGBPoints; ++i) {
     float x = (i / float(numRGBPoints - 1));
 
-    auto color = detail::interpolateColor(transferFunction.colorPoints, x);
-    auto opacty = detail::interpolateOpacity(transferFunction.opacityPoints, x);
-    colormap.push_back({color.x, color.y, color.z, opacty});
+    auto color = detail::interpolateColor(tf.colorPoints, x);
+    auto opacity = detail::interpolateOpacity(tf.opacityPoints, x);
+    colormap.push_back({color.x, color.y, color.z, opacity});
   }
 
   auto colorArray = scene.createArray(ANARI_FLOAT32_VEC4, colormap.size());
   colorArray->setData(colormap);
   volume->setParameterObject("color", *colorArray);
 
-  if (transferFunction.range.lower < transferFunction.range.upper)
-    volume->setParameter(
-        "valueRange", ANARI_FLOAT32_BOX1, &transferFunction.range);
+  if (tf.range.lower < tf.range.upper)
+    volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &tf.range);
 
   volume->setMetadataArray("opacityControlPoints",
       ANARI_FLOAT32_VEC2,
-      transferFunction.opacityPoints.data(),
-      transferFunction.opacityPoints.size());
+      tf.opacityPoints.data(),
+      tf.opacityPoints.size());
 }
 
 // import_volume definitions //////////////////////////////////////////////////
@@ -139,7 +150,8 @@ VolumeRef import_volume(Scene &scene,
     LayerNodeRef location)
 {
   auto volume = import_volume(scene, filepath, location);
-  applyTransferFunction(scene, volume, transferFunction);
+  if (volume)
+    applyTransferFunction(scene, volume, transferFunction);
   return volume;
 }
 

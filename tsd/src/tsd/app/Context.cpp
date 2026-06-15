@@ -97,6 +97,8 @@ void Context::parseCommandLine(std::vector<std::string> &args)
       importerType = tsd::io::ImporterType::SMESH_ANIMATION;
     else if (arg == "-swc")
       importerType = tsd::io::ImporterType::SWC;
+    else if (arg == "-swc_sdf")
+      importerType = tsd::io::ImporterType::SWC_SDF;
     else if (arg == "-trk")
       importerType = tsd::io::ImporterType::TRK;
     else if (arg == "-usd")
@@ -382,7 +384,9 @@ void Context::addCurrentViewToCameraPoses(const char *_name)
   pose.name = name;
   pose.lookat = view.manipulator.at();
   pose.azeldist = azeldist;
+  pose.fixedDist = view.manipulator.fixedDistance();
   pose.upAxis = static_cast<int>(view.manipulator.axis());
+  pose.mode = static_cast<int>(view.manipulator.mode());
 
   view.poses.push_back(std::move(pose));
 }
@@ -410,7 +414,9 @@ void Context::addTurntableCameraPoses(const tsd::math::float3 &azs,
       pose.name = baseName + "_" + std::to_string(i) + "_" + std::to_string(j);
       pose.lookat = center;
       pose.azeldist = {az, el, dist};
+      pose.fixedDist = view.manipulator.fixedDistance();
       pose.upAxis = static_cast<int>(view.manipulator.axis());
+      pose.mode = static_cast<int>(view.manipulator.mode());
       view.poses.push_back(std::move(pose));
     }
   }
@@ -424,7 +430,9 @@ void Context::updateExistingCameraPoseFromView(CameraPose &p)
 
   p.lookat = view.manipulator.at();
   p.azeldist = azeldist;
+  p.fixedDist = view.manipulator.fixedDistance();
   p.upAxis = static_cast<int>(view.manipulator.axis());
+  p.mode = static_cast<int>(view.manipulator.mode());
 }
 
 bool Context::updateCameraPathAnimation()
@@ -530,9 +538,8 @@ bool Context::updateCameraPathAnimation()
 
 void Context::setCameraPose(const CameraPose &pose)
 {
-  view.manipulator.setConfig(
-      pose.lookat, pose.azeldist.z, {pose.azeldist.x, pose.azeldist.y});
-  view.manipulator.setAxis(static_cast<tsd::rendering::UpAxis>(pose.upAxis));
+  view.manipulator.setConfig(pose);
+  view.manipulator.setFixedDistance(pose.fixedDist);
 }
 
 void Context::removeAllPoses()

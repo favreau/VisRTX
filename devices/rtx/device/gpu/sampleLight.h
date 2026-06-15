@@ -41,7 +41,6 @@
 #include <glm/gtx/color_space.hpp>
 
 // cuda
-#include <curand_uniform.h>
 #include <device_atomic_functions.h>
 
 // cccl
@@ -108,8 +107,8 @@ VISRTX_DEVICE LightSample sampleSphereLight(
     const LightGPUData &ld, const mat4 &xfm, const vec3 &origin, RandState &rs)
 {
   LightSample ls;
-  auto u1 = curand_uniform(&rs);
-  auto u2 = curand_uniform(&rs);
+  auto u1 = pcg_uniform(&rs);
+  auto u2 = pcg_uniform(&rs);
 
   // Uniform sampling on unit sphere using Marsaglia's method
   // u1 maps to z-coordinate: z ∈ [-1, 1]
@@ -117,7 +116,7 @@ VISRTX_DEVICE LightSample sampleSphereLight(
   // r is the radius in the xy-plane for this z-level
   auto r = sqrtf(std::max(0.f, 1.f - z * z));
   // u2 maps to azimuthal angle: φ ∈ [0, 2π]
-  auto phi = 2.f * float(M_PI) * u2;
+  auto phi = kTwoPi * u2;
   auto x = r * cosf(phi);
   auto y = r * sinf(phi);
 
@@ -147,7 +146,7 @@ VISRTX_DEVICE LightSample sampleSphereLight(
     // jacobian) Currently assumes uniform scaling or no scaling of the light
     // geometry
     float areaPdf =
-        1.f / (4.f * float(M_PI) * ld.sphere.radius * ld.sphere.radius);
+        1.f / (4.f * kPi * ld.sphere.radius * ld.sphere.radius);
     ls.pdf = areaPdf * pow2(ls.dist) / cosTheta;
   } else {
     // Back-facing surface element contributes no light
@@ -162,7 +161,7 @@ VISRTX_DEVICE LightSample sampleRectLight(
     const LightGPUData &ld, const mat4 &xfm, const vec3 &origin, RandState &rs)
 {
   LightSample ls;
-  auto uv = vec2(curand_uniform(&rs), curand_uniform(&rs));
+  auto uv = vec2(pcg_uniform(&rs), pcg_uniform(&rs));
 
   // Uniform sampling on rectangle: uv ∈ [0,1]² maps to rectangle
   auto rectangleSample = ld.rect.edge1 * uv.x + ld.rect.edge2 * uv.y;
@@ -189,8 +188,8 @@ VISRTX_DEVICE LightSample sampleRectLight(
   // Front only: use cosTheta as-is (positive for front face)
 
   if (cosTheta > 0.0f) {
-    // Lambertian emission: radiance scaled by cosine factor
-    ls.radiance = ld.color * ld.rect.intensity * cosTheta;
+    // Lambertian radiance. cosTheta is handled through pdf below.
+    ls.radiance = ld.color * ld.rect.intensity;
 
     // Convert area PDF to solid angle PDF for proper Monte Carlo integration
     // Area PDF = 1 / area, Solid angle PDF = area_pdf * distance² / |cos θ|
@@ -209,11 +208,11 @@ VISRTX_DEVICE LightSample sampleRingLight(
     const LightGPUData &ld, const mat4 &xfm, const vec3 &origin, RandState &rs)
 {
   LightSample ls;
-  auto u1 = curand_uniform(&rs);
-  auto u2 = curand_uniform(&rs);
+  auto u1 = pcg_uniform(&rs);
+  auto u2 = pcg_uniform(&rs);
 
   // Sample angle uniformly around the ring: φ ∈ [0, 2π]
-  auto phi = 2.0f * M_PI * u1;
+  auto phi = kTwoPi * u1;
 
   // Sample radial position uniformly by area between inner and outer radius
   // For uniform area sampling: r² = u₂(R² - r²) + r² where R=outer, r=inner
@@ -257,8 +256,8 @@ VISRTX_DEVICE LightSample sampleRingLight(
 
   if (spot > 0.0f) {
     if (cosTheta > 0.0f) {
-      // Apply both spot attenuation and Lambert's cosine law
-      ls.radiance = ld.color * ld.ring.intensity * spot * cosTheta;
+      // Lambertian radiance. cosTheta is handled through pdf below.
+      ls.radiance = ld.color * ld.ring.intensity * spot;
 
       // Convert area PDF to solid angle PDF for proper Monte Carlo integration
       // Ring area = π(R² - r²), so area PDF = 1 / ring_area
@@ -327,7 +326,7 @@ VISRTX_DEVICE LightSample sampleHDRILight(
   // Map spherical coordinates to UV texture coordinates
   // θ ∈ [0,π] → v ∈ [0,1], φ ∈ [0,2π] → u ∈ [0,1]
   auto uv = glm::vec2(thetaPhi.y, thetaPhi.x)
-      / glm::vec2(float(M_PI) * 2.0f, float(M_PI));
+      / glm::vec2(kTwoPi, kPi);
 
   auto radiance = sampleHDRI(ld, uv);
   // pdf_ω = (L/totalL) · pdfWeight; the equirectangular sinθ jacobian is
@@ -352,10 +351,10 @@ VISRTX_DEVICE LightSample sampleHDRILight(
   // First sample row (y) using marginal CDF, then column (x) using conditional
   // CDF
   auto y = inverseSampleCDF(
-      ld.hdri.marginalCDF, ld.hdri.size.y, curand_uniform(&rs));
+      ld.hdri.marginalCDF, ld.hdri.size.y, pcg_uniform(&rs));
   auto x = inverseSampleCDF(ld.hdri.conditionalCDF + y * ld.hdri.size.x,
       ld.hdri.size.x,
-      curand_uniform(&rs));
+      pcg_uniform(&rs));
 
   auto xy = glm::uvec2(x, y);
 
@@ -365,13 +364,13 @@ VISRTX_DEVICE LightSample sampleHDRILight(
   }
 #endif
   // Add sub-pixel jitter to avoid aliasing
-  auto jitter = glm::vec2(curand_uniform(&rs), curand_uniform(&rs));
+  auto jitter = glm::vec2(pcg_uniform(&rs), pcg_uniform(&rs));
   auto uv =
       glm::clamp((glm::vec2(xy) + jitter) / glm::vec2(ld.hdri.size), 0.f, 1.f);
 
   // Convert UV coordinates to spherical coordinates
   // uv.y ∈ [0,1] → θ ∈ [0,π], uv.x ∈ [0,1] → φ ∈ [0,2π]
-  auto thetaPhi = float(M_PI) * glm::vec2(uv.y, 2.0f * (uv.x));
+  auto thetaPhi = kPi * glm::vec2(uv.y, 2.0f * (uv.x));
 
   // pdf_ω = (L/totalL) · pdfWeight; the equirectangular sinθ jacobian is
   // already folded into the CDF and pdfWeight, so do not re-multiply here.

@@ -43,10 +43,17 @@ float3 getFloat3(const pbrt::ParamList &p, const std::string &name, float3 def)
   return v.size() >= 3 ? float3(v[0], v[1], v[2]) : def;
 }
 
+// Defined later — shared with the lights/area-emitters path so that
+// `"spectrum reflectance" [λ v λ v …]`, `"blackbody"`, etc. resolve
+// identically for materials, lights, and any other RGB triple lookup.
+static float3 resolveEmissionColor(const pbrt::ParamList &params,
+    const std::string &name,
+    float3 fallback);
+
 float3 getRgb(
     const pbrt::ParamList &p, const std::string &name, float3 def = float3(1.f))
 {
-  return getFloat3(p, name, def);
+  return resolveEmissionColor(p, name, def);
 }
 
 float3 transformPoint(const mat4 &m, const float3 &p)
@@ -639,6 +646,130 @@ static SurfaceRef makeShapeSurface(
         shape.type.c_str());
   }
   return scene.createSurface(geom->name().c_str(), geom, mat);
+}
+
+// NanoVDB volume conversion ///////////////////////////////////////////////////
+
+// Build a default RGBA color ramp for a transferFunction1D volume:
+// constant base color, linear opacity 0..max. PBRT volumetric extinction
+// would be `(sigma_a + sigma_s) * scale` integrated along rays; ANARI's
+// transferFunction1D collapses extinction into a per-voxel opacity lookup,
+// so we just clamp the ramp peak to 1.
+static ArrayRef makeVolumeColorRamp(
+    Scene &scene, const float3 &baseColor, float maxOpacity)
+{
+  constexpr int kRampSize = 256;
+  auto arr = scene.createArray(ANARI_FLOAT32_VEC4, kRampSize);
+  auto *out = arr->mapAs<float4>();
+  const float aMax = std::clamp(maxOpacity, 0.f, 1.f);
+  for (int i = 0; i < kRampSize; ++i) {
+    const float t = float(i) / float(kRampSize - 1);
+    out[i] = float4(baseColor.x, baseColor.y, baseColor.z, t * aMax);
+  }
+  arr->unmap();
+  return arr;
+}
+
+// PBRT v4 NanoVDB medium → ANARI Volume. Skips the bounding surface entirely
+// (its only role in PBRT is to delimit the volume region). The shape's
+// objectToWorld places the unit-extent NanoVDB grid in world space.
+static bool convertNanoVdbMediumShape(Scene &scene,
+    const pbrt::Shape &shape,
+    const pbrt::MediumDef &medium,
+    LayerNodeRef parent,
+    const std::string &basePath,
+    std::map<std::string, SpatialFieldRef> &fieldCache,
+    const std::string &mediumName)
+{
+  const auto filename = medium.params.getString("filename");
+  if (filename.empty()) {
+    logWarning(
+        "[import_PBRT] nanovdb medium '%s' missing filename", mediumName.c_str());
+    return false;
+  }
+
+  SpatialFieldRef field;
+  if (auto it = fieldCache.find(mediumName); it != fieldCache.end()) {
+    field = it->second;
+  } else {
+    std::string fullPath;
+    try {
+      fullPath = pbrt::resolveScenePath(basePath, filename);
+    } catch (const std::exception &e) {
+      logWarning("[import_PBRT] nanovdb medium '%s': %s",
+          mediumName.c_str(),
+          e.what());
+      return false;
+    }
+    field = import_NVDB(scene, fullPath.c_str());
+    if (!field) {
+      logWarning("[import_PBRT] nanovdb medium '%s': failed to load '%s'",
+          mediumName.c_str(),
+          fullPath.c_str());
+      return false;
+    }
+    fieldCache[mediumName] = field;
+  }
+
+  // PBRT albedo = sigma_s / (sigma_a + sigma_s). For a sampled spectrum
+  // we fall back on resolveEmissionColor's mean-of-samples behaviour.
+  const float3 sigmaA = resolveEmissionColor(medium.params, "sigma_a", float3(0.f));
+  const float3 sigmaS = resolveEmissionColor(medium.params, "sigma_s", float3(1.f));
+  const float3 extinction = sigmaA + sigmaS;
+  float3 albedo(1.f);
+  if (extinction.x > 0.f)
+    albedo.x = sigmaS.x / extinction.x;
+  if (extinction.y > 0.f)
+    albedo.y = sigmaS.y / extinction.y;
+  if (extinction.z > 0.f)
+    albedo.z = sigmaS.z / extinction.z;
+
+  // `float scale` controls overall extinction. Map a unit-extinction medium
+  // to opaque-on-peak (1.0), then scale; clamp so dense scales don't trip
+  // the alpha clamp inside makeVolumeColorRamp.
+  const float scale = medium.params.getFloat("scale", 1.f);
+  const float maxOpacity = std::clamp(scale * 0.25f, 0.f, 1.f);
+
+  auto colorArr = makeVolumeColorRamp(scene, albedo, maxOpacity);
+
+  auto xfmNode = scene.insertChildTransformNode(
+      parent, pbrtTransformToMat4(shape.objectToWorld));
+  auto [_, volume] = scene.insertNewChildObjectNode<Volume>(
+      xfmNode, tokens::volume::transferFunction1D);
+  volume->setName(mediumName.c_str());
+  volume->setParameterObject("value", *field);
+  volume->setParameterObject("color", *colorArr);
+  if (auto range = field->parameterValueAs<float2>("range")) {
+    const float2 r = *range;
+    if (r.x < r.y)
+      volume->setParameter("valueRange", ANARI_FLOAT32_BOX1, &r);
+  }
+  return true;
+}
+
+// If `shape` references a `MakeNamedMedium` of type "nanovdb" on either
+// side of its MediumInterface, emit an ANARI Volume and return true so the
+// caller skips the surface. Returns false in every other case — the caller
+// should fall through to normal surface emission.
+static bool tryConvertVolumeShape(Scene &scene,
+    const pbrt::Shape &shape,
+    const pbrt::Scene &pbrtScene,
+    LayerNodeRef parent,
+    const std::string &basePath,
+    std::map<std::string, SpatialFieldRef> &fieldCache)
+{
+  const std::string &mediumName = shape.interiorMedium.empty()
+      ? shape.exteriorMedium
+      : shape.interiorMedium;
+  if (mediumName.empty())
+    return false;
+  auto medIt = pbrtScene.namedMedia.find(mediumName);
+  if (medIt == pbrtScene.namedMedia.end())
+    return false;
+  if (medIt->second.type != "nanovdb")
+    return false;
+  return convertNanoVdbMediumShape(
+      scene, shape, medIt->second, parent, basePath, fieldCache, mediumName);
 }
 
 static void convertShape(Scene &scene,
@@ -1254,8 +1385,15 @@ static float conductorRoughness(const pbrt::ParamList &params)
 // `attenuationColor` is the tint that white light becomes after travelling
 // `attenuationDistance` through the medium, i.e.
 //   T(d) = pow(attenuationColor, d / attenuationDistance) = exp(-sigma_a * d)
-// Choosing attenuationDistance = 1 makes attenuationColor = exp(-sigma_a),
-// preserving PBRT's per-scene-unit formula exactly.
+// PBRT dielectrics commonly author a high IOR and rely on total internal
+// reflection to bounce a ray through the medium several times, accumulating
+// the per-traversal sigma_a on each pass. This importer caps IOR at 2.5
+// (see kMaxDielectricIor) and KHR_materials_volume models only a single
+// transmission, so neither effect lengthens the in-medium path and the
+// authored sigma_a reads too faint. Pre-amplify by setting
+// attenuationDistance well below 1 to recover the visual punch.
+constexpr float kPbrtMediumAbsorptionBoost = 5.f;
+
 static void applyMediumToMaterial(
     MaterialRef &mat, const pbrt::MediumDef &medium)
 {
@@ -1282,7 +1420,7 @@ static void applyMediumToMaterial(
   const float az = sigmaA[2] + (hasScattering ? sigmaS[2] : 0.f);
   const float3 attenuationColor(std::exp(-ax), std::exp(-ay), std::exp(-az));
   mat->setParameter("attenuationColor", ANARI_FLOAT32_VEC3, &attenuationColor);
-  mat->setParameter("attenuationDistance", 1.f);
+  mat->setParameter("attenuationDistance", 1.f / kPbrtMediumAbsorptionBoost);
   mat->setParameter("thickness", 1.f);
 }
 
@@ -2031,26 +2169,44 @@ static void convertLight(Scene &scene,
   } else if (type == "infinite") {
     auto light = scene.createObject<Light>(tokens::light::hdri);
     const auto filename = params.getString("filename");
+    ArrayRef radiance;
     if (!filename.empty()) {
       try {
         auto fullPath = pbrt::resolveScenePath(basePath, filename);
-        if (auto arr = loadInfiniteRadiance(scene, fullPath))
-          light->setParameterObject("radiance", *arr);
+        radiance = loadInfiniteRadiance(scene, fullPath);
       } catch (const std::exception &e) {
         logWarning("[import_PBRT] infinite light: %s", e.what());
       }
     }
 
-    auto color =
-        applyScale(params, resolveEmissionColor(params, "L"), exposureScale);
+    float3 color(1.f);
+    if (radiance) {
+      // HDRI-driven: PBRT v4 layers blackbody/rgb L and `scale` on top of
+      // the image. Carry that as the `color` multiplier.
+      color = applyScale(params, resolveEmissionColor(params, "L"), exposureScale);
+    } else {
+      // Filename-less / load failure: bake the resolved emission directly
+      // into a 1x1 radiance pixel so `radiance` carries the actual light.
+      float3 baked =
+          applyScale(params, resolveEmissionColor(params, "L"), exposureScale);
+      radiance = scene.createArray(ANARI_FLOAT32_VEC3, 1, 1);
+      radiance->setData(&baked);
+    }
+    light->setParameterObject("radiance", *radiance);
     light->setParameter("color", ANARI_FLOAT32_VEC3, &color);
     light->setParameter("layout", "equirectangular");
 
     // PBRT's image-based infinite light uses +Z up in its local frame
     // (the equal-area mapping's center is +Z); after conversion to
     // equirectangular we keep that convention. lightToWorld's columns 0
-    // and 2 give the world-space "direction" and "up" axes.
-    const float3 dir = safeNormalize(
+    // and 2 give the world-space light-local +X and +Z axes.
+    //
+    // ANARI hdri light: `direction` is built into the device-side basis as
+    // `frame.right = -normalize(direction)` (both VisRTX' HDRI.cpp and
+    // OSPRay's HDRILight.cpp do this), so image u=0 maps to world
+    // `-direction`. To put PBRT's light-local +X at u=0, we pass the
+    // *negated* CTM column 0 — otherwise the HDRI yaws 180°.
+    const float3 dir = -safeNormalize(
         float3(xfm[0][0], xfm[0][1], xfm[0][2]), float3(1.f, 0.f, 0.f));
     const float3 up = safeNormalize(
         float3(xfm[2][0], xfm[2][1], xfm[2][2]), float3(0.f, 0.f, 1.f));
@@ -2164,10 +2320,22 @@ void import_PBRT(Scene &scene,
 
   TextureCache texCache;
   std::map<MaterialCacheKey, MaterialRef> matCache;
+  std::map<std::string, SpatialFieldRef> volumeFieldCache;
 
   // PBRT film ISO controls sensor exposure — scale lights to compensate
   float filmIso = pbrtScene.film.params.getFloat("iso", 100.f);
   float exposureScale = filmIso / 100.f;
+
+  // PBRT v4 syntax is `MediumInterface "interior" "exterior"`. Some scenes
+  // (crown's rubies/sapphires, dambreak's water) describe the gem/liquid as
+  // the *exterior* medium because their meshes are inside-out (obj2pbrt
+  // output, or ReverseOrientation). Picking whichever side is non-empty
+  // matches the scenes' intent and keeps disney-cloud's interior-only case
+  // unchanged.
+  auto effectiveMedium = [](const pbrt::Shape &shape) {
+    return shape.interiorMedium.empty() ? shape.exteriorMedium
+                                        : shape.interiorMedium;
+  };
 
   auto resolveShapeMaterial = [&](const pbrt::Shape &shape) {
     MaterialRef mat = !shape.areaLightType.empty()
@@ -2175,7 +2343,7 @@ void import_PBRT(Scene &scene,
         : convertMaterial(scene,
               pbrtScene,
               shape.materialName,
-              shape.interiorMedium,
+              effectiveMedium(shape),
               basePath,
               texCache,
               matCache);
@@ -2183,8 +2351,12 @@ void import_PBRT(Scene &scene,
   };
 
   // Shapes
-  for (auto &shape : pbrtScene.shapes)
+  for (auto &shape : pbrtScene.shapes) {
+    if (tryConvertVolumeShape(
+            scene, shape, pbrtScene, root, basePath, volumeFieldCache))
+      continue;
     convertShape(scene, shape, resolveShapeMaterial(shape), root, basePath);
+  }
 
   // ObjectInstance: build each ObjectDef's surface list lazily, then share
   // the resulting Surface refs across every instance. Without sharing,
@@ -2201,6 +2373,17 @@ void import_PBRT(Scene &scene,
       return it->second;
     auto &tmpl = it->second;
     for (auto &shape : obj.shapes) {
+      // Volume bounding shapes can't be shared the same way Surface refs
+      // are — skip them in the template, instance-time wiring would need
+      // to emit a fresh Volume per instance. Real volumetric scenes in
+      // the PBRT v4 library don't use ObjectInstance for the volume hull.
+      const std::string &mn = effectiveMedium(shape);
+      if (!mn.empty()) {
+        auto medIt = pbrtScene.namedMedia.find(mn);
+        if (medIt != pbrtScene.namedMedia.end()
+            && medIt->second.type == "nanovdb")
+          continue;
+      }
       auto geom = buildShapeGeometry(scene, shape, basePath);
       if (!geom)
         continue;

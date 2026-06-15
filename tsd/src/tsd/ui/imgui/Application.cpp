@@ -10,7 +10,9 @@
 #include "tsd/rendering/view/Manipulator.hpp"
 // tsd_ui_imgui
 #include "tsd/ui/imgui/Application.h"
+#include "tsd/ui/imgui/ArrayPreview.h"
 #include "tsd/ui/imgui/tsd_font.h"
+#include "tsd/ui/imgui/tsd_ui_imgui.h"
 #include "tsd/ui/imgui/windows/Window.h"
 // SDL
 #include <SDL3/SDL.h>
@@ -97,7 +99,15 @@ CommandLineOptions *Application::commandLineOptions()
   return &m_commandLine;
 }
 
-void Application::getFilenameFromDialog(std::string &filenameOut, bool save)
+void Application::getFilenameFromDialog(
+    std::string &filenameOut, bool isSaveDialog)
+{
+  getFilenameFromDialog(filenameOut,
+      isSaveDialog ? FileDialogMode::SaveFile : FileDialogMode::OpenFile);
+}
+
+void Application::getFilenameFromDialog(
+    std::string &filenameOut, FileDialogMode mode)
 {
   auto fileDialogCb =
       [](void *userdata, const char *const *filelist, int filter) {
@@ -111,9 +121,12 @@ void Application::getFilenameFromDialog(std::string &filenameOut, bool save)
           out = *filelist;
       };
 
-  if (save) {
+  if (mode == FileDialogMode::SaveFile) {
     SDL_ShowSaveFileDialog(
         fileDialogCb, &filenameOut, this->sdlWindow(), nullptr, 0, nullptr);
+  } else if (mode == FileDialogMode::OpenDirectory) {
+    SDL_ShowOpenFolderDialog(
+        fileDialogCb, &filenameOut, this->sdlWindow(), nullptr, false);
   } else {
     SDL_ShowOpenFileDialog(fileDialogCb,
         &filenameOut,
@@ -125,6 +138,30 @@ void Application::getFilenameFromDialog(std::string &filenameOut, bool save)
   }
 }
 
+void Application::getFilenamesFromDialog(std::vector<std::string> &filenamesOut)
+{
+  auto fileDialogCb =
+      [](void *userdata, const char *const *filelist, int filter) {
+        auto &out = *(std::vector<std::string> *)userdata;
+        out.clear();
+        if (!filelist) {
+          tsd::core::logError("SDL DIALOG ERROR: %s\n", SDL_GetError());
+          return;
+        }
+
+        for (auto file = filelist; *file; ++file)
+          out.emplace_back(*file);
+      };
+
+  SDL_ShowOpenFileDialog(fileDialogCb,
+      &filenamesOut,
+      this->sdlWindow(),
+      nullptr,
+      0,
+      nullptr,
+      true);
+}
+
 void Application::showImportFileDialog()
 {
   m_fileDialog->show();
@@ -133,6 +170,18 @@ void Application::showImportFileDialog()
 void Application::showExportNanoVDBFileDialog()
 {
   m_exportNanoVDBFileDialog->show();
+}
+
+void Application::showImportObjectFileDialog(
+    TSDObjectFileType fileType, tsd::scene::LayerNodeRef importRoot)
+{
+  m_objectFileDialog->showImport(fileType, importRoot);
+}
+
+void Application::showExportObjectFileDialog(
+    TSDObjectFileType fileType, anari::DataType objectType, size_t objectIndex)
+{
+  m_objectFileDialog->showExport(fileType, objectType, objectIndex);
 }
 
 void Application::saveDefaultApplicationSettings()
@@ -183,7 +232,7 @@ void Application::setupImGuiStyle()
 
   style.Alpha = 1.0f;
   style.DisabledAlpha = 0.6f;
-  style.WindowPadding = ImVec2(8.0f, 8.0f);
+  style.WindowPadding = ImVec2(12.0f, 12.0f);
   style.WindowRounding = 4.0f;
   style.WindowBorderSize = 1.0f;
   style.WindowMinSize = ImVec2(32.0f, 32.0f);
@@ -324,7 +373,6 @@ WindowArray Application::setupWindows()
 
   auto *window = sdlWindow();
   SDL_MaximizeWindow(window);
-  m_uiConfig.fontScale = SDL_GetWindowDisplayScale(window);
 
   setupImGuiStyle();
 
@@ -336,6 +384,7 @@ WindowArray Application::setupWindows()
   m_offlineRenderModal = std::make_unique<OfflineRenderModal>(this);
   m_fileDialog = std::make_unique<ImportFileDialog>(this);
   m_exportNanoVDBFileDialog = std::make_unique<ExportNanoVDBFileDialog>(this);
+  m_objectFileDialog = std::make_unique<ObjectFileDialog>(this);
   m_vorticityDialog = std::make_unique<VorticityDialog>(this);
   m_cuttingPlaneDialog = std::make_unique<CuttingPlaneDialog>(this);
 
@@ -346,6 +395,8 @@ WindowArray Application::setupWindows()
   m_appSettingsDialog->applySettings();
 
   SDL_SetRenderVSync(sdlRenderer(), 1);
+
+  tsd::ui::setupArrayPreview(sdlRenderer());
 
   m_extensionManager = std::make_unique<ExtensionManager>();
   m_extensionManager->initialize(appContext());
@@ -365,6 +416,7 @@ void Application::mainLoopEnd()
 
 void Application::teardown()
 {
+  tsd::ui::teardownArrayPreview();
   teardownUsdDevice();
   teardownTsdDevice();
   appContext()->anari.releaseAllDevices();
@@ -416,6 +468,11 @@ void Application::uiFrameStart()
   // Handle app shortcuts //
   if (m_exportNanoVDBFileDialog->visible()) {
     m_exportNanoVDBFileDialog->renderUI();
+    modalActive = true;
+  }
+
+  if (m_objectFileDialog->visible()) {
+    m_objectFileDialog->renderUI();
     modalActive = true;
   }
 
@@ -476,28 +533,24 @@ void Application::uiMainMenuBar_File()
     if (ImGui::MenuItem("Load"))
       this->getFilenameFromDialog(m_filenameToLoadNextFrame);
 
-    if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Load session from a .tsd file");
+    tooltipForPreviousItem("Load session from a .tsd file");
 
     ImGui::Separator();
 
     if (ImGui::MenuItem("Save", "CTRL+S"))
       doSave();
 
-    if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Save session to a .tsd file");
+    tooltipForPreviousItem("Save session to a .tsd file");
 
     if (ImGui::MenuItem("Save As...", "CTRL+SHIFT+S"))
       this->getFilenameFromDialog(m_filenameToSaveNextFrame, true);
 
-    if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Save session to a chosen file name");
+    tooltipForPreviousItem("Save session to a chosen file name");
 
     if (ImGui::MenuItem("Quick Save", "CTRL+ALT+S"))
       doSave("state.tsd");
 
-    if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Save sesson to 'state.tsd' in the local directory");
+    tooltipForPreviousItem("Save sesson to 'state.tsd' in the local directory");
 
     ImGui::Separator();
 
@@ -669,8 +722,7 @@ void Application::uiActionMenu(const std::vector<ActionMenuNode> &entries)
             "Executing Action...");
       }
 
-      if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s", entry.name.c_str());
+      tooltipForPreviousItem(entry.name.c_str());
     }
   }
 }
@@ -695,6 +747,7 @@ void Application::saveApplicationState(const char *_filename)
     auto &ctx = *appContext();
     auto &root = m_settings.root();
     root.reset();
+    tsd::core::writeDataTreeMetadata(root, applicationStateMetadata());
 
     // Window state
     auto &windows = root["windows"];
@@ -742,6 +795,22 @@ void Application::saveApplicationState(const char *_filename)
   showTaskModal(doSave, "Please Wait: Saving Session...");
 }
 
+tsd::core::DataTreeMetadata Application::applicationStateMetadata() const
+{
+  return {tsd::core::DATA_TREE_METADATA_ENVELOPE_VERSION,
+      "application-state",
+      "tsd.ui.imgui.application-state",
+      1};
+}
+
+bool Application::validateApplicationStateMetadata(
+    const tsd::core::DataTreeMetadataReadResult &,
+    const tsd::core::DataNode &,
+    const char *) const
+{
+  return true;
+}
+
 void Application::loadApplicationState(const char *filename)
 {
   // Load from file
@@ -752,6 +821,11 @@ void Application::loadApplicationState(const char *filename)
 
   auto &ctx = *appContext();
   auto &root = m_settings.root();
+  if (!validateApplicationStateMetadata(
+          tsd::core::readDataTreeMetadata(root), root, filename)) {
+    root.reset();
+    return;
+  }
 
   // TSD context from app state file, or context-only file
   if (auto *c = root.child("context"); c != nullptr)
@@ -1131,8 +1205,8 @@ void Application::AppImpl::init(Uint32 windowFlags)
 
   SDL_ShowWindow(sdlWindow);
 
-  const float scale = SDL_GetWindowPixelDensity(sdlWindow);
-  SDL_SetRenderScale(sdlRenderer, scale, scale);
+  float pixelDensity = SDL_GetWindowPixelDensity(sdlWindow);
+  SDL_SetRenderScale(sdlRenderer, pixelDensity, pixelDensity);
 
   ImGui::CreateContext();
   ImGui::StyleColorsDark();
@@ -1143,6 +1217,7 @@ void Application::AppImpl::init(Uint32 windowFlags)
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  io.DisplayFramebufferScale = ImVec2(pixelDensity, pixelDensity);
 
   ImGuiStyle &style = ImGui::GetStyle();
   if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)

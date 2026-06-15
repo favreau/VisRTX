@@ -35,7 +35,6 @@
 #include "gpu/shadingState.h"
 
 #include <anari/anari_cpp/ext/linalg.h>
-#include <curand.h>
 #include <mi/neuraylib/target_code_types.h>
 #include <optix_device.h>
 #include <glm/ext/matrix_float2x4.hpp>
@@ -92,11 +91,9 @@ VISRTX_CALLABLE void __direct_callable__init(MDLShadingState *shadingState,
   auto tU = hit->tU;
   auto tV = hit->tV;
 
-  shadingState->objectToWorld = hit->objectToWorld;
-  shadingState->worldToObject = hit->worldToObject;
-
-  // The number of texture spaces we support. Matching the number of attributes
-  // ANARI exposes (4)
+  // One texture space per ANARI attribute0..3; matches kNumTextureSpaces in
+  // libmdl/MDLBackendConfig.h. Tangent frame is the geometry's; multi-UV
+  // materials reuse it for every slot (no per-attribute tangent track yet).
   shadingState->textureCoords[0] =
       readAttributeValue(MaterialAttribute::ATTRIB_0, *hit);
   shadingState->textureCoords[1] =
@@ -106,8 +103,6 @@ VISRTX_CALLABLE void __direct_callable__init(MDLShadingState *shadingState,
   shadingState->textureCoords[3] =
       readAttributeValue(MaterialAttribute::ATTRIB_3, *hit);
 
-  // Take some shortcut for now and use the same tangent space for all texture
-  // spaces.
   shadingState->textureTangentsU[0] = tU;
   shadingState->textureTangentsU[1] = tU;
   shadingState->textureTangentsU[2] = tU;
@@ -125,9 +120,9 @@ VISRTX_CALLABLE void __direct_callable__init(MDLShadingState *shadingState,
   shadingState->state.meters_per_scene_unit = 1.0f;
   shadingState->state.object_id = hit->objID;
   shadingState->state.object_to_world =
-      reinterpret_cast<const float4 *>(&shadingState->objectToWorld);
+      reinterpret_cast<const float4 *>(&hit->instance->objectToWorld);
   shadingState->state.world_to_object =
-      reinterpret_cast<const float4 *>(&shadingState->worldToObject);
+      reinterpret_cast<const float4 *>(&hit->instance->worldToObject);
   shadingState->state.ro_data_segment = nullptr;
   shadingState->state.text_coords =
       reinterpret_cast<const float3 *>(shadingState->textureCoords);
@@ -138,12 +133,13 @@ VISRTX_CALLABLE void __direct_callable__init(MDLShadingState *shadingState,
   shadingState->state.tangent_v =
       reinterpret_cast<const float3 *>(shadingState->textureTangentsV);
 
-  // Resources shared by all mdl calls.
+  // Resources shared by all mdl calls. The sampler table is shared with the
+  // material descriptor (md->samplers lives in GPU global memory for the
+  // lifetime of the material), so the handler holds a pointer rather than an
+  // inline copy.
   shadingState->textureHandler.vtable = nullptr;
   shadingState->textureHandler.fd = fd;
-  memcpy(shadingState->textureHandler.samplers,
-      md->samplers,
-      sizeof(md->samplers));
+  shadingState->textureHandler.samplers = md->samplers;
   shadingState->textureHandler.numSamplers = md->numSamplers;
   shadingState->resData = {nullptr, &shadingState->textureHandler};
 
@@ -200,13 +196,6 @@ VISRTX_CALLABLE
 NextRay __direct_callable__nextRay(
     const MDLShadingState *shadingState, const Ray *ray, RandState *rs)
 {
-  // Before anything, check for opacity. If below, then we just pass through
-  if (curand_uniform(rs) > mdlOpacity(&shadingState->state,
-          &shadingState->resData,
-          shadingState->argBlock)) {
-    return NextRay{ray->dir, vec3(1.0f), NEXT_RAY_CONTINUES_THROUGH_SURFACE};
-  }
-
   // Sample
   BsdfSampleData sample_data = {};
   if (shadingState->isFrontFace) {
@@ -217,10 +206,8 @@ NextRay __direct_callable__nextRay(
     sample_data.ior2 = make_float3(1.0f, 1.0f, 1.0f);
   }
   sample_data.k1 = make_float3(-ray->dir);
-  sample_data.xi = make_float4(curand_uniform(rs),
-      curand_uniform(rs),
-      curand_uniform(rs),
-      curand_uniform(rs));
+  sample_data.xi = make_float4(
+      pcg_uniform(rs), pcg_uniform(rs), pcg_uniform(rs), pcg_uniform(rs));
 
   mdlBsdf_sample(&sample_data,
       &shadingState->state,
@@ -233,10 +220,23 @@ NextRay __direct_callable__nextRay(
       ? NEXT_RAY_CONTINUES_THROUGH_SURFACE
       : NEXT_RAY_NONE;
 
+  // Env-MIS solid-angle pdf for the sampled direction, matching
+  // __direct_callable__evaluatePdf so the balance heuristic partitions to 1.
+  // A specular (delta) lobe can't be evaluated by NEE, and a through-surface
+  // continuation is past the NEE hemisphere gate — both report +inf so the BSDF
+  // escape owns the environment (w_bsdf = 1). Glossy/diffuse reflections report
+  // the finite sampling pdf and are MIS-combined with NEE.
+  const bool isSpecular =
+      (sample_data.event_type & mi::neuraylib::BSDF_EVENT_SPECULAR) != 0;
+  const float pdf =
+      (isSpecular || (flags & NEXT_RAY_CONTINUES_THROUGH_SURFACE))
+      ? INFINITY
+      : sample_data.pdf;
   return NextRay{direction,
       vec3(sample_data.bsdf_over_pdf.x,
           sample_data.bsdf_over_pdf.y,
           sample_data.bsdf_over_pdf.z),
+      pdf,
       flags};
 }
 
@@ -287,4 +287,32 @@ VISRTX_CALLABLE
 vec3 __direct_callable__evaluateNormal(const MDLShadingState *shadingState)
 {
   return make_vec3(shadingState->state.normal);
+}
+
+// Env-MIS BSDF density at `wi` given outgoing `wo` (both world space): the
+// balance-heuristic light-side weight. mdlBsdf_evaluate fills `eval_data.pdf`
+// with the solid-angle sampling pdf, matching NextRay.pdf in nextRay (MDL's
+// evaluate-pdf and sample-pdf are the same density). A pure specular lobe
+// evaluates to pdf 0 (NEE can't reach a delta) — consistent with the escape
+// owning it via +inf. Mirrors shadeSurface's ior/k1/k2 setup exactly.
+VISRTX_CALLABLE float __direct_callable__evaluatePdf(
+    const MDLShadingState *shadingState, const vec3 *wo, const vec3 *wi)
+{
+  BsdfEvaluateData eval_data = {};
+  if (shadingState->isFrontFace) {
+    eval_data.ior1 = make_float3(1.0f, 1.0f, 1.0f);
+    eval_data.ior2.x = MI_NEURAYLIB_BSDF_USE_MATERIAL_IOR;
+  } else {
+    eval_data.ior1.x = MI_NEURAYLIB_BSDF_USE_MATERIAL_IOR;
+    eval_data.ior2 = make_float3(1.0f, 1.0f, 1.0f);
+  }
+  eval_data.k1 = make_float3(normalize(*wo));
+  eval_data.k2 = make_float3(normalize(*wi));
+
+  mdlBsdf_evaluate(&eval_data,
+      &shadingState->state,
+      &shadingState->resData,
+      shadingState->argBlock);
+
+  return eval_data.pdf;
 }

@@ -7,9 +7,11 @@
 #include "tsd/core/FlatMap.hpp"
 #include "tsd/scene/Scene.hpp"
 // std
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace tsd::animation {
 struct AnimationManager;
@@ -80,6 +82,7 @@ void import_PT(Scene &scene, tsd::animation::AnimationManager &animMgr, const ch
 void import_SILO(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location);
 void import_SMESH(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {}, bool isAnimation = false);
 void import_SWC(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {});
+void import_SWC_SDF(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {});
 void import_TRK(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {});
 void import_USD(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filename, LayerNodeRef location = {});
 void import_VTP(Scene &scene, tsd::animation::AnimationManager &animMgr, const char *filepath, LayerNodeRef location = {});
@@ -155,6 +158,7 @@ enum class ImporterType
   SMESH,
   SMESH_ANIMATION, // time series version
   SWC,
+  SWC_SDF,
   TRK,
   USD,
   VTP,
@@ -172,6 +176,20 @@ enum class ImporterType
 
 using ImportFile = std::pair<ImporterType, std::string>;
 using ImportAnimationFiles = std::pair<ImporterType, std::vector<std::string>>;
+
+struct UserColorMap
+{
+  std::string name;
+  std::filesystem::path path;
+  std::vector<tsd::core::ColorPoint> colorPoints;
+};
+
+std::filesystem::path userColorMapDirectory();
+std::vector<UserColorMap> loadUserColorMaps();
+std::vector<UserColorMap> loadUserColorMaps(
+    const std::filesystem::path &directory);
+tsd::core::TransferFunction importTransferFunction(
+    const std::string &filepath);
 
 void import_file(Scene &scene,
     tsd::animation::AnimationManager &animMgr,

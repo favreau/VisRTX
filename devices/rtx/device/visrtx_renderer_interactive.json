@@ -1,18 +1,20 @@
 {
-  "info" : {
-    "name" : "VISRTX_RENDERER_INTERACTIVE",
-    "type" : "extension",
-    "dependencies" : ["anari_core_1_0"],
-    "implements" : [
+  "info": {
+    "name": "VISRTX_RENDERER_INTERACTIVE",
+    "type": "extension",
+    "dependencies": [
+      "anari_core_1_0"
+    ],
+    "implements": [
       "khr_renderer_background_color",
       "khr_renderer_background_image",
       "khr_renderer_ambient_light"
     ]
   },
-  "objects" : [
+  "objects": [
     {
-      "type" : "ANARI_RENDERER",
-      "name" : "interactive",
+      "type": "ANARI_RENDERER",
+      "name": "interactive",
       "parameters": [
         {
           "name": "sampleLimit",
@@ -48,22 +50,59 @@
           "description": "mode controlling buffers given to the denoiser"
         },
         {
-          "name": "fireflyFilter",
+          "name": "fireflyFilterMode",
           "types": [
-            "ANARI_BOOL"
+            "ANARI_STRING"
           ],
           "tags": [],
-          "default": true,
-          "description": "suppress fireflies via reversible tonemapping before accumulation"
+          "default": "tonemap",
+          "values": [
+            "none",
+            "tonemap",
+            "clamp",
+            "trim"
+          ],
+          "description": "removes bright speckle (firefly) noise: none (off), tonemap (aggressive; strongest suppression but can dim the image), clamp (moderate; caps only the brightest outlier samples), trim (gentlest; energy-preserving, discards only detected outliers)"
         },
         {
-          "name": "premultipliedAlpha",
+          "name": "fireflyFilterSigma",
+          "types": [
+            "ANARI_FLOAT32"
+          ],
+          "tags": [],
+          "default": 8.0,
+          "minimum": 0.0,
+          "description": "clamp/trim mode: outlier sensitivity; lower removes more aggressively"
+        },
+        {
+          "name": "fireflyFilterWarmup",
+          "types": [
+            "ANARI_INT32"
+          ],
+          "tags": [],
+          "default": 4,
+          "minimum": 1,
+          "description": "clamp mode: samples observed before filtering starts; higher delays filtering but estimates the cap more reliably"
+        },
+        {
+          "name": "fireflyFilterTrim",
+          "types": [
+            "ANARI_INT32"
+          ],
+          "tags": [],
+          "default": 4,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "trim mode: how many outlier samples to track per pixel; higher is more robust but uses more memory"
+        },
+        {
+          "name": "premultiplyBackground",
           "types": [
             "ANARI_BOOL"
           ],
           "tags": [],
           "default": false,
-          "description": "pre-multiply RGB by alpha in the composited output pixel"
+          "description": "pre-multiply alpha channel with background color"
         },
         {
           "name": "cullTriangleBackfaces",

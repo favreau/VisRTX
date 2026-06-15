@@ -57,14 +57,9 @@ VISRTX_CALLABLE void __direct_callable__init(MatteShadingState *shadingState,
 }
 
 VISRTX_CALLABLE NextRay __direct_callable__nextRay(
-    const MatteShadingState *shadingState, const Ray *ray, RandState *rs)
+    const MatteShadingState *, const Ray *, RandState *)
 {
-  // Before anything, check for opacity. If below, then we just pass through
-  if (curand_uniform(rs) > shadingState->opacity) {
-    return NextRay{ray->dir, vec3(1.0f), NEXT_RAY_CONTINUES_THROUGH_SURFACE};
-  }
-
-  return NextRay{vec3(0.0f), vec3(0.0f)};
+  return NextRay{vec3(0.0f), vec3(0.0f), 0.0f};
 }
 
 VISRTX_CALLABLE
@@ -107,6 +102,15 @@ VISRTX_CALLABLE vec3 __direct_callable__shadeSurface(
     const vec3 *outgoingDir)
 {
   float NdotL = fmaxf(0.0f, dot(hit->Ns, lightSample->dir));
-  return shadingState->baseColor * float(M_1_PI) * NdotL * lightSample->radiance
+  return shadingState->baseColor * kInvPi * NdotL * lightSample->radiance
       / lightSample->pdf;
+}
+
+// Matte has no continuation ray (nextRay returns a dead ray), so its BSDF can
+// never produce the environment direction: report pdf 0 so env MIS leaves NEE
+// owning the environment (w_nee = 1), matching the pre-MIS behavior.
+VISRTX_CALLABLE float __direct_callable__evaluatePdf(
+    const MatteShadingState *, const vec3 *, const vec3 *)
+{
+  return 0.0f;
 }

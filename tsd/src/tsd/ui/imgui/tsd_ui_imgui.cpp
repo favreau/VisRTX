@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tsd/ui/imgui/tsd_ui_imgui.h"
+#include "tsd/ui/imgui/ArrayPreview.h"
 // tsd_core
 #include "tsd/core/ColorMapUtil.hpp"
+// std
+#include <cstring>
 
 namespace tsd::ui {
 
@@ -22,6 +25,8 @@ static void buildUI_array_info_tooltip_text(
     const tsd::scene::Scene &scene, size_t idx)
 {
   const auto &a = *scene.getObject<tsd::scene::Array>(idx);
+  if (tsd::ui::buildUI_array_preview(a))
+    ImGui::Separator();
   ImGui::Text(" idx: [%zu]", idx);
   ImGui::Text("name: '%s'", a.name().c_str());
   const auto t = a.type();
@@ -32,6 +37,42 @@ static void buildUI_array_info_tooltip_text(
   else
     ImGui::Text("size: %zu", a.dim(0));
   ImGui::Text("type: %s", anari::toString(a.elementType()));
+}
+
+static void buildUI_sampler_info_tooltip_text(
+    const tsd::scene::Scene &scene, size_t idx)
+{
+  auto *s = scene.getObject(ANARI_SAMPLER, idx);
+  if (!s)
+    return;
+  // Preview the bound image array when present.
+  if (auto *p = s->parameter("image"); p) {
+    const auto aIdx = p->value().getAsObjectIndex();
+    if (aIdx != TSD_INVALID_INDEX) {
+      if (auto arr = scene.getObject<tsd::scene::Array>(aIdx); arr)
+        if (tsd::ui::buildUI_array_preview(*arr))
+          ImGui::Separator();
+    }
+  }
+  ImGui::Text(" idx: [%zu]", idx);
+  ImGui::Text("name: '%s'", s->name().c_str());
+  ImGui::Text("subtype: %s", s->subtype().c_str());
+}
+
+// Dispatch a hover-preview tooltip body for any object reference we know how
+// to preview. Returns true if something was drawn (caller may add separators).
+static bool buildUI_object_info_tooltip_text(
+    const tsd::scene::Scene &scene, anari::DataType type, size_t idx)
+{
+  if (anari::isArray(type)) {
+    buildUI_array_info_tooltip_text(scene, idx);
+    return true;
+  }
+  if (type == ANARI_SAMPLER) {
+    buildUI_sampler_info_tooltip_text(scene, idx);
+    return true;
+  }
+  return false;
 }
 
 static void buildUI_parameter_contextMenu(
@@ -293,8 +334,20 @@ void buildUI_object(tsd::scene::Object &o,
     else
       ImGui::Text(" size: %zu", a.dim(0));
     ImGui::Text(" type: %s", anari::toString(a.elementType()));
+    tsd::ui::buildUI_array_preview(a);
   } else if (o.type() != ANARI_SURFACE) {
     ImGui::Text("   subtype: %s", o.subtype().c_str());
+  }
+
+  // Sampler: preview the bound image array inline.
+  if (o.type() == ANARI_SAMPLER) {
+    if (auto *p = o.parameter("image"); p) {
+      const auto idx = p->value().getAsObjectIndex();
+      if (idx != TSD_INVALID_INDEX) {
+        if (auto arr = scene.getObject<tsd::scene::Array>(idx); arr)
+          tsd::ui::buildUI_array_preview(*arr);
+      }
+    }
   }
 
   if (o.type() == ANARI_RENDERER)
@@ -306,11 +359,9 @@ void buildUI_object(tsd::scene::Object &o,
       o.useCount(tsd::scene::Object::UseKind::LAYER),
       o.useCount(tsd::scene::Object::UseKind::ANIM),
       o.useCount(tsd::scene::Object::UseKind::INTERNAL));
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip(
-        "references to this object:"
-        " application | parameter | layer | animation | internal");
-  }
+  tooltipForPreviousItem(
+      "references to this object:"
+      " application | parameter | layer | animation | internal");
 
   ImGui::Separator();
 
@@ -433,6 +484,12 @@ void buildUI_object(tsd::scene::Object &o,
       oTitle += obj->name();
       if (ImGui::MenuItem(oTitle.c_str()))
         paramForSelection->setValue({typeForSelection, i});
+
+      if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        buildUI_object_info_tooltip_text(scene, typeForSelection, i);
+        ImGui::EndTooltip();
+      }
 
       ImGui::PopID();
     }
@@ -614,6 +671,48 @@ bool buildUI_parameter(tsd::scene::Object &o,
     else
       update |= ImGui::DragFloat4(name, (float *)value);
     break;
+  case ANARI_FLOAT32_MAT3:
+  case ANARI_FLOAT32_MAT4: {
+    const int N = (type == ANARI_FLOAT32_MAT3) ? 3 : 4;
+    auto *m = (float *)value; // column-major
+    ImGui::PushID(name);
+    ImGui::SetNextItemOpen(false, ImGuiCond_FirstUseEver);
+    if (ImGui::CollapsingHeader(name)) {
+      float rows[4][4] = {};
+      for (int r = 0; r < N; ++r)
+        for (int c = 0; c < N; ++c)
+          rows[r][c] = m[c * N + r];
+
+      bool changed = false;
+      for (int r = 0; r < N; ++r) {
+        ImGui::PushID(r);
+        if (N == 3)
+          changed |= ImGui::DragFloat3("", rows[r], 0.01f);
+        else
+          changed |= ImGui::DragFloat4("", rows[r], 0.01f);
+        ImGui::PopID();
+      }
+
+      if (changed) {
+        for (int r = 0; r < N; ++r)
+          for (int c = 0; c < N; ++c)
+            m[c * N + r] = rows[r][c];
+        update = true;
+      }
+
+      if (ImGui::Button("identity")) {
+        if (N == 3) {
+          auto I = tsd::math::IDENTITY_MAT3;
+          std::memcpy(m, &I, sizeof(I));
+        } else {
+          auto I = tsd::math::IDENTITY_MAT4;
+          std::memcpy(m, &I, sizeof(I));
+        }
+        update = true;
+      }
+    }
+    ImGui::PopID();
+  } break;
   case ANARI_STRING: {
     if (!p.stringValues().empty()) {
       auto ss = p.stringSelection();
@@ -654,10 +753,10 @@ bool buildUI_parameter(tsd::scene::Object &o,
 
   if (ImGui::IsItemHovered()) {
     ImGui::BeginTooltip();
-    if (isArray) {
-      const auto idx = pVal.getAsObjectIndex();
-      if (idx != TSD_INVALID_INDEX)
-        buildUI_array_info_tooltip_text(scene, idx);
+    const auto idx = pVal.getAsObjectIndex();
+    if (idx != TSD_INVALID_INDEX
+        && buildUI_object_info_tooltip_text(scene, type, idx)) {
+      // handled
     } else if (type == ANARI_FLOAT32_MAT4) {
       auto *value_f = (const float *)value;
       ImGui::Text("[%.3f %.3f %.3f %.3f]",
@@ -732,9 +831,9 @@ size_t buildUI_objects_menulist(
       type = obj->type();
     }
 
-    if (anari::isArray(type) && ImGui::IsItemHovered()) {
+    if (ImGui::IsItemHovered()) {
       ImGui::BeginTooltip();
-      buildUI_array_info_tooltip_text(scene, i);
+      buildUI_object_info_tooltip_text(scene, type, i);
       ImGui::EndTooltip();
     }
 
@@ -742,6 +841,16 @@ size_t buildUI_objects_menulist(
   }
 
   return retval;
+}
+
+void tooltipForPreviousItem(const char *text, bool showWhenDisabled)
+{
+  ImGuiHoveredFlags flags = 0;
+  if (showWhenDisabled)
+    flags |= ImGuiHoveredFlags_AllowWhenDisabled;
+
+  if (ImGui::IsItemHovered(flags))
+    ImGui::SetTooltip("%s", text);
 }
 
 } // namespace tsd::ui

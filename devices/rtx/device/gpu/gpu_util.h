@@ -34,6 +34,7 @@
 #include "cameraCreateRay.h"
 #include "gpu/gpu_debug.h"
 #include "gpu_objects.h"
+#include "gpu_tonemap.h"
 #include "shadingState.h"
 // optix
 #include <optix_device.h>
@@ -45,7 +46,6 @@
 #include <glm/packing.hpp>
 // cuda
 #include <vector_types.h>
-#include "gpu_tonemap.h"
 
 #ifndef __CUDACC__
 #error "gpu_util.h can only be included in device code"
@@ -141,6 +141,12 @@ VISRTX_DEVICE void accumulateNormal(T &a, const T &b, float interp)
   accumulateValue(a, b, interp);
 }
 
+// Rec.709 luminance.
+VISRTX_DEVICE float luminance(const vec3 &c)
+{
+  return glm::dot(c, vec3(0.2126f, 0.7152f, 0.0722f));
+}
+
 namespace detail {
 
 VISRTX_DEVICE void packPointer(void *ptr, uint32_t &i0, uint32_t &i1)
@@ -199,9 +205,9 @@ VISRTX_DEVICE vec3 boolColor(bool pred)
 // Downstream uses: isotropic volume scatter, AO/bounce hemisphere base.
 VISRTX_DEVICE vec3 randomDir(RandState &rs)
 {
-  const float cosTheta = 1.f - 2.f * curand_uniform(&rs);
+  const float cosTheta = 1.f - 2.f * pcg_uniform(&rs);
   const float sinTheta = sqrtf(fmaxf(0.f, 1.f - cosTheta * cosTheta));
-  const float phi = 2.f * float(M_PI) * curand_uniform(&rs);
+  const float phi = kTwoPi * pcg_uniform(&rs);
   return vec3(sinTheta * cosf(phi), sinTheta * sinf(phi), cosTheta);
 }
 
@@ -227,11 +233,11 @@ VISRTX_DEVICE mat3 computeOrthonormalBasis(const vec3 &normal)
 // Cosine-weighted hemisphere sample (Malley's method); pdf = cos(theta)/pi.
 VISRTX_DEVICE vec3 sampleHemisphere(RandState &rs, const vec3 &normal)
 {
-  const float u1 = curand_uniform(&rs);
-  const float u2 = curand_uniform(&rs);
+  const float u1 = pcg_uniform(&rs);
+  const float u2 = pcg_uniform(&rs);
   const float r = sqrtf(u1);
   const float z = sqrtf(fmaxf(0.f, 1.f - r * r));
-  const float phi = 2.f * float(M_PI) * u2;
+  const float phi = kTwoPi * u2;
   const vec3 sample(r * cosf(phi), r * sinf(phi), z);
   return computeOrthonormalBasis(normal) * sample;
 }
@@ -239,19 +245,23 @@ VISRTX_DEVICE vec3 sampleHemisphere(RandState &rs, const vec3 &normal)
 VISRTX_DEVICE vec3 sampleUnitSphere(RandState &rs, const vec3 &normal)
 {
   // sample unit sphere
-  const float cost = 1.f - 2.f * curand_uniform(&rs);
+  const float cost = 1.f - 2.f * pcg_uniform(&rs);
   const float sint = sqrtf(fmaxf(0.f, 1.f - cost * cost));
-  const float phi = 2.f * float(M_PI) * curand_uniform(&rs);
+  const float phi = kTwoPi * pcg_uniform(&rs);
 
   return computeOrthonormalBasis(normal)
       * vec3(sint * cosf(phi), sint * sinf(phi), -cost);
 }
 
-#define ulpEpsilon 0x1.fp-21
-
-VISRTX_DEVICE float epsilonFrom(const vec3 &P)
+VISRTX_DEVICE float epsilonFrom(const vec3 &P, const vec3 &dir, float t)
 {
-  return glm::compMax(abs(P)) * ulpEpsilon;
+  constexpr float hitEpsilonScale = 0x1.fp-21f;
+  constexpr float minHitEpsilon = 1e-8f;
+
+  const float pMag = glm::compMax(glm::abs(P));
+  const float dMag = glm::compMax(glm::abs(dir)) * t;
+
+  return fmaxf(glm::max(pMag, dMag) * hitEpsilonScale, minHitEpsilon);
 }
 
 // Hanika's shadow-terminator fix (Ray Tracing Gems II, ch. 4): lifts a
@@ -293,8 +303,8 @@ VISRTX_DEVICE vec3 shadingHitpoint(const SurfaceHit &hit)
   if (tri.vertexNormalsFV == nullptr && tri.vertexNormals == nullptr)
     return hit.hitpoint;
 
-  const uvec3 idx = tri.indices ? tri.indices[hit.primID]
-                                : uvec3(0, 1, 2) + hit.primID * 3;
+  const uvec3 idx =
+      tri.indices ? tri.indices[hit.primID] : uvec3(0, 1, 2) + hit.primID * 3;
   const vec3 v0 = tri.vertices[idx.x];
   const vec3 v1 = tri.vertices[idx.y];
   const vec3 v2 = tri.vertices[idx.z];
@@ -329,10 +339,10 @@ VISRTX_DEVICE vec3 shadingHitpoint(const SurfaceHit &hit)
     n2 = -n2;
   }
 
-  const vec3 Plocal = xfmPoint(hit.worldToObject, hit.hitpoint);
+  const vec3 Plocal = xfmPoint(hit.instance->worldToObject, hit.hitpoint);
   const vec3 Psmooth =
       shadowTerminatorOffset(Plocal, v0, v1, v2, n0, n1, n2, hit.uvw);
-  return xfmPoint(hit.objectToWorld, Psmooth);
+  return xfmPoint(hit.instance->objectToWorld, Psmooth);
 }
 
 VISRTX_DEVICE bool pixelOutOfFrame(
@@ -368,8 +378,8 @@ VISRTX_DEVICE vec3 sampleHDRI(const LightGPUData &ld, const vec3 &rayDir)
   if (ld.type != LightType::HDRI)
     return vec3(0.f);
 
-  constexpr float invPi = 1.f / float(M_PI);
-  constexpr float inv2Pi = 1.f / (2.f * float(M_PI));
+  constexpr float invPi = 1.f / kPi;
+  constexpr float inv2Pi = 1.f / (kTwoPi);
   const vec3 d = ld.hdri.xfm * rayDir;
   const vec2 thetaPhi = sphericalCoordsFromDirection(d);
   const float u = thetaPhi.y * inv2Pi;
@@ -393,12 +403,39 @@ VISRTX_DEVICE bool getBackgroundLight(
       // For orthonormal matrices, inverse = transpose
       const mat3 xfmInv = glm::transpose(mat3(hdriLight.xfm));
       const vec3 localRayDir = xfmInv * rayDir;
-      outRadiance += sampleHDRI(light, localRayDir);
+      // sampleHDRI applies hdri.scale; tint by light.color to match the NEE
+      // radiance in sampleHDRILight (raw * hdri.scale * color), so env MIS
+      // deposits identical radiance on the NEE and BSDF-escape sides.
+      outRadiance += sampleHDRI(light, localRayDir) * light.color;
       hasVisibleHDRI = true;
     }
   }
 
   return hasVisibleHDRI;
+}
+
+// Solid-angle sampling pdf of the visible HDRI environment(s) at `rayDir`, used
+// as the light-sampling density on the escape side of environment MIS. It must
+// match the NEE importance pdf in sampleHDRILight exactly: raw-texel luminance
+// (NO scale/color) times pdfWeight, with the same instance/HDRI transform chain
+// as getBackgroundLight. Summed over visible HDRIs — exact for the single-HDRI
+// case, a mixture-pdf approximation when several are visible.
+VISRTX_DEVICE float envPdf(const FrameGPUData &fd, const vec3 &rayDir)
+{
+  float pdf = 0.0f;
+  for (size_t i = 0; i < fd.world.numHdriLightInstances; i++) {
+    const auto &hdriLight = fd.world.hdriLightInstances[i];
+    const auto &light = fd.registry.lights[hdriLight.lightIndex];
+    if (!light.hdri.visible)
+      continue;
+    const vec3 localRayDir = glm::transpose(mat3(hdriLight.xfm)) * rayDir;
+    const vec3 d = light.hdri.xfm * localRayDir;
+    const vec2 thetaPhi = sphericalCoordsFromDirection(d);
+    const vec2 uv = vec2(thetaPhi.y / kTwoPi, thetaPhi.x / kPi);
+    pdf += dot(sampleHDRI(light, uv), vec3(0.2126f, 0.7152f, 0.0722f))
+        * light.hdri.pdfWeight;
+  }
+  return pdf;
 }
 
 VISRTX_DEVICE uint32_t computeGeometryPrimId(const SurfaceHit &hit)
@@ -479,6 +516,76 @@ VISRTX_DEVICE void setPixelIds(const FramebufferGPUData &fb,
   }
 }
 
+// Per-pixel, per-channel Welford soft-clamp for firefly suppression.
+//
+// Two regimes keyed on the pixel's own sample count n:
+//   * warmup (n < warmupSamples): per-channel stats are too sparse for a
+//     variance-based cap, so clamp each channel to a generous multiple of its
+//     running mean. This catches a firefly from the 2nd sample on (the 1st has
+//     no prior).
+//   * steady (n >= warmupSamples): clamp each channel to mean + k*stddev.
+//
+// In both regimes the Welford stats are updated from the *clamped* value: a
+// sample below its cap contributes its true value (so σ tracks the well-behaved
+// bulk), but a sample above the cap contributes only the capped value. This is
+// the base-excluding threshold — letting raw outliers into the stats lets one
+// firefly inflate σ enough to raise its own future cap, so a moderate k never
+// fires (the σ-inflation trap). Feeding the clamped value bounds that inflation,
+// which is what lets k drop to a value that actually bites. The cost is that a
+// genuinely legitimate >kσ excursion on a high-variance pixel is clipped and
+// cannot grow the cap — unavoidable for a per-pixel online clamp, which is why
+// CLAMP is the deliberately-aggressive, biased mode.
+//
+// Each channel is clamped independently to its own cap, so a chromatic
+// (single-channel) outlier is caught even when its luminance is unremarkable,
+// without a near-zero channel dragging the whole (saturated-color) pixel dark.
+VISRTX_DEVICE vec4 fireflyClamp(
+    PixelLumStats *lumStatsBuf, uint32_t idx, vec4 color, float kSigma, int warmupSamples)
+{
+  constexpr float kWarmupCapFactor = 8.0f; // warmup cap = factor * running mean
+
+  if (!lumStatsBuf)
+    return color;
+
+  PixelLumStats s = lumStatsBuf[idx];
+  const vec3 orig = vec3(color);
+  const bool warm = s.n < float(warmupSamples);
+
+  vec3 clamped = orig;
+  if (s.n >= 1.0f) {
+    for (int k = 0; k < 3; ++k) {
+      const float L = orig[k];
+      if (!(L > 0.0f))
+        continue;
+      float cap;
+      if (warm) {
+        cap = kWarmupCapFactor * s.mean[k];
+      } else {
+        // Needs >=2 samples for a sample variance; with warmupSamples==1 the
+        // steady branch is reachable at n==1, where m2/(n-1) is 0/0.
+        const float variance =
+            s.n > 1.0f ? fmaxf(s.m2[k] / (s.n - 1.0f), 0.0f) : 0.0f;
+        cap = s.mean[k] + kSigma * sqrtf(variance);
+      }
+      if (cap > 0.0f && L > cap)
+        clamped[k] = cap;
+    }
+  }
+
+  // Welford update from the clamped value in both regimes: a within-cap sample
+  // updates with its true value, an outlier only with the bounded cap value.
+  const float n = s.n + 1.0f;
+  for (int k = 0; k < 3; ++k) {
+    const float delta = clamped[k] - s.mean[k];
+    s.mean[k] += delta / n;
+    s.m2[k] += delta * (clamped[k] - s.mean[k]);
+  }
+  s.n = n;
+  lumStatsBuf[idx] = s;
+
+  return vec4(clamped, color.a);
+}
+
 VISRTX_DEVICE void accumPixelSample(const FrameGPUData &frame,
     const uvec2 &pixel,
     const vec4 &color,
@@ -488,9 +595,60 @@ VISRTX_DEVICE void accumPixelSample(const FrameGPUData &frame,
   const auto &fb = frame.fb;
   const uint32_t idx = detail::pixelIndex(fb, pixel);
 
-  detail::accumValue(fb.buffers.colorAccumulation,
-      idx,
-      frame.renderer.fireflyFilter ? detail::tonemap(color) : color);
+  vec4 c;
+  switch (frame.renderer.fireflyFilterMode) {
+  case FireflyFilterMode::TONEMAP:
+    c = detail::tonemap(color);
+    break;
+  case FireflyFilterMode::CLAMP:
+    c = fireflyClamp(fb.buffers.lumStats,
+        idx,
+        color,
+        frame.renderer.fireflyFilterSigma,
+        frame.renderer.fireflyFilterWarmup);
+    break;
+  case FireflyFilterMode::TRIM:
+    // Accumulate the raw sample (colorAccumulation keeps the running sum) while
+    // tracking the `trim` brightest samples this pixel has seen and a luminance
+    // Welford. The trimmed mean at resolve removes only the tracked samples
+    // that a base-excluding threshold flags as outliers, so clean pixels drop
+    // nothing (exact mean) and the dropped fraction -> 0 with spp.
+    if (fb.buffers.trimTopK) {
+      const int trim = frame.renderer.fireflyFilterTrim;
+      const float L = luminance(vec3(color));
+      // A non-finite sample poisons the Welford mean/variance and drives the
+      // resolve threshold to inf, so nothing ever trims and the pixel stays
+      // non-finite forever. Drop it outright -- the very firefly TRIM exists to
+      // suppress must not survive into colorAccumulation.
+      if (glm::isnan(L) || glm::isinf(L))
+        return;
+      vec4 *slots = fb.buffers.trimTopK + size_t(idx) * trim;
+      int minSlot = 0;
+      float minL = slots[0].w;
+      for (int i = 1; i < trim; ++i) {
+        if (slots[i].w < minL) {
+          minL = slots[i].w;
+          minSlot = i;
+        }
+      }
+      if (L > minL)
+        slots[minSlot] = vec4(vec3(color), L);
+
+      PixelLumStats &s = fb.buffers.lumStats[idx];
+      const float n = s.n + 1.f;
+      const float delta = L - s.mean.x;
+      s.mean.x += delta / n;
+      s.m2.x += delta * (L - s.mean.x);
+      s.n = n;
+    }
+    c = color;
+    break;
+  default:
+    c = color;
+    break;
+  }
+
+  detail::accumValue(fb.buffers.colorAccumulation, idx, c);
   detail::accumValue(fb.buffers.albedo, idx, albedo);
   detail::accumValue(fb.buffers.normal, idx, normal);
 }
